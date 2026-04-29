@@ -3,7 +3,7 @@
 --  Desenvolvido por Danonin
 -- ============================================================
 
-local URL = "https://raw.githubusercontent.com/SEU_USER/CatEmpire/main/Scripts/CatEmpire_v5_0.lua"
+local URL = "https://raw.githubusercontent.com/https:/DanoninCat/DanoninScript/refs/heads/main/Loader/Loader.lua"
 
 local ok, err = pcall(function()
     loadstring(game:HttpGet(URL, true))()
