@@ -1,7 +1,5 @@
 -- ============================================================
 --  CAT EMPIRE | v5.1 | CODED FOR DANONIN
---  UI: Fluent Library
---  Fixes: toggles funcionando, sem descriptions, rollback via toggle
 -- ============================================================
 
 -- SERVICES
