@@ -1,7 +1,5 @@
 -- ============================================================
 --  CAT EMPIRE | v5.3 | CODED FOR DANONIN
---  UI: Fluent Library
---  Fixes: getNearestEnemy usa atributo ID real, Fighter scan usa Name como UID, mundos corretos
 -- ============================================================
 
 -- SERVICES
