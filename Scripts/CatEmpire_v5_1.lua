@@ -1,5 +1,5 @@
 -- ============================================================
---  CAT EMPIRE | v4.2 | CODED FOR DANONIN
+--  CAT EMPIRE | v5.1 | CODED FOR DANONIN
 -- ============================================================
 
 local Players          = game:GetService("Players")
