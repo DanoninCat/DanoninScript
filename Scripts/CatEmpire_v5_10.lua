@@ -300,48 +300,67 @@ minFloatBtn.Active           = true
 minFloatBtn.Selectable       = true
 Instance.new("UICorner", minFloatBtn).CornerRadius = UDim.new(0, 10)
 
--- Drag do botão flutuante
-local fbDragging, fbDragStart, fbStartPos = false, nil, nil
+-- Drag do botão flutuante — corrigido: distingue drag de click
+local fbDragging  = false
+local fbDragStart = nil
+local fbStartPos  = nil
+local fbMoved     = false  -- detecta se houve movimento real
+
 minFloatBtn.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
     or i.UserInputType == Enum.UserInputType.Touch then
         fbDragging  = true
-        fbDragStart = i.Position
+        fbMoved     = false
+        fbDragStart = Vector2.new(i.Position.X, i.Position.Y)
         fbStartPos  = minFloatBtn.Position
     end
 end)
+
 game:GetService("UserInputService").InputChanged:Connect(function(i)
-    if fbDragging and (i.UserInputType == Enum.UserInputType.MouseMovement
-    or i.UserInputType == Enum.UserInputType.Touch) then
-        local d = i.Position - fbDragStart
-        minFloatBtn.Position = UDim2.new(
-            fbStartPos.X.Scale, fbStartPos.X.Offset + d.X,
-            fbStartPos.Y.Scale, fbStartPos.Y.Offset + d.Y
-        )
+    if not fbDragging then return end
+    if i.UserInputType == Enum.UserInputType.MouseMovement
+    or i.UserInputType == Enum.UserInputType.Touch then
+        local dx = i.Position.X - fbDragStart.X
+        local dy = i.Position.Y - fbDragStart.Y
+        -- Só move se arrastou mais de 4px (evita sumir no tap)
+        if math.abs(dx) > 4 or math.abs(dy) > 4 then
+            fbMoved = true
+            minFloatBtn.Position = UDim2.new(
+                fbStartPos.X.Scale, fbStartPos.X.Offset + dx,
+                fbStartPos.Y.Scale, fbStartPos.Y.Offset + dy
+            )
+        end
     end
 end)
+
 game:GetService("UserInputService").InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
     or i.UserInputType == Enum.UserInputType.Touch then
         fbDragging = false
+        -- Se não moveu, trata como click (toggle janela)
+        if not fbMoved then
+            windowVisible = not windowVisible
+            if fluentRoot then
+                fluentRoot.Enabled = windowVisible
+            end
+            minFloatBtn.BackgroundColor3 = windowVisible
+                and Color3.fromRGB(0, 90, 200)
+                or  Color3.fromRGB(120, 30, 30)
+        end
+        fbMoved = false
     end
 end)
 
 local windowVisible = true
 local fluentRoot    = nil
 
--- Fluent cria o ScreenGui com nome "Fluent" no CoreGui após CreateWindow
--- Precisamos esperar 1 frame pra ele existir
 task.delay(0.5, function()
-    -- Busca em CoreGui
     for _, sg in ipairs(game:GetService("CoreGui"):GetChildren()) do
         if sg:IsA("ScreenGui") then
             fluentRoot = sg
-            -- Prefere o que tem "Fluent" no nome
             if sg.Name:lower():find("fluent") then break end
         end
     end
-    -- Fallback: PlayerGui
     if not fluentRoot then
         for _, sg in ipairs(player.PlayerGui:GetChildren()) do
             if sg:IsA("ScreenGui") and sg.Name:lower():find("fluent") then
@@ -349,16 +368,6 @@ task.delay(0.5, function()
             end
         end
     end
-end)
-
-minFloatBtn.MouseButton1Click:Connect(function()
-    windowVisible = not windowVisible
-    if fluentRoot then
-        fluentRoot.Enabled = windowVisible
-    end
-    minFloatBtn.BackgroundColor3 = windowVisible
-        and Color3.fromRGB(0, 90, 200)
-        or  Color3.fromRGB(120, 30, 30)
 end)
 
 -- ============================================================
@@ -501,13 +510,6 @@ Tabs.Main:AddButton({
     Callback = refreshNPCList,
 })
 
-Tabs.Main:AddToggle("AutoRetreat", { Title = "Auto Retreat", Default = false })
-Options.AutoRetreat:OnChanged(function(v)
-    toggleLoop("AutoRetreat", v, 20, function()
-        fire("Fighters","Attack","Retreat_All")
-    end)
-end)
-
 Tabs.Main:AddSection("Utilitarios")
 
 Tabs.Main:AddToggle("AutoEquip", { Title = "Auto Equip Best", Default = false })
@@ -559,23 +561,70 @@ end)
 -- ============================================================
 Tabs.Rewards:AddSection("Recompensas")
 
+-- Daily Rewards: tenta claim no dia atual do servidor via OnClientEvent
+-- Fallback: tenta dias 1-7, servidor rejeita os já coletados silenciosamente
 Tabs.Rewards:AddToggle("DailyRewards", { Title = "Daily Rewards", Default = false })
 Options.DailyRewards:OnChanged(function(v)
-    toggleLoop("DailyRewards", v, 120, function()
-        -- Tenta todos os dias; o servidor ignora os já coletados
+    toggleLoop("DailyRewards", v, 180, function()
+        -- Tenta pegar o dia atual via atributo do PlayerData
+        local currentDay = nil
+        pcall(function()
+            local data = RS:FindFirstChild("Data") or RS:FindFirstChild("PlayerData")
+            if data then
+                local pd = data:FindFirstChild(tostring(player.UserId)) or data:FindFirstChild(player.Name)
+                if pd then
+                    local dailyFolder = pd:FindFirstChild("DailyRewards") or pd:FindFirstChild("Daily")
+                    if dailyFolder then
+                        local dayVal = dailyFolder:FindFirstChild("Day") or dailyFolder:FindFirstChild("Current")
+                        if dayVal then currentDay = dayVal.Value end
+                    end
+                end
+            end
+        end)
+        -- Se achou o dia, clama só ele; senão tenta os 7
+        if currentDay and type(currentDay) == "number" then
+            fire("General","DailyRewards","Claim", currentDay)
+        else
+            for day = 1, 7 do
+                fire("General","DailyRewards","Claim", day)
+                task.wait(0.5)
+            end
+        end
+    end)
+end)
+
+Tabs.Rewards:AddButton({
+    Title    = "Claim Daily (Agora)",
+    Callback = function()
         for day = 1, 7 do
             fire("General","DailyRewards","Claim", day)
+            task.wait(0.4)
+        end
+        Fluent:Notify({ Title="Daily", Content="Claim enviado para todos os dias", Duration=2 })
+    end,
+})
+
+Tabs.Rewards:AddToggle("TimeRewards", { Title = "Time Rewards", Default = false })
+Options.TimeRewards:OnChanged(function(v)
+    -- 20min de intervalo — reward de tempo geralmente tem cooldown
+    toggleLoop("TimeRewards", v, 1200, function()
+        for i = 1, 5 do
+            fire("General","TimeRewards","Claim", i)
             task.wait(0.3)
         end
     end)
 end)
 
-Tabs.Rewards:AddToggle("TimeRewards", { Title = "Time Rewards", Default = false })
-Options.TimeRewards:OnChanged(function(v)
-    toggleLoop("TimeRewards", v, 300, function()
-        fire("General","TimeRewards","Claim",1)
-    end)
-end)
+Tabs.Rewards:AddButton({
+    Title    = "Claim Time (Agora)",
+    Callback = function()
+        for i = 1, 5 do
+            fire("General","TimeRewards","Claim", i)
+            task.wait(0.3)
+        end
+        Fluent:Notify({ Title="Time Reward", Content="Claim enviado", Duration=2 })
+    end,
+})
 
 Tabs.Rewards:AddToggle("AutoRankUp", { Title = "Auto Rank Up", Default = false })
 Options.AutoRankUp:OnChanged(function(v)
@@ -586,13 +635,24 @@ end)
 
 Tabs.Rewards:AddToggle("AutoAchiev", { Title = "Auto Claim Achievements", Default = false })
 Options.AutoAchiev:OnChanged(function(v)
-    toggleLoop("AutoAchiev", v, 5, function()
+    toggleLoop("AutoAchiev", v, 30, function()
         for _, name in ipairs(KNOWN_ACHIEVEMENTS) do
-            fire("General","Achievements","Claim",name)
-            task.wait(0.2)
+            fire("General","Achievements","Claim", name)
+            task.wait(0.3)
         end
     end)
 end)
+
+Tabs.Rewards:AddButton({
+    Title    = "Claim Achievements (Agora)",
+    Callback = function()
+        for _, name in ipairs(KNOWN_ACHIEVEMENTS) do
+            fire("General","Achievements","Claim", name)
+            task.wait(0.3)
+        end
+        Fluent:Notify({ Title="Achievements", Content="Claim enviado para todos", Duration=2 })
+    end,
+})
 
 -- ============================================================
 -- TAB: FIGHTERS
