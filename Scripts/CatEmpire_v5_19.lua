@@ -1,5 +1,5 @@
 -- ============================================================
---  CAT EMPIRE | v5.18 | CODED FOR DANONIN
+--  CAT EMPIRE | v5.17 | CODED FOR DANONIN
 --  UI: Fluent Library
 --  Fixes: getNearestEnemy usa atributo ID real, Fighter scan usa Name como UID, mundos corretos
 -- ============================================================
@@ -201,10 +201,7 @@ local WORLDS = {
     "Leaf Village","Dragon Town","Slayer Village",
     "Pirate Island","Solo City","Z City","Hollow Island","Lobby"
 }
-local selectedWorld       = "Leaf Village"
-local selectedFighterUID  = ""
-local selectedFighterName = "Nenhum"
-local selectedStat        = "Attack"
+local selectedWorld = "Leaf Village"
 
 -- ============================================================
 -- LOOP CONTROL
@@ -351,7 +348,7 @@ end
 -- ============================================================
 local Window = Fluent:CreateWindow({
     Title       = "Cat Empire",
-    SubTitle    = "v5.17 | by Danonin",
+    SubTitle    = "v5.19 | by Danonin",
     TabWidth    = 160,
     Size        = UDim2.fromOffset(720, 480),
     Acrylic     = true,
@@ -419,25 +416,42 @@ local fluentLayers = {}  -- lista de todos os frames/layers do Fluent
 -- Debug confirmou que CoreGui só tem "RobloxGui" (do Roblox, não tocar).
 -- Fluent está no PlayerGui. O Fluent nomeia seu ScreenGui como "Fluent".
 -- Filtramos EXATAMENTE por esse nome — nunca tocamos em outros GUIs.
-local fluentScreenGui = nil  -- o ScreenGui do Fluent, encontrado por nome exato
+local fluentScreenGui = nil
 
 task.delay(1.5, function()
-    -- Busca pelo nome exato "Fluent" no PlayerGui
-    fluentScreenGui = player:WaitForChild("PlayerGui"):FindFirstChild("Fluent")
-    -- Fallback: tenta encontrar pelo nome em CoreGui também
-    if not fluentScreenGui then
-        fluentScreenGui = game:GetService("CoreGui"):FindFirstChild("Fluent")
+    -- O Fluent registra o seu ScreenGui com o nome "Fluent" no PlayerGui ou CoreGui
+    -- Testa ambos os locais
+    local pg = player:WaitForChild("PlayerGui")
+    local cg = game:GetService("CoreGui")
+
+    for _, parent in ipairs({cg, pg}) do
+        for _, sg in ipairs(parent:GetChildren()) do
+            if sg:IsA("ScreenGui") and sg.Name == "Fluent" then
+                fluentScreenGui = sg
+                break
+            end
+        end
+        if fluentScreenGui then break end
     end
-    -- Fallback final: procura qualquer ScreenGui no PlayerGui que tenha
-    -- um filho Frame com filho Frame (estrutura típica do Fluent)
+
+    -- Se ainda não achou pelo nome, pega qualquer ScreenGui do PlayerGui
+    -- que contenha um Frame com UICorner (estrutura característica do Fluent)
+    -- MAS exclui ScreenGuis do próprio jogo checando se o pai é PlayerGui
+    -- e se tem exatamente 1-2 filhos Frame (o Fluent é minimalista)
     if not fluentScreenGui then
-        for _, sg in ipairs(player.PlayerGui:GetChildren()) do
+        for _, sg in ipairs(pg:GetChildren()) do
             if sg:IsA("ScreenGui") and sg.Name ~= "CatEmpireMinGui" then
+                local frames = 0
                 for _, ch in ipairs(sg:GetChildren()) do
-                    -- Fluent tem um Frame com UICorner e filhos específicos
-                    if ch:IsA("Frame") and ch:FindFirstChildOfClass("UICorner") then
-                        fluentScreenGui = sg
-                        break
+                    if ch:IsA("Frame") then frames += 1 end
+                end
+                if frames >= 1 and frames <= 3 then
+                    -- Verifica se tem UICorner (Fluent sempre usa)
+                    for _, ch in ipairs(sg:GetChildren()) do
+                        if ch:IsA("Frame") and ch:FindFirstChildOfClass("UICorner") then
+                            fluentScreenGui = sg
+                            break
+                        end
                     end
                 end
             end
@@ -449,21 +463,19 @@ end)
 local function simulateMinimize()
     windowVisible = not windowVisible
 
-    -- Só toca no ScreenGui do Fluent — nunca nos GUIs do jogo
     if fluentScreenGui then
-        pcall(function()
-            fluentScreenGui.Enabled = windowVisible
-        end)
+        -- Método direto: alterna .Enabled apenas no ScreenGui do Fluent
+        pcall(function() fluentScreenGui.Enabled = windowVisible end)
     else
-        -- Último fallback: simula a tecla MinimizeKey que o próprio Fluent escuta
-        -- Isso é 100% seguro pois é o método nativo da biblioteca
-        local VIM = game:GetService("VirtualInputManager")
+        -- Fallback: VirtualInputManager simula RightControl
+        -- O Fluent escuta MinimizeKey nativamente e alterna a janela
         pcall(function()
+            local VIM = game:GetService("VirtualInputManager")
             VIM:SendKeyEvent(true,  Enum.KeyCode.RightControl, false, game)
             task.wait(0.05)
             VIM:SendKeyEvent(false, Enum.KeyCode.RightControl, false, game)
         end)
-        -- Reverte windowVisible se usou VIM (o Fluent controla o estado)
+        -- Reverte o estado local pois o Fluent controla internamente
         windowVisible = not windowVisible
     end
 
@@ -516,10 +528,7 @@ end)
 local Tabs = {
     Main     = Window:AddTab({ Title = "Main",     Icon = "sword" }),
     Rewards  = Window:AddTab({ Title = "Rewards",  Icon = "gift" }),
-    Fighters = Window:AddTab({ Title = "Fighters", Icon = "user" }),
     Teleport = Window:AddTab({ Title = "Teleport", Icon = "map-pin" }),
-    Rollback = Window:AddTab({ Title = "Rollback", Icon = "rotate-ccw" }),
-    Debug    = Window:AddTab({ Title = "Debug",    Icon = "terminal" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
     Info     = Window:AddTab({ Title = "Info",     Icon = "info" }),
 }
@@ -793,205 +802,6 @@ Tabs.Rewards:AddButton({
 })
 
 -- ============================================================
--- TAB: FIGHTERS
--- ============================================================
-Tabs.Fighters:AddSection("Fighter Selecionado")
-
-local fighterParagraph = Tabs.Fighters:AddParagraph({
-    Title   = "Selecionado",
-    Content = "Nenhum",
-})
-
-local function updateFighterLabel()
-    fighterParagraph:SetDesc(
-        selectedFighterName .. "  |  " ..
-        (selectedFighterUID ~= "" and selectedFighterUID or "sem UID")
-    )
-end
-
-Tabs.Fighters:AddButton({
-    Title    = "Escanear Fighters",
-    Callback = function()
-        local found = {}
-
-        -- DEBUG confirmou: WS.Server.Fighters[UserId]
-        -- O NAME de cada filho É o UID — sem atributo UID
-        -- Atributos disponíveis: Trait, Level, Enabled, Player
-        pcall(function()
-            local sf = WS:FindFirstChild("Server") and WS.Server:FindFirstChild("Fighters")
-            if sf then
-                -- Tenta por UserId primeiro, depois por Name
-                local myF = sf:FindFirstChild(tostring(player.UserId))
-                         or sf:FindFirstChild(player.Name)
-                if myF then
-                    for _, f in ipairs(myF:GetChildren()) do
-                        -- f.Name = UID do fighter
-                        local uid   = f.Name
-                        local trait = f:GetAttribute("Trait") or "?"
-                        local level = f:GetAttribute("Level") or "?"
-                        local label = tostring(trait) .. "  Lv." .. tostring(level)
-                        table.insert(found, { Name=label, UID=uid })
-                    end
-                end
-            end
-        end)
-
-        if #found > 0 then
-            selectedFighterUID  = found[1].UID
-            selectedFighterName = found[1].Name
-            updateFighterLabel()
-            Fluent:Notify({ Title="Fighters", Content=#found.." encontrado(s). Selecionado: "..found[1].Name, Duration=4 })
-        else
-            Fluent:Notify({ Title="Fighters", Content="Nenhum detectado. Use UID manual.", Duration=3 })
-        end
-    end,
-})
-
-Tabs.Fighters:AddInput("ManualUID", {
-    Title       = "UID Manual",
-    Placeholder = "Cole o UID aqui...",
-    Numeric     = false,
-})
-
-Tabs.Fighters:AddButton({
-    Title    = "Usar UID Manual",
-    Callback = function()
-        local uid = Options.ManualUID.Value:gsub("%s+","")
-        if uid == "" then
-            Fluent:Notify({ Title="Erro", Content="UID vazio!", Duration=2 })
-            return
-        end
-        selectedFighterUID  = uid
-        selectedFighterName = "Manual"
-        updateFighterLabel()
-        Fluent:Notify({ Title="UID Definido", Content=uid, Duration=3 })
-    end,
-})
-
--- Traits desejadas — manter = true, descartar = false
--- Baseado na captura do UtopiaSpy (imagem 2)
-local DESIRED_TRAITS = {
-    ["Strongest"]   = true,
-    ["Monarch"]     = true,
-    ["Clover III"]  = true,
-    ["Scholar"]     = true,
-    ["Clover II"]   = true,
-    ["Fortune III"] = false,
-    ["Vigor"]       = false,
-    ["Swift"]       = false,
-    ["Swift III"]   = false,
-    ["Vigor II"]    = false,
-    ["Clover I"]    = false,
-}
-
--- Stats desejados — manter = true
-local DESIRED_STATS = {
-    ["S+"] = true,
-    ["A+"] = true,
-    ["A"]  = true,
-    ["S-"] = true,
-    ["C+"] = false,
-    ["B+"] = false,
-    ["D+"] = false,
-    ["D"]  = false,
-    ["C-"] = false,
-    ["D-"] = false,
-}
-
-Tabs.Fighters:AddSection("Traits Reroll")
-
--- Trait Reroll LIVRE: tabela vazia = reroll sem filtro, aceita qualquer trait
--- Trait Reroll FILTRADO: mantém apenas traits boas definidas em DESIRED_TRAITS
--- IMPORTANTE: o servidor interpreta "false" como "descarta essa trait se sair"
--- Usar {} (vazio) = reroll livre, sem restrição — MAIS EFICIENTE para farmar
-
-Tabs.Fighters:AddToggle("AutoTraitsLivre", { Title = "Auto Trait Reroll (Livre)", Default = false })
-Options.AutoTraitsLivre:OnChanged(function(v)
-    toggleLoop("AutoTraitsLivre", v, 0.8, function()
-        if selectedFighterUID == "" then return end
-        -- Tabela vazia = reroll sem filtro
-        fire("General","Traits","Reroll", selectedFighterUID, {})
-    end)
-end)
-
-Tabs.Fighters:AddToggle("AutoTraits", { Title = "Auto Trait Reroll (Filtrado)", Default = false })
-Options.AutoTraits:OnChanged(function(v)
-    toggleLoop("AutoTraits", v, 0.8, function()
-        if selectedFighterUID == "" then return end
-        fire("General","Traits","Reroll", selectedFighterUID, DESIRED_TRAITS)
-    end)
-end)
-
-Tabs.Fighters:AddButton({
-    Title    = "Trait Reroll Livre (1x)",
-    Callback = function()
-        if selectedFighterUID == "" then
-            Fluent:Notify({ Title="Erro", Content="Selecione um fighter primeiro!", Duration=2 })
-            return
-        end
-        fire("General","Traits","Reroll", selectedFighterUID, {})
-        Fluent:Notify({ Title="Traits", Content="Reroll livre enviado", Duration=2 })
-    end,
-})
-
-Tabs.Fighters:AddButton({
-    Title    = "Trait Reroll Filtrado (1x)",
-    Callback = function()
-        if selectedFighterUID == "" then
-            Fluent:Notify({ Title="Erro", Content="Selecione um fighter primeiro!", Duration=2 })
-            return
-        end
-        fire("General","Traits","Reroll", selectedFighterUID, DESIRED_TRAITS)
-        Fluent:Notify({ Title="Traits", Content="Reroll filtrado enviado", Duration=2 })
-    end,
-})
-
-Tabs.Fighters:AddSection("Stats Reroll")
-
-Tabs.Fighters:AddToggle("AutoStats", { Title = "Auto Stats Reroll", Default = false })
-Options.AutoStats:OnChanged(function(v)
-    toggleLoop("AutoStats", v, 1.5, function()
-        if selectedFighterUID == "" then return end
-        fire("General","StatsReroll","Reroll", selectedFighterUID, DESIRED_STATS)
-    end)
-end)
-
-Tabs.Fighters:AddButton({
-    Title    = "Stats Reroll (1x)",
-    Callback = function()
-        if selectedFighterUID == "" then
-            Fluent:Notify({ Title="Erro", Content="Selecione um fighter primeiro!", Duration=2 })
-            return
-        end
-        fire("General","StatsReroll","Reroll", selectedFighterUID, DESIRED_STATS)
-        Fluent:Notify({ Title="Stats", Content="Reroll enviado", Duration=2 })
-    end,
-})
-
-Tabs.Fighters:AddSection("Lock Stat")
-
-Tabs.Fighters:AddDropdown("LockStatDrop", {
-    Title   = "Stat para Lockear",
-    Values  = {"Attack","Defense","Health","Speed"},
-    Default = "Attack",
-})
-Options.LockStatDrop:OnChanged(function(v)
-    selectedStat = v
-end)
-
-Tabs.Fighters:AddButton({
-    Title    = "Aplicar Lock",
-    Callback = function()
-        if selectedFighterUID == "" then
-            Fluent:Notify({ Title="Erro", Content="Selecione um fighter primeiro!", Duration=2 })
-            return
-        end
-        fire("General","StatsReroll","Lock",selectedFighterUID,selectedStat)
-        Fluent:Notify({ Title="Lock", Content=selectedStat.." lockado", Duration=2 })
-    end,
-})
-
--- ============================================================
 -- TAB: TELEPORT
 -- ============================================================
 Tabs.Teleport:AddSection("Mundos")
@@ -1006,189 +816,6 @@ for _, world in ipairs(WORLDS) do
         end,
     })
 end
-
--- ============================================================
--- TAB: ROLLBACK
--- ============================================================
-Tabs.Rollback:AddSection("Rollback")
-
-Tabs.Rollback:AddParagraph({
-    Title   = "Como funciona",
-    Content = "1. Ative o toggle ANTES de fazer qualquer coisa\n2. Faca o que quiser no jogo (gacha, reroll, etc)\n3. Clique Executar Rollback ANTES de 60s\n4. O servidor carrega o save anterior — tudo volta ao normal\n\nSe passar de 60s, o servidor ja pode ter salvo os novos dados.",
-})
-
-local rollbackStatusParagraph = Tabs.Rollback:AddParagraph({
-    Title   = "Status",
-    Content = "Inativo — nenhum snapshot salvo",
-})
-
--- Atualiza o timer em tempo real enquanto rollback está ativo
-task.spawn(function()
-    while true do
-        task.wait(1)
-        if rollbackActive and rollbackSnapshot then
-            local cor = rollbackSaveTimer < 45 and "SEGURO" or rollbackSaveTimer < 75 and "ATENCAO" or "RISCO"
-            rollbackStatusParagraph:SetDesc(
-                "Snapshot: " .. (rollbackTime or "?") ..
-                "\nTempo: " .. rollbackSaveTimer .. "s — " .. cor
-            )
-        end
-    end
-end)
-
-Tabs.Rollback:AddToggle("RollbackCapture", { Title = "Ativar Captura de Estado", Default = false })
-Options.RollbackCapture:OnChanged(function(v)
-    rollbackActive = v
-    if v then
-        rollbackSnapshot  = nil
-        rollbackSaveTimer = 0
-        startRollbackCapture()
-        rollbackStatusParagraph:SetDesc("Aguardando pacote do servidor...")
-    else
-        stopRollbackCapture()
-        if rollbackSnapshot then
-            rollbackStatusParagraph:SetDesc("Pausado — snapshot de " .. (rollbackTime or "?") .. " disponivel")
-        else
-            rollbackStatusParagraph:SetDesc("Desativado — nenhum snapshot capturado")
-        end
-    end
-end)
-
-Tabs.Rollback:AddButton({
-    Title    = "Executar Rollback (Rejoin)",
-    Callback = function()
-        executeRollback()
-    end,
-})
-
--- ============================================================
--- TAB: DEBUG — acesso restrito por chave Admin10
--- ============================================================
-Tabs.Debug:AddSection("Acesso Restrito")
-
-local debugUnlocked = false
-
-local debugLockParagraph = Tabs.Debug:AddParagraph({
-    Title   = "Autenticacao",
-    Content = "Esta aba e restrita. Insira a chave de acesso.",
-})
-
-Tabs.Debug:AddInput("AdminKey", {
-    Title       = "Chave de Acesso",
-    Placeholder = "Digite a chave...",
-    Numeric     = false,
-})
-
-Tabs.Debug:AddButton({
-    Title    = "Validar Chave",
-    Callback = function()
-        local key = Options.AdminKey.Value or ""
-        if key ~= "Admin10" then
-            Fluent:Notify({ Title="Acesso Negado", Content="Chave incorreta.", Duration=3 })
-            return
-        end
-        if debugUnlocked then
-            Fluent:Notify({ Title="Debug", Content="Ja desbloqueado.", Duration=2 })
-            return
-        end
-        debugUnlocked = true
-        debugLockParagraph:SetDesc("Desbloqueado.")
-
-        -- Carrega conteúdo do debug só após validação
-        local snifferActive   = false
-        local snifferConn     = nil
-        local capturedRemotes = {}
-        local snifferCount    = 0
-
-        local snifferStatus = Tabs.Debug:AddParagraph({
-            Title   = "Sniffer",
-            Content = "Inativo",
-        })
-
-        Tabs.Debug:AddToggle("SnifferToggle", { Title = "Ativar Sniffer", Default = false })
-        Options.SnifferToggle:OnChanged(function(v)
-            snifferActive = v
-            if v then
-                capturedRemotes = {}
-                snifferCount    = 0
-                snifferStatus:SetDesc("Ativo — aguardando remotes...")
-                local bridge = getBridge()
-                if not bridge then snifferStatus:SetDesc("ERRO: Bridge nao encontrado!") return end
-
-                snifferConn = bridge.OnClientEvent:Connect(function(...)
-                    local args = {...}
-                    snifferCount += 1
-                    local parts = {}
-                    for i, a in ipairs(args) do
-                        local t = type(a)
-                        if t == "string" or t == "number" or t == "boolean" then
-                            table.insert(parts, tostring(a))
-                        elseif t == "table" then
-                            table.insert(parts, "{table}")
-                        else
-                            table.insert(parts, t)
-                        end
-                        if i >= 6 then table.insert(parts, "...") break end
-                    end
-                    local line = "[CLIENT] " .. table.concat(parts, ", ")
-                    table.insert(capturedRemotes, line)
-                    warn("[DEBUG] " .. line)
-                    snifferStatus:SetDesc("#" .. snifferCount .. ": " .. line)
-                    local raw = table.concat(parts, " "):lower()
-                    if raw:find("trial") or raw:find("gacha") or raw:find("star") or raw:find("spin") then
-                        Fluent:Notify({ Title="Trial/Gacha", Content=line, Duration=8 })
-                    end
-                end)
-                Fluent:Notify({ Title="Sniffer", Content="Ativo!", Duration=2 })
-            else
-                if snifferConn then snifferConn:Disconnect() snifferConn = nil end
-                snifferStatus:SetDesc("Inativo. " .. snifferCount .. " capturados.")
-            end
-        end)
-
-        Tabs.Debug:AddButton({
-            Title    = "Ver no Output",
-            Callback = function()
-                warn("=== REMOTES (" .. #capturedRemotes .. ") ===")
-                for i, l in ipairs(capturedRemotes) do warn(i..": "..l) end
-                warn("=== FIM ===")
-                Fluent:Notify({ Title="Debug", Content=#capturedRemotes.." no output.", Duration=2 })
-            end,
-        })
-
-        Tabs.Debug:AddButton({
-            Title = "Limpar", Callback = function()
-                capturedRemotes = {} snifferCount = 0
-                snifferStatus:SetDesc("Limpo.")
-            end,
-        })
-
-        Tabs.Debug:AddSection("Testes Manuais")
-        local TRIAL_TESTS = {
-            { Label="Star Open x1",   Args={"General","Star","Open",1} },
-            { Label="Star Open x10",  Args={"General","Star","Open",10} },
-            { Label="Trial Start",    Args={"General","Trial","Start"} },
-            { Label="Trial Claim",    Args={"General","Trial","Claim"} },
-            { Label="Gacha Spin x1",  Args={"General","Gacha","Spin",1} },
-            { Label="Gacha Spin x10", Args={"General","Gacha","Spin",10} },
-            { Label="Gacha Open x1",  Args={"General","Gacha","Open",1} },
-            { Label="Lucky Spin x1",  Args={"General","LuckySpin","Spin",1} },
-        }
-        for _, t in ipairs(TRIAL_TESTS) do
-            local tt = t
-            Tabs.Debug:AddButton({
-                Title    = tt.Label,
-                Callback = function()
-                    fire(table.unpack(tt.Args))
-                    warn("[TESTE] " .. tt.Label)
-                    Fluent:Notify({ Title="Teste", Content=tt.Label.." enviado.", Duration=3 })
-                end,
-            })
-        end
-
-        Fluent:Notify({ Title="Debug", Content="Aba desbloqueada!", Duration=3 })
-    end,
-})
 
 -- ============================================================
 -- TAB: SETTINGS
@@ -1238,7 +865,7 @@ SaveManager:LoadAutoloadConfig()
 Window:SelectTab(1)
 
 Fluent:Notify({
-    Title    = "Cat Empire v5.16",
+    Title    = "Cat Empire v5.19",
     Content  = "Carregado com sucesso!",
     Duration = 4,
 })
