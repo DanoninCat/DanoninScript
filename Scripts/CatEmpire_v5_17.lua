@@ -228,14 +228,18 @@ end
 
 -- ============================================================
 -- ROLLBACK SYSTEM
--- Funciona interceptando "Architect","Data","Receiver" do OnClientEvent
--- O servidor manda a tabela COMPLETA do player a cada update
--- Ao executar rollback: restaura a tabela via bridge + rejoin
+-- Mecânica real: jogos Roblox salvam dados a cada ~60-120s.
+-- 1. Ativa toggle → captura snapshot (estado "antes")
+-- 2. Faz o que quiser (gasta chips, abre estrelas, etc.)
+-- 3. Executa Rollback → para loops e faz rejoin IMEDIATO
+-- 4. Servidor carrega último save = estado do snapshot
+-- IMPORTANTE: use dentro de ~60s após ativar
 -- ============================================================
-local rollbackActive   = false
-local rollbackSnapshot = nil  -- tabela completa capturada no momento da ativação
-local rollbackConn     = nil  -- conexão OnClientEvent
-local rollbackTime     = nil  -- horário do snapshot
+local rollbackActive    = false
+local rollbackSnapshot  = nil
+local rollbackConn      = nil
+local rollbackTime      = nil
+local rollbackSaveTimer = 0
 
 local function deepCopy(original)
     if type(original) ~= "table" then return original end
@@ -247,8 +251,9 @@ local function deepCopy(original)
 end
 
 local function startRollbackCapture()
-    rollbackSnapshot = nil
-    rollbackTime     = nil
+    rollbackSnapshot  = nil
+    rollbackTime      = nil
+    rollbackSaveTimer = 0
 
     local bridge = getBridge()
     if not bridge then
@@ -256,18 +261,23 @@ local function startRollbackCapture()
         return
     end
 
-    -- Aguarda o próximo Architect,Data,Receiver e salva a tabela completa
     rollbackConn = bridge.OnClientEvent:Connect(function(...)
         local args = {...}
         if args[1] == "Architect" and args[2] == "Data" and args[3] == "Receiver" then
-            if rollbackSnapshot == nil then
-                -- Primeira tabela recebida após ativar = estado no momento da ativação
-                rollbackSnapshot = deepCopy(args[4])
-                rollbackTime     = os.date("%H:%M:%S")
+            if rollbackSnapshot == nil and type(args[4]) == "table" then
+                rollbackSnapshot  = deepCopy(args[4])
+                rollbackTime      = os.date("%H:%M:%S")
+                rollbackSaveTimer = 0
+                task.spawn(function()
+                    while rollbackActive do
+                        task.wait(1)
+                        rollbackSaveTimer += 1
+                    end
+                end)
                 Fluent:Notify({
                     Title   = "Rollback",
-                    Content = "Estado salvo às " .. rollbackTime .. "!",
-                    Duration = 3,
+                    Content = "Estado salvo às " .. rollbackTime .. "!\nVocê tem ~60s antes do próximo save.",
+                    Duration = 4,
                 })
             end
         end
@@ -281,24 +291,6 @@ local function stopRollbackCapture()
     end
 end
 
--- ============================================================
--- ROLLBACK v4 — baseado no debug real
---
--- Debug confirmou (imagem 6):
---   snap.Fighters[uid] = { Stats={Attack,SPA,Ultimate}, Name, Exp,
---                           Level, Accessory={}, StatsLocked={} }
---   Trait NAO existe no snapshot — não dá para restaurar traits
---   snap.World_Quest = "Leaf Village" (string direta)
---   snap.World       = "Lobby"
---   snap.Coins       = número
---
--- Remotes reais que o servidor aceita:
---   Stats reroll: General, StatsReroll, Reroll, uid, {gradeTable}
---   Stat lock:    General, StatsReroll, Lock, uid, statName
---   Quest:        General, World_Quest, accept, world
---   Teleport:     General, Teleport, Teleport, world
---   Equip:        General, Fighters, Equip_Best
--- ============================================================
 local function executeRollback()
     if not rollbackSnapshot then
         Fluent:Notify({
@@ -309,25 +301,30 @@ local function executeRollback()
         return
     end
 
-    -- CRÍTICO: para TODOS os loops antes de fazer qualquer coisa
-    -- Evita que StatsReroll, AutoFarm etc continuem rodando e gastando recursos
-    for key, handle in pairs(loopHandles) do
-        if handle then
-            task.cancel(handle)
-            loopHandles[key] = nil
-        end
+    if rollbackSaveTimer >= 90 then
+        Fluent:Notify({
+            Title    = "Rollback — AVISO",
+            Content  = rollbackSaveTimer .. "s desde o snapshot. Servidor pode já ter salvo.",
+            Duration = 4,
+        })
+        task.wait(2)
     end
 
+    -- Para TODOS os loops imediatamente — nenhum remote pode ser disparado
+    for key, handle in pairs(loopHandles) do
+        if handle then task.cancel(handle) end
+        loopHandles[key] = nil
+    end
+    stopRollbackCapture()
+    rollbackActive = false
+
     Fluent:Notify({
-        Title    = "Rollback",
-        Content  = "Loops parados. Rejoin em 2s para restaurar estado de " .. (rollbackTime or "?") .. "...",
+        Title   = "Rollback",
+        Content = "Fazendo rejoin agora...\nServidor vai carregar estado de " .. (rollbackTime or "?"),
         Duration = 3,
     })
 
-    -- O rollback REAL é só fazer rejoin antes do servidor salvar os novos dados
-    -- NÃO chamar nenhum remote de reroll — isso gasta recursos
-    -- O servidor usa o último save válido (o snapshot que capturamos)
-    task.wait(2)
+    task.wait(0.5)
     pcall(function() TeleportService:Teleport(placeId) end)
 end
 
@@ -396,42 +393,57 @@ local fbStartPos  = nil
 local fbMoved     = false
 local UIS2        = game:GetService("UserInputService")
 
--- Busca o ScreenGui principal do Fluent para esconder/mostrar diretamente
-local fluentGui = nil
-task.delay(1, function()
-    -- Fluent cria o GUI no CoreGui ou PlayerGui
-    local function findFluentGui(parent)
+-- Busca TODOS os frames raiz do Fluent para esconder completamente
+-- O Fluent cria layers separados (backdrop, janela, blur) — precisa esconder todos
+local fluentLayers = {}  -- lista de todos os frames/layers do Fluent
+
+task.delay(1.5, function()
+    local function collectFluentLayers(parent)
         for _, sg in ipairs(parent:GetChildren()) do
             if sg:IsA("ScreenGui") and sg.Name ~= "CatEmpireMinGui" then
-                for _, ch in ipairs(sg:GetChildren()) do
-                    if ch:IsA("Frame") and ch.Size == UDim2.fromOffset(720, 480) then
-                        fluentGui = sg
-                        return true
-                    end
-                end
+                -- Guarda o ScreenGui inteiro E todos os seus filhos Frame
+                table.insert(fluentLayers, sg)
             end
         end
-        return false
     end
-    if not findFluentGui(game:GetService("CoreGui")) then
-        findFluentGui(player:WaitForChild("PlayerGui"))
-    end
+    collectFluentLayers(game:GetService("CoreGui"))
+    collectFluentLayers(player:WaitForChild("PlayerGui"))
 end)
 
 local function simulateMinimize()
     windowVisible = not windowVisible
-    -- Tenta esconder via ScreenGui diretamente
-    if fluentGui then
-        fluentGui.Enabled = windowVisible
-    else
-        -- Fallback: tenta achar em runtime
-        for _, sg in ipairs(game:GetService("CoreGui"):GetChildren()) do
-            if sg:IsA("ScreenGui") and sg.Name ~= "CatEmpireMinGui" then
-                sg.Enabled = windowVisible
-                break
-            end
+
+    if #fluentLayers > 0 then
+        -- Esconde/mostra TODOS os layers do Fluent
+        for _, layer in ipairs(fluentLayers) do
+            pcall(function()
+                if layer:IsA("ScreenGui") then
+                    -- Esconde todos os filhos Frame individualmente (resolve a "sombra")
+                    for _, child in ipairs(layer:GetChildren()) do
+                        if child:IsA("Frame") or child:IsA("ImageLabel") or child:IsA("TextLabel") then
+                            child.Visible = windowVisible
+                        end
+                    end
+                    layer.Enabled = windowVisible
+                end
+            end)
         end
+    else
+        -- Fallback em runtime se ainda não carregou
+        pcall(function()
+            for _, sg in ipairs(game:GetService("CoreGui"):GetChildren()) do
+                if sg:IsA("ScreenGui") and sg.Name ~= "CatEmpireMinGui" then
+                    for _, child in ipairs(sg:GetChildren()) do
+                        if child:IsA("Frame") or child:IsA("ImageLabel") then
+                            child.Visible = windowVisible
+                        end
+                    end
+                    sg.Enabled = windowVisible
+                end
+            end
+        end)
     end
+
     minFrame.BackgroundColor3 = windowVisible
         and Color3.fromRGB(0, 80, 190)
         or  Color3.fromRGB(140, 30, 30)
@@ -979,7 +991,7 @@ Tabs.Rollback:AddSection("Rollback")
 
 Tabs.Rollback:AddParagraph({
     Title   = "Como funciona",
-    Content = "Ative o toggle — o script salva automaticamente o primeiro pacote de dados que o servidor mandar.\nAo executar Rollback, restaura os dados e faz rejoin.",
+    Content = "1. Ative o toggle ANTES de fazer qualquer coisa\n2. Faca o que quiser no jogo (gacha, reroll, etc)\n3. Clique Executar Rollback ANTES de 60s\n4. O servidor carrega o save anterior — tudo volta ao normal\n\nSe passar de 60s, o servidor ja pode ter salvo os novos dados.",
 })
 
 local rollbackStatusParagraph = Tabs.Rollback:AddParagraph({
@@ -987,26 +999,40 @@ local rollbackStatusParagraph = Tabs.Rollback:AddParagraph({
     Content = "Inativo — nenhum snapshot salvo",
 })
 
+-- Atualiza o timer em tempo real enquanto rollback está ativo
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if rollbackActive and rollbackSnapshot then
+            local cor = rollbackSaveTimer < 45 and "SEGURO" or rollbackSaveTimer < 75 and "ATENCAO" or "RISCO"
+            rollbackStatusParagraph:SetDesc(
+                "Snapshot: " .. (rollbackTime or "?") ..
+                "\nTempo: " .. rollbackSaveTimer .. "s — " .. cor
+            )
+        end
+    end
+end)
+
 Tabs.Rollback:AddToggle("RollbackCapture", { Title = "Ativar Captura de Estado", Default = false })
 Options.RollbackCapture:OnChanged(function(v)
     rollbackActive = v
     if v then
-        rollbackSnapshot = nil  -- reseta para capturar novo snapshot
+        rollbackSnapshot  = nil
+        rollbackSaveTimer = 0
         startRollbackCapture()
         rollbackStatusParagraph:SetDesc("Aguardando pacote do servidor...")
     else
         stopRollbackCapture()
         if rollbackSnapshot then
-            rollbackStatusParagraph:SetDesc("Snapshot salvo às " .. (rollbackTime or "?") .. " — pronto para rollback")
+            rollbackStatusParagraph:SetDesc("Pausado — snapshot de " .. (rollbackTime or "?") .. " disponivel")
         else
             rollbackStatusParagraph:SetDesc("Desativado — nenhum snapshot capturado")
         end
-        Fluent:Notify({ Title="Rollback", Content="Captura encerrada.", Duration=2 })
     end
 end)
 
 Tabs.Rollback:AddButton({
-    Title    = "Executar Rollback",
+    Title    = "Executar Rollback (Rejoin)",
     Callback = function()
         executeRollback()
     end,
