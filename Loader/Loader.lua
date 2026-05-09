@@ -1,6 +1,5 @@
 -- ============================================================
 --  CAT EMPIRE | LOADER | Desenvolvido por Danonin
---  Detecta o jogo e carrega o script correto
 -- ============================================================
 
 local GAMES = {
