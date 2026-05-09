@@ -17,7 +17,7 @@ repeat task.wait() until player:FindFirstChild("PlayerGui")
 -- FLUENT
 -- ============================================================
 local ok1, Fluent = pcall(function()
-    return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua", true))()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/src/init.lua", true))()
 end)
 if not ok1 then warn("[CE] Fluent falhou: " .. tostring(Fluent)) return end
 
