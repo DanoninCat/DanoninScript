@@ -1,6 +1,21 @@
 -- ============================================================
 --  CAT EMPIRE | LOADER | Desenvolvido por Danonin
+--  Detecta o jogo e carrega o script correto
 -- ============================================================
-local URL = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/refs/heads/main/Scripts/CatEmpire_v5_21.lua"
-local ok, err = pcall(function() loadstring(game:HttpGet(URL, true))() end)
-if not ok then warn("[CatEmpire] Erro: " .. tostring(err)) end
+
+local GAMES = {
+    -- Anime Warriors 3 (PlaceId — atualizar se necessário)
+    [7457800263] = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/refs/heads/main/Scripts/CatEmpire_v5_22.lua",
+}
+
+local DEFAULT = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/refs/heads/main/Scripts/CatEmpire_v5_22.lua"
+
+local url = GAMES[game.PlaceId] or DEFAULT
+
+local ok, err = pcall(function()
+    loadstring(game:HttpGet(url, true))()
+end)
+
+if not ok then
+    warn("[CatEmpire Loader] Erro: " .. tostring(err))
+end
