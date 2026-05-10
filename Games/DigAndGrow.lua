@@ -1,5 +1,5 @@
 -- ============================================================
---  DIG & GROW | v1.2 | by Danonin
+--  DIG & GROW | v1.3 | by Danonin
 --  Roblox: Dig & Grow (Place ID: 75995379831247)
 --  Remotes: ReplicatedStorage.Signals.*
 -- ============================================================
@@ -181,15 +181,16 @@ local function getMyPlot()
         WS,
     }
     for _, root in ipairs(roots) do
-        if not root then continue end
-        for _, plot in ipairs(root:GetChildren()) do
-            local owner = plot:GetAttribute("Owner")
-                       or plot:GetAttribute("Player")
-                       or plot:GetAttribute("OwnerId")
-            if owner == player.Name
-            or owner == tostring(player.UserId)
-            or owner == player.UserId then
-                return plot
+        if root then
+            for _, plot in ipairs(root:GetChildren()) do
+                local owner = plot:GetAttribute("Owner")
+                           or plot:GetAttribute("Player")
+                           or plot:GetAttribute("OwnerId")
+                if owner == player.Name
+                or owner == tostring(player.UserId)
+                or owner == player.UserId then
+                    return plot
+                end
             end
         end
     end
@@ -236,7 +237,7 @@ end
 -- ============================================================
 local Window = Fluent:CreateWindow({
     Title       = "Dig & Grow",
-    SubTitle    = "v1.2 | by Danonin",
+    SubTitle    = "v1.3 | by Danonin",
     TabWidth    = 160,
     Size        = UDim2.fromOffset(680, 460),
     Acrylic     = true,
@@ -297,14 +298,6 @@ local function doMin()
     winVis = not winVis
     if fluentSG then
         pcall(function() fluentSG.Enabled = winVis end)
-    else
-        pcall(function()
-            local VIM = game:GetService("VirtualInputManager")
-            VIM:SendKeyEvent(true,  Enum.KeyCode.RightControl, false, game)
-            task.wait(0.05)
-            VIM:SendKeyEvent(false, Enum.KeyCode.RightControl, false, game)
-        end)
-        winVis = not winVis
     end
     minFrame.BackgroundColor3 = winVis
         and Color3.fromRGB(20, 140, 60) or Color3.fromRGB(140, 30, 30)
@@ -349,7 +342,6 @@ local Tabs = {
     Farm     = Window:AddTab({ Title = "Farm",     Icon = "sprout"        }),
     Garden   = Window:AddTab({ Title = "Garden",   Icon = "flower-2"      }),
     Shop     = Window:AddTab({ Title = "Shop",     Icon = "shopping-cart" }),
-    Debug    = Window:AddTab({ Title = "Debug",    Icon = "terminal"      }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings"      }),
     Info     = Window:AddTab({ Title = "Info",     Icon = "info"          }),
 }
@@ -527,141 +519,6 @@ Tabs.Shop:AddButton({
 })
 
 -- ============================================================
--- TAB: DEBUG — scanner de signals reais do jogo
--- ============================================================
-Tabs.Debug:AddSection("Signals Encontrados")
-
-local signalListPara = Tabs.Debug:AddParagraph({
-    Title   = "Status",
-    Content = "Clique em Escanear para ver os signals reais.",
-})
-
-Tabs.Debug:AddButton({
-    Title    = "Escanear Signals (Output)",
-    Callback = function()
-        scanSignals()
-        local lines = {}
-        -- Mostra os principais detectados
-        for k, v in pairs(R) do
-            table.insert(lines, k..": "..(v and v.Name or "NAO ENCONTRADO"))
-        end
-        signalListPara:SetDesc(table.concat(lines, "\n"))
-        -- Lista todos no output
-        warn("=== TODOS OS SIGNALS ===")
-        if Signals then
-            for _, child in ipairs(Signals:GetDescendants()) do
-                if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
-                    warn("  " .. child.Name .. " [" .. child.ClassName .. "]")
-                end
-            end
-        end
-        -- RS inteiro
-        for _, child in ipairs(RS:GetDescendants()) do
-            if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
-                warn("  RS."..child.Name.." [" .. child.ClassName .. "]")
-            end
-        end
-        warn("=== FIM ===")
-        Fluent:Notify({ Title="Debug", Content="Ver output do executor.", Duration=3 })
-    end,
-})
-
-Tabs.Debug:AddSection("Sniffer de Atividade")
-
-local sniffConns = {}
-local sniffActive = false
-local sniffPara = Tabs.Debug:AddParagraph({ Title="Ultimo evento", Content="Inativo" })
-
-Tabs.Debug:AddToggle("SniffToggle", { Title = "Sniffer (OnClientEvent)", Default = false })
-Options.SniffToggle:OnChanged(function(v)
-    sniffActive = v
-    if v then
-        -- Conecta em todos os signals
-        if Signals then
-            for _, child in ipairs(Signals:GetDescendants()) do
-                if child:IsA("RemoteEvent") then
-                    local name = child.Name
-                    local c = child.OnClientEvent:Connect(function(...)
-                        local args = {...}
-                        local parts = {}
-                        for _, a in ipairs(args) do
-                            local t = type(a)
-                            if t == "string" or t == "number" or t == "boolean" then
-                                table.insert(parts, tostring(a))
-                            else
-                                table.insert(parts, "["..t.."]")
-                            end
-                        end
-                        local line = name..": "..table.concat(parts, ", ")
-                        warn("[DnG Sniff] "..line)
-                        sniffPara:SetDesc(line)
-                    end)
-                    table.insert(sniffConns, c)
-                end
-            end
-        end
-        Fluent:Notify({ Title="Sniffer", Content="Ativo. Execute acoes no jogo.", Duration=3 })
-    else
-        for _, c in ipairs(sniffConns) do pcall(function() c:Disconnect() end) end
-        sniffConns = {}
-        sniffPara:SetDesc("Desativado")
-    end
-end)
-
-Tabs.Debug:AddSection("Testar Signal Manual")
-
-Tabs.Debug:AddInput("TestSignalName", {
-    Title       = "Nome do Signal",
-    Placeholder = "ex: CollectFruit",
-    Numeric     = false,
-})
-
-Tabs.Debug:AddInput("TestSignalArg", {
-    Title       = "Argumento (opcional)",
-    Placeholder = "ex: Sell",
-    Numeric     = false,
-})
-
-Tabs.Debug:AddButton({
-    Title    = "Testar Signal",
-    Callback = function()
-        local name = Options.TestSignalName.Value or ""
-        local arg  = Options.TestSignalArg.Value or ""
-        if name == "" then
-            Fluent:Notify({ Title="Debug", Content="Digite o nome do signal.", Duration=2 })
-            return
-        end
-        local sig = Signals and Signals:FindFirstChild(name)
-        if not sig then
-            -- Busca no RS inteiro
-            for _, child in ipairs(RS:GetDescendants()) do
-                if child.Name == name then sig = child break end
-            end
-        end
-        if not sig then
-            Fluent:Notify({ Title="Debug", Content="Signal '"..name.."' nao encontrado.", Duration=3 })
-            return
-        end
-        local ok, err
-        if arg ~= "" then
-            if sig:IsA("RemoteFunction") then
-                ok, err = pcall(function() return sig:InvokeServer(arg) end)
-            else
-                ok, err = pcall(function() sig:FireServer(arg) end)
-            end
-        else
-            if sig:IsA("RemoteFunction") then
-                ok, err = pcall(function() return sig:InvokeServer() end)
-            else
-                ok, err = pcall(function() sig:FireServer() end)
-            end
-        end
-        warn("[DnG Test] "..name.." → ok="..tostring(ok).." err="..tostring(err))
-        Fluent:Notify({ Title="Teste", Content=name..": "..(ok and "OK" or tostring(err)), Duration=4 })
-    end,
-})
-
--- ============================================================
 -- TAB: SETTINGS
 -- ============================================================
 SaveManager:SetLibrary(Fluent)
@@ -676,7 +533,7 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 -- ============================================================
 -- TAB: INFO
 -- ============================================================
-Tabs.Info:AddSection("Dig & Grow v1.2")
+Tabs.Info:AddSection("Dig & Grow v1.3")
 Tabs.Info:AddParagraph({ Title="Dev",     Content="Danonin"                })
 Tabs.Info:AddParagraph({ Title="Discord", Content="discord.gg/qDeZ9sEdGY" })
 Tabs.Info:AddButton({
@@ -687,10 +544,6 @@ Tabs.Info:AddButton({
     end,
 })
 Tabs.Info:AddParagraph({
-    Title   = "Remotes Confirmados",
-    Content = "CollectFruit · MutationReceptor\nToolSignal · Shop · ShovelBuy",
-})
-Tabs.Info:AddParagraph({
     Title   = "Keybind",
     Content = "RightControl — Toggle GUI\nBotao D&G — Toggle/Arrastar",
 })
@@ -699,9 +552,10 @@ Tabs.Info:AddParagraph({
 -- INIT
 -- ============================================================
 SaveManager:LoadAutoloadConfig()
-Window:SelectTab(1)
+Window:SelectTab(Tabs.Farm)
 Fluent:Notify({
-    Title   = "Dig & Grow v1.2",
+    Title   = "Dig & Grow v1.3",
     Content = "Script carregado!",
     Duration = 4,
 })
+print("DIG & GROW FULLY LOADED")
