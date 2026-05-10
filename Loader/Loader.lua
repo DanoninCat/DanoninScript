@@ -1,14 +1,16 @@
 -- ============================================================
---  CAT EMPIRE | LOADER
---  Desenvolvido por Danonin
+--  DANONIN HUB | Loader
+--  github.com/DanoninCat/DanoninScript
 -- ============================================================
 
-local URL = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Scripts/CatEmpire_v5_23.lua"
+local BASE = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Games/"
 
-local ok, err = pcall(function()
-    loadstring(game:HttpGet(URL, true))()
-end)
+local Games = {
+    [18923620224]    = BASE .. "AnimeWarriors3.lua",
+    [75995379831247] = BASE .. "DigAndGrow.lua",
+}
 
-if not ok then
-    warn("[CatEmpire] Erro ao carregar: " .. tostring(err))
-end
+local script = Games[game.PlaceId]
+if not script then return end
+
+loadstring(game:HttpGet(script, true))()
