@@ -1,5 +1,5 @@
 -- ============================================================
---  DANONIN HUB | Loader
+--  DANONIN HUB | Loader v2
 --  github.com/DanoninCat/DanoninScript
 -- ============================================================
 
@@ -10,7 +10,22 @@ local Games = {
     [75995379831247] = BASE .. "DigAndGrow.lua",
 }
 
-local script = Games[game.PlaceId]
-if not script then return end
+local pid = tonumber(game.PlaceId) or 0
+local url = Games[pid]
 
-loadstring(game:HttpGet(script, true))()
+if not url then
+    warn("[Loader] PlaceId=" .. tostring(pid) .. " nao mapeado.")
+    warn("[Loader] Scripts disponiveis:")
+    warn("  Dig & Grow:       " .. BASE .. "DigAndGrow.lua")
+    warn("  Anime Warriors 3: " .. BASE .. "AnimeWarriors3.lua")
+    return
+end
+
+warn("[Loader] Carregando PlaceId=" .. tostring(pid))
+local ok, err = pcall(function()
+    loadstring(game:HttpGet(url, true))()
+end)
+
+if not ok then
+    warn("[Loader] Erro: " .. tostring(err))
+end
