@@ -17,23 +17,23 @@ repeat task.wait() until player:FindFirstChild("PlayerGui")
 -- FLUENT
 -- ============================================================
 local ok1, Fluent = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua", true))()
+    return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua", true))()
 end)
 if not ok1 then
     local ok1b
     ok1b, Fluent = pcall(function()
-        return loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/dawid-scripts/Fluent@master/main.lua", true))()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/dist/main.lua", true))()
     end)
     if not ok1b then warn("[DnG] Fluent falhou: "..tostring(Fluent)) return end
 end
 
 local ok2, SaveManager = pcall(function()
-    return loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/dawid-scripts/Fluent@master/Addons/SaveManager.lua", true))()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua", true))()
 end)
 if not ok2 then warn("[DnG] SaveManager: "..tostring(SaveManager)) return end
 
 local ok3, InterfaceManager = pcall(function()
-    return loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/dawid-scripts/Fluent@master/Addons/InterfaceManager.lua", true))()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua", true))()
 end)
 if not ok3 then warn("[DnG] InterfaceManager: "..tostring(InterfaceManager)) return end
 
