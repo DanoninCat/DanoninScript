@@ -226,63 +226,53 @@ local function getHarvestablePlants(plot)
 end
 
 -- ============================================================
--- COLLECT PLOT — tenta múltiplas assinaturas do CollectFruit
--- O hook captura UUID+"1" mas o servidor pode exigir Model/Part
+-- COLLECT PLOT — ProximityPrompt → ClickDetector → Remote fallback
+-- Debug confirmou: CollectFruit NUNCA aparece. Jogo usa ProximityPrompt "PICK UP"
 -- ============================================================
 local function doCollect()
-    if not R.Collect then
-        warn("[COLLECT] Remote CollectFruit nao encontrado!")
-        return 0
-    end
-
     local plot = getMyPlot()
     if not plot then
         warn("[COLLECT] Plot nao encontrado")
         return 0
     end
 
-    local plants = getHarvestablePlants(plot)
-    warn("[COLLECT] Plot: "..plot.Name.." | Plantas: "..#plants)
-
-    if #plants == 0 then
-        warn("[COLLECT] Nenhuma planta encontrada")
-        return 0
-    end
-
     local count = 0
-    for _, p in ipairs(plants) do
-        print("[COLLECT ATTEMPT] UUID:", p.UUID, "| Model:", tostring(p.Model), "| Part:", tostring(p.Part))
 
-        -- Tenta 5 assinaturas em ordem, para na primeira que não der erro
-        local attempts = {
-            -- 1. Só UUID + "1" (mais simples, confirmado pelo hook)
-            function() R.Collect:FireServer(p.UUID, "1") end,
-            -- 2. Model + UUID + "1" (jogo pode exigir referência da instância)
-            function() R.Collect:FireServer(p.Model, p.UUID, "1") end,
-            -- 3. Part + UUID
-            function() if p.Part then R.Collect:FireServer(p.Part, p.UUID) end end,
-            -- 4. Só o Model
-            function() R.Collect:FireServer(p.Model) end,
-            -- 5. Só o Part
-            function() if p.Part then R.Collect:FireServer(p.Part) end end,
-        }
-
-        for i, attempt in ipairs(attempts) do
-            local ok, err = pcall(attempt)
-            if ok then
-                print("[COLLECT] Tentativa", i, "OK — UUID:", p.UUID)
-                break
-            else
-                print("[COLLECT] Tentativa", i, "falhou:", tostring(err))
+    for _, obj in ipairs(plot:GetDescendants()) do
+        pcall(function()
+            -- ProximityPrompt (método confirmado — "PICK UP / BLUEBERRY FRUIT")
+            local pp = obj:FindFirstChildOfClass("ProximityPrompt")
+            if pp then
+                print("[COLLECT] Prompt:", obj.Name)
+                pcall(function() fireproximityprompt(pp) end)
+                pcall(function() pp:InputHoldBegin() task.wait(0.05) pp:InputHoldEnd() end)
+                count += 1
+                task.wait(0.15)
+                return
             end
-            task.wait(0.05)
-        end
 
-        count += 1
-        task.wait(0.25)
+            -- ClickDetector fallback
+            local cd = obj:FindFirstChildOfClass("ClickDetector")
+            if cd then
+                print("[COLLECT] Click:", obj.Name)
+                pcall(function() fireclickdetector(cd) end)
+                count += 1
+                task.wait(0.15)
+                return
+            end
+
+            -- Remote fallback (último recurso)
+            local uid = obj:GetAttribute("UUID") or obj:GetAttribute("Id") or obj:GetAttribute("ID")
+            if uid and R.Collect then
+                print("[COLLECT] Remote fallback:", tostring(uid))
+                pcall(function() R.Collect:FireServer(tostring(uid), "1") end)
+                count += 1
+                task.wait(0.15)
+            end
+        end)
     end
 
-    warn("[COLLECT] Enviado para "..count.." planta(s)")
+    warn("[COLLECT] Coletado: "..count)
     return count
 end
 
@@ -486,14 +476,12 @@ local stroke = Instance.new("UIStroke", minFrame)
 stroke.Color     = Color3.fromRGB(60, 220, 100)
 stroke.Thickness = 2
 
-local minLbl = Instance.new("TextLabel", minFrame)
-minLbl.Size                   = UDim2.fromScale(1, 1)
-minLbl.BackgroundTransparency = 1
-minLbl.Text                   = "D&G"
-minLbl.TextColor3             = Color3.new(1, 1, 1)
-minLbl.Font                   = Enum.Font.GothamBold
-minLbl.TextSize               = 13
-minLbl.ZIndex                 = 101
+local minImg = Instance.new("ImageLabel", minFrame)
+minImg.Size                   = UDim2.fromOffset(36, 36)
+minImg.Position               = UDim2.new(0.5, -18, 0.5, -18)
+minImg.Image                  = "rbxassetid://128797153413520"
+minImg.BackgroundTransparency = 1
+minImg.ZIndex                 = 101
 
 local minHit = Instance.new("TextButton", minFrame)
 minHit.Size                   = UDim2.fromScale(1, 1)
@@ -546,11 +534,9 @@ local function setButtonState(open)
     if open then
         minFrame.BackgroundColor3 = Color3.fromRGB(20, 140, 60)
         stroke.Color              = Color3.fromRGB(60, 220, 100)
-        minLbl.Text               = "D&G"
     else
         minFrame.BackgroundColor3 = Color3.fromRGB(140, 30, 30)
         stroke.Color              = Color3.fromRGB(220, 80, 80)
-        minLbl.Text               = ">"
     end
 end
 
