@@ -86,7 +86,7 @@ end
 -- ============================================================
 local Window = Fluent:CreateWindow({
     Title       = "Anime Capture",
-    SubTitle    = "v1.0 | by Danonin",
+    SubTitle    = "v1.1 | by Danonin",
     TabWidth    = 160,
     Size        = UDim2.fromOffset(720, 480),
     Acrylic     = true,
@@ -140,12 +140,31 @@ local fluentSG = nil
 task.spawn(function()
     for _ = 1, 40 do
         task.wait(0.5)
+        -- Busca pelo nome "Fluent" primeiro
         for _, sg in ipairs(pg:GetChildren()) do
             if sg:IsA("ScreenGui") and sg.Name == "Fluent" then
-                fluentSG = sg break
+                fluentSG = sg
+                break
             end
         end
-        if fluentSG then break end
+        -- Fallback: qualquer ScreenGui com Frame+UICorner (estrutura do Fluent)
+        if not fluentSG then
+            for _, sg in ipairs(pg:GetChildren()) do
+                if sg:IsA("ScreenGui") and sg.Name ~= "ACMinGui" then
+                    for _, ch in ipairs(sg:GetChildren()) do
+                        if ch:IsA("Frame") and ch:FindFirstChildOfClass("UICorner") then
+                            fluentSG = sg
+                            break
+                        end
+                    end
+                end
+                if fluentSG then break end
+            end
+        end
+        if fluentSG then
+            warn("[AC] Fluent GUI: " .. fluentSG.Name)
+            break
+        end
     end
 end)
 
@@ -159,14 +178,17 @@ local function doMin()
 end
 
 local drag, moved, dStart, sPos = false, false, nil, nil
+
 minHit.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
     or i.UserInputType == Enum.UserInputType.Touch then
-        drag = true moved = false
+        drag   = true
+        moved  = false
         dStart = Vector2.new(i.Position.X, i.Position.Y)
         sPos   = minFrame.Position
     end
 end)
+
 UIS.InputChanged:Connect(function(i)
     if not drag then return end
     if i.UserInputType == Enum.UserInputType.MouseMovement
@@ -181,12 +203,17 @@ UIS.InputChanged:Connect(function(i)
         end
     end
 end)
+
+-- MouseButton1Click consome o evento impedindo de passar pro jogo
+minHit.MouseButton1Click:Connect(function()
+    if moved then return end
+    doMin()
+end)
+
 UIS.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
     or i.UserInputType == Enum.UserInputType.Touch then
-        if not drag then return end
-        drag = false
-        if not moved then doMin() end
+        drag  = false
         moved = false
     end
 end)
@@ -740,13 +767,9 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 -- ============================================================
 -- TAB: INFO
 -- ============================================================
-Tabs.Info:AddSection("Anime Capture v1.0")
+Tabs.Info:AddSection("Anime Capture v1.1")
 Tabs.Info:AddParagraph({ Title="Dev",     Content="Danonin"                })
 Tabs.Info:AddParagraph({ Title="Discord", Content="discord.gg/qDeZ9sEdGY" })
-Tabs.Info:AddParagraph({
-    Title   = "Remotes",
-    Content = "ReplicatedStorage.RemotesFolder\n70+ RemoteEvents mapeados",
-})
 Tabs.Info:AddButton({
     Title    = "Copiar Discord",
     Callback = function()
@@ -756,13 +779,13 @@ Tabs.Info:AddButton({
 })
 Tabs.Info:AddParagraph({
     Title   = "Keybind",
-    Content = "RightControl — Toggle GUI\nBotão — Toggle/Arrastar",
+    Content = "RightControl — Toggle GUI\nBotao — Toggle/Arrastar",
 })
 
 -- ============================================================
 -- INIT
 -- ============================================================
 SaveManager:LoadAutoloadConfig()
-Window:SelectTab(1)
-Fluent:Notify({ Title="Anime Capture v1.0", Content="Carregado!", Duration=4 })
-warn("[AC] Anime Capture v1.0 | RemotesFolder: "..#RF:GetChildren().." remotes")
+Window:SelectTab(Tabs.Farm)
+Fluent:Notify({ Title="Anime Capture v1.1", Content="Carregado!", Duration=4 })
+warn("[AC] Anime Capture v1.1 | RemotesFolder: "..#RF:GetChildren().." remotes")
