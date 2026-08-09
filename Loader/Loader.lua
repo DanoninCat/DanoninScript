@@ -8,7 +8,7 @@ local BASE = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Ga
 local Games = {
     [18923620224]    = BASE .. "AnimeWarriors3.lua",
     [75995379831247] = BASE .. "DigAndGrow.lua",
-    -- [PLACEID_ANIME_CAPTURE] = BASE .. "AnimeCapture.lua",
+    [94717504417144] = BASE .. "AnimeCapture.lua",
 }
 
 local script = Games[game.PlaceId]
@@ -20,22 +20,17 @@ end
 local cacheBuster = "?t=" .. tostring(os.time()) .. tostring(math.random(1000, 9999))
 local finalURL = script .. cacheBuster
 
--- FIX: separa HttpGet / loadstring / execução em 3 etapas distintas
--- Assim sabemos EXATAMENTE em qual etapa o erro acontece
 local ok, err = pcall(function()
-    -- ETAPA 1: download
     local source = game:HttpGet(finalURL, true)
     if not source or source == "" then
         error("ETAPA HttpGet: conteudo vazio ou nil retornado")
     end
 
-    -- ETAPA 2: compilação
     local fn, compileErr = loadstring(source)
     if not fn then
         error("ETAPA loadstring (erro de compilacao/sintaxe): " .. tostring(compileErr))
     end
 
-    -- ETAPA 3: execução
     local success, runtimeErr = pcall(fn)
     if not success then
         error("ETAPA execucao (erro em tempo real dentro do script): " .. tostring(runtimeErr))
