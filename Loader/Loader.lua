@@ -8,7 +8,7 @@ local BASE = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Ga
 local Games = {
     [18923620224]    = BASE .. "AnimeWarriors3.lua",
     [75995379831247] = BASE .. "DigAndGrow.lua",
-    -- [PLACEID_ANIME_CAPTURE] = BASE .. "AnimeCapture.lua",  -- substituir pelo PlaceId real
+    [94717504417144] = BASE .. "AnimeCapture.lua",
 }
 
 local script = Games[game.PlaceId]
