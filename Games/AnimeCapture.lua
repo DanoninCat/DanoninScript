@@ -1,5 +1,5 @@
 -- ============================================================
---  DANONIN HUB | Anime Capture v3.6
+--  DANONIN HUB | Anime Capture v3.7
 --  UI: Estilo Mai Hub | Fluent custom (Darker + BG image)
 --  Tabs: Main | Hatch | GameModes | Misc | Settings | Info
 -- ============================================================
@@ -66,7 +66,7 @@ local Config = {
     Background              = "https://media.discordapp.net/attachments/1400396358976016438/1449007745259802677/da8050322d4e962ffa68dab9b0bfce50.png",
     Theme                   = "Darker",
     Title                   = "Danonin Hub",
-    SubTitle                = "Anime Capture v3.6",
+    SubTitle                = "Anime Capture v3.7",
     Author                  = "Danonin",
     SetBackgroundImageTransparency = 0.7,
     Icon                    = "rbxassetid://116236573892978",
@@ -343,17 +343,19 @@ local function doMin()
     end
 
     -- Fallback: tenta métodos do Window object (alguns forks expõem isso)
+    -- FIX: "cond and fn()" sozinho como linha NÃO é statement válido em
+    -- Lua (só chamada de função pura é aceita). Precisa de if explícito.
     if not fluentSG or not pcall(function()
         -- Verifica se realmente escondeu
         if fluentSG and fluentSG.Enabled ~= newState then error("not applied") end
     end) then
         pcall(function()
             if newState then
-                Window.Open and Window:Open()
-                Window.Show and Window:Show()
+                if Window.Open then Window:Open() end
+                if Window.Show then Window:Show() end
             else
-                Window.Close and Window:Close()
-                Window.Hide and Window:Hide()
+                if Window.Close then Window:Close() end
+                if Window.Hide then Window:Hide() end
             end
         end)
     end
@@ -973,7 +975,7 @@ end
 -- ============================================================
 Tabs.Info:AddSection("Danonin Hub")
 
-Tabs.Info:AddParagraph({ Title="Script",  Content="Anime Capture v3.6" })
+Tabs.Info:AddParagraph({ Title="Script",  Content="Anime Capture v3.7" })
 Tabs.Info:AddParagraph({ Title="Dev",     Content=Config.Author })
 Tabs.Info:AddParagraph({ Title="Discord", Content=Config.Discord })
 Tabs.Info:AddParagraph({ Title="Status",  Content="Script: Online | Delta: Supported" })
@@ -1000,8 +1002,8 @@ Window:SelectTab(Tabs.Main)
 
 Fluent:Notify({
     Title    = "Danonin Hub",
-    Content  = "Anime Capture v3.6 carregado!",
+    Content  = "Anime Capture v3.7 carregado!",
     Duration = 5,
 })
 
-warn("[AC] v3.6 carregado | Theme: "..Config.Theme.." | "..#RF:GetChildren().." remotes | fluentSG: "..(fluentSG and fluentSG.Name or "nil"))
+warn("[AC] v3.7 carregado | Theme: "..Config.Theme.." | "..#RF:GetChildren().." remotes | fluentSG: "..(fluentSG and fluentSG.Name or "nil"))
