@@ -1,5 +1,5 @@
 -- ============================================================
---  DANONIN HUB | Anime Capture v3.7
+--  DANONIN HUB | Anime Capture v3.8
 --  UI: Estilo Mai Hub | Fluent custom (Darker + BG image)
 --  Tabs: Main | Hatch | GameModes | Misc | Settings | Info
 -- ============================================================
@@ -16,8 +16,11 @@ local player  = Players.LocalPlayer
 
 -- ============================================================
 -- COMPAT SHIM — blindado para executores como Delta mobile
--- que podem faltar task.* E/OU wait/spawn/delay globais
--- Fallback definitivo: RunService.Heartbeat (sempre existe)
+-- FIX v3.8: o Delta trata o global `task` como TABELA READONLY.
+-- Tentar fazer task.wait = ... quebra com "attempt to modify a
+-- readonly table". Solução: nunca escrever no global `task`.
+-- Usamos uma tabela LOCAL própria (Task, com T maiúsculo) e
+-- todo o resto do arquivo chama Task.wait/Task.spawn/etc.
 -- ============================================================
 local RunService = game:GetService("RunService")
 
@@ -36,25 +39,21 @@ local function hbSpawn(fn)
     return co
 end
 
-if not task then task = {} end
-task.wait   = task.wait   or wait   or hbWait
-task.spawn  = task.spawn  or spawn  or hbSpawn
-task.delay  = task.delay  or delay  or function(t, fn) hbSpawn(function() hbWait(t) fn() end) end
-task.defer  = task.defer  or task.spawn
-task.cancel = task.cancel or function(thread)
+-- Tabela LOCAL — nunca escreve no global `task` (readonly no Delta)
+local Task = {}
+Task.wait   = (task and task.wait)   or wait   or hbWait
+Task.spawn  = (task and task.spawn)  or spawn  or hbSpawn
+Task.delay  = (task and task.delay)  or delay  or function(t, fn) hbSpawn(function() hbWait(t) fn() end) end
+Task.defer  = (task and task.defer)  or Task.spawn
+Task.cancel = (task and task.cancel) or function(thread)
     pcall(function() if coroutine.status(thread) ~= "dead" then coroutine.close(thread) end end)
 end
 
--- Também garante wait/spawn/delay globais funcionando (usados por libs externas como Fluent)
-if not wait  then wait  = task.wait  end
-if not spawn then spawn = task.spawn end
-if not delay then delay = task.delay end
-
-warn("[AC] Shim carregado | task.wait: "..tostring(task.wait ~= nil).." | wait global: "..tostring(wait ~= nil))
+warn("[AC] Shim carregado | Task.wait: "..tostring(Task.wait ~= nil))
 
 local waited = 0
 repeat
-    task.wait(0.1)
+    Task.wait(0.1)
     waited += 0.1
 until player:FindFirstChild("PlayerGui") or waited > 10
 local pg = player.PlayerGui or player:WaitForChild("PlayerGui", 5)
@@ -66,7 +65,7 @@ local Config = {
     Background              = "https://media.discordapp.net/attachments/1400396358976016438/1449007745259802677/da8050322d4e962ffa68dab9b0bfce50.png",
     Theme                   = "Darker",
     Title                   = "Danonin Hub",
-    SubTitle                = "Anime Capture v3.7",
+    SubTitle                = "Anime Capture v3.8",
     Author                  = "Danonin",
     SetBackgroundImageTransparency = 0.7,
     Icon                    = "rbxassetid://116236573892978",
@@ -174,7 +173,7 @@ local Safety = { _t = {}, _a = {} }
 function Safety:Kill(key)
     self._a[key] = false
     if self._t[key] then
-        pcall(function() task.cancel(self._t[key]) end)
+        pcall(function() Task.cancel(self._t[key]) end)
         self._t[key] = nil
     end
 end
@@ -186,9 +185,9 @@ end
 function Safety:Loop(key, interval, fn)
     self:Kill(key)
     self._a[key] = true
-    self._t[key] = task.spawn(function()
+    self._t[key] = Task.spawn(function()
         while self._a[key] do
-            task.wait(interval)
+            Task.wait(interval)
             if self._a[key] then
                 local ok, err = pcall(fn)
                 if not ok then warn("[AC:"..key.."] "..tostring(err)) end
@@ -269,7 +268,7 @@ findFluentSG()
 -- Se não achou ainda (Fluent carrega assíncrono em alguns forks),
 -- tenta novamente após 1 segundo
 if not fluentSG then
-    task.delay(1, findFluentSG)
+    Task.delay(1, findFluentSG)
 end
 
 local minSG = Instance.new("ScreenGui")
@@ -335,7 +334,7 @@ local function doMin()
     local newState = not winVis
     -- Desativa ProximityPrompts ANTES de esconder
     pcall(function() PPS.Enabled = newState end)
-    task.wait()  -- 1 frame
+    Task.wait()  -- 1 frame
 
     -- Tenta esconder via ScreenGui.Enabled
     if fluentSG then
@@ -975,7 +974,7 @@ end
 -- ============================================================
 Tabs.Info:AddSection("Danonin Hub")
 
-Tabs.Info:AddParagraph({ Title="Script",  Content="Anime Capture v3.7" })
+Tabs.Info:AddParagraph({ Title="Script",  Content="Anime Capture v3.8" })
 Tabs.Info:AddParagraph({ Title="Dev",     Content=Config.Author })
 Tabs.Info:AddParagraph({ Title="Discord", Content=Config.Discord })
 Tabs.Info:AddParagraph({ Title="Status",  Content="Script: Online | Delta: Supported" })
@@ -1002,8 +1001,8 @@ Window:SelectTab(Tabs.Main)
 
 Fluent:Notify({
     Title    = "Danonin Hub",
-    Content  = "Anime Capture v3.7 carregado!",
+    Content  = "Anime Capture v3.8 carregado!",
     Duration = 5,
 })
 
-warn("[AC] v3.7 carregado | Theme: "..Config.Theme.." | "..#RF:GetChildren().." remotes | fluentSG: "..(fluentSG and fluentSG.Name or "nil"))
+warn("[AC] v3.8 carregado | Theme: "..Config.Theme.." | "..#RF:GetChildren().." remotes | fluentSG: "..(fluentSG and fluentSG.Name or "nil"))
