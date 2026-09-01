@@ -9,6 +9,7 @@ local Games = {
     [18923620224]    = BASE .. "AnimeWarriors3.lua",
     [75995379831247] = BASE .. "DigAndGrow.lua",
     [94717504417144] = BASE .. "AnimeCapture.lua",
+    [6442957604]     = BASE .. "CustomPCTycoon.lua",
 }
 
 local script = Games[game.PlaceId]
