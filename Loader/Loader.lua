@@ -1,23 +1,37 @@
 -- ============================================================
---  DANONIN HUB | Loader
+--  DANONIN HUB | Loader v2.0
 --  github.com/DanoninCat/DanoninScript
 -- ============================================================
 
 local BASE = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Games/"
 
+-- ============================================================
+-- [LISTA DE JOGOS SUPORTADOS]
+-- ============================================================
 local Games = {
+    -- Jogos existentes
     [18923620224]    = BASE .. "AnimeWarriors3.lua",
     [75995379831247] = BASE .. "DigAndGrow.lua",
     [94717504417144] = BASE .. "AnimeCapture.lua",
     [6442957604]     = BASE .. "CustomPCTycoon.lua",
+    [120851538706364] = BASE .. "MurderDuels.lua",
 }
 
-local script = Games[game.PlaceId]
+-- ============================================================
+-- [VERIFICAÇÃO DO JOGO]
+-- ============================================================
+local gameId = game.PlaceId
+local script = Games[gameId]
+
 if not script then
-    warn("[DanoninHub] Jogo nao suportado: " .. tostring(game.PlaceId))
+    warn("[DanoninHub] Jogo nao suportado: " .. tostring(gameId))
+    warn("[DanoninHub] PlaceId: " .. tostring(gameId))
     return
 end
 
+-- ============================================================
+-- [CARREGAMENTO DO SCRIPT]
+-- ============================================================
 local cacheBuster = "?t=" .. tostring(os.time()) .. tostring(math.random(1000, 9999))
 local finalURL = script .. cacheBuster
 
@@ -41,4 +55,10 @@ end)
 if not ok then
     warn("[DanoninHub] ERRO: " .. tostring(err))
     warn("[DanoninHub] URL: " .. finalURL)
+else
+    print("============================================================")
+    print("  DANONIN HUB | Carregado com sucesso!")
+    print("  Jogo: " .. tostring(gameId))
+    print("  Script: " .. script)
+    print("============================================================")
 end
