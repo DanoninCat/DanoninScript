@@ -1,6 +1,6 @@
 -- ============================================================
 -- CAT EMPIRE UI
--- Custom flat black/purple UI library for DanoninScript.
+-- Source-inspired dark/indigo UI library for DanoninScript.
 -- No images, no virtual ModuleScript environment.
 -- Drop-in replacement for Libs/Fluent.lua used by MurderDuel.lua.
 -- ============================================================
@@ -18,20 +18,20 @@ local Library = {
 }
 
 local C = {
-    Background = Color3.fromRGB(8, 8, 10),
+    Background = Color3.fromRGB(7, 7, 9),
     Sidebar = Color3.fromRGB(10, 10, 12),
-    Content = Color3.fromRGB(12, 12, 15),
-    Section = Color3.fromRGB(15, 15, 18),
-    Row = Color3.fromRGB(19, 19, 23),
-    RowHover = Color3.fromRGB(23, 21, 29),
-    Border = Color3.fromRGB(37, 34, 44),
-    BorderSoft = Color3.fromRGB(29, 27, 34),
-    Accent = Color3.fromRGB(151, 70, 255),
-    AccentDark = Color3.fromRGB(92, 36, 160),
-    AccentSoft = Color3.fromRGB(49, 29, 72),
-    Text = Color3.fromRGB(235, 235, 239),
-    Muted = Color3.fromRGB(134, 132, 143),
-    Muted2 = Color3.fromRGB(93, 91, 101),
+    Content = Color3.fromRGB(7, 7, 9),
+    Section = Color3.fromRGB(12, 12, 14),
+    Row = Color3.fromRGB(16, 15, 17),
+    RowHover = Color3.fromRGB(31, 33, 38),
+    Border = Color3.fromRGB(35, 36, 42),
+    BorderSoft = Color3.fromRGB(22, 23, 26),
+    Accent = Color3.fromRGB(121, 131, 207),
+    AccentDark = Color3.fromRGB(60, 70, 180),
+    AccentSoft = Color3.fromRGB(26, 29, 56),
+    Text = Color3.fromRGB(250, 250, 250),
+    Muted = Color3.fromRGB(136, 145, 176),
+    Muted2 = Color3.fromRGB(68, 71, 85),
 }
 
 local function create(className, props, parent)
@@ -217,6 +217,11 @@ end
 function Window:Destroy()
     if self.Destroyed then
         return
+    end
+
+    local env = (getgenv and getgenv()) or _G
+    if env and type(env.CAT_EMPIRE_CLEANUP) == "function" then
+        pcall(env.CAT_EMPIRE_CLEANUP)
     end
 
     self.Destroyed = true
