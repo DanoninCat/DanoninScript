@@ -5,9 +5,6 @@
 
 local BASE = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Games/"
 
--- ============================================================
--- [LISTA DE JOGOS SUPORTADOS]
--- ============================================================
 local Games = {
     -- Jogos existentes
     [18923620224]    = BASE .. "AnimeWarriors3.lua",
