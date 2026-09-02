@@ -19,19 +19,21 @@ local Library = {
 
 local C = {
     Background = Color3.fromRGB(7, 7, 9),
-    Sidebar = Color3.fromRGB(10, 10, 12),
+    Sidebar = Color3.fromRGB(7, 7, 9),
     Content = Color3.fromRGB(7, 7, 9),
     Section = Color3.fromRGB(12, 12, 14),
-    Row = Color3.fromRGB(16, 15, 17),
-    RowHover = Color3.fromRGB(31, 33, 38),
-    Border = Color3.fromRGB(35, 36, 42),
-    BorderSoft = Color3.fromRGB(22, 23, 26),
-    Accent = Color3.fromRGB(121, 131, 207),
+    SectionCap = Color3.fromRGB(15, 15, 17),
+    Row = Color3.fromRGB(12, 12, 14),
+    RowHover = Color3.fromRGB(18, 19, 23),
+    Border = Color3.fromRGB(22, 23, 26),
+    BorderSoft = Color3.fromRGB(18, 19, 22),
+    Accent = Color3.fromRGB(78, 91, 222),
     AccentDark = Color3.fromRGB(60, 70, 180),
-    AccentSoft = Color3.fromRGB(26, 29, 56),
+    AccentSoft = Color3.fromRGB(121, 131, 207),
     Text = Color3.fromRGB(250, 250, 250),
-    Muted = Color3.fromRGB(136, 145, 176),
+    Muted = Color3.fromRGB(92, 96, 112),
     Muted2 = Color3.fromRGB(68, 71, 85),
+    Knob = Color3.fromRGB(245, 245, 247),
 }
 
 local function create(className, props, parent)
@@ -205,8 +207,16 @@ function Window:_setMinimized(value)
     self.Sidebar.Visible = not self.Minimized
     self.Content.Visible = not self.Minimized
 
-    local targetHeight = self.Minimized and 32 or self.FullHeight
+    local targetHeight = self.Minimized and 28 or self.FullHeight
     self.Root.Size = UDim2.fromOffset(self.FullWidth, targetHeight)
+
+    if self.ShadowNear then
+        self.ShadowNear.Visible = not self.Minimized
+    end
+    if self.ShadowFar then
+        self.ShadowFar.Visible = not self.Minimized
+    end
+
     self.MinButton.Text = self.Minimized and "+" or "—"
 end
 
@@ -250,9 +260,10 @@ function Window:_selectTab(tab)
         local active = candidate == tab
 
         candidate.Page.Visible = active
-        candidate.Indicator.Visible = active
+        candidate.Indicator.Visible = false
         candidate.Button.BackgroundColor3 = active and C.AccentSoft or C.Sidebar
-        candidate.Button.TextColor3 = active and C.Text or C.Muted
+        candidate.Button.BackgroundTransparency = active and 0.82 or 1
+        candidate.Button.TextColor3 = active and C.Accent or C.Muted
         candidate.IconLabel.TextColor3 = active and C.Accent or C.Muted
     end
 
@@ -263,7 +274,8 @@ local ICONS = {
     crosshair = "◉",
     eye = "◌",
     ["flask-conical"] = "◇",
-    cloud = "○",
+    cloud = "◎",
+    vehicle = "◆",
     settings = "⚙",
 }
 
@@ -295,21 +307,21 @@ function Container:AddSection(titleValue)
 
     self._nextOrder += 1
 
-    corner(section, 5)
-    stroke(section, C.Border, 0.16, 1)
-    padding(section, 8, 8, 7, 8)
-    list(section, 5, false)
+    corner(section, 6)
+    stroke(section, C.Border, 0.05, 1)
+    padding(section, 12, 12, 10, 12)
+    list(section, 3, false)
 
     if titleValue and titleValue ~= "" then
         local titleLabel = text(
             section,
             titleValue,
-            10,
+            12,
             C.Muted,
             Enum.Font.GothamMedium
         )
 
-        titleLabel.Size = UDim2.new(1, 0, 0, 18)
+        titleLabel.Size = UDim2.new(1, 0, 0, 24)
         titleLabel.LayoutOrder = 0
     end
 
@@ -322,7 +334,7 @@ function Container:AddSection(titleValue)
         LayoutOrder = 1,
     }, section)
 
-    list(holder, 4, false)
+    list(holder, 2, false)
 
     self._currentSection = holder
     return section
@@ -333,12 +345,10 @@ local function makeRow(container, height)
 
     local row = create("Frame", {
         BackgroundColor3 = C.Row,
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
         Size = UDim2.new(1, 0, 0, height),
     }, holder)
-
-    corner(row, 4)
-    stroke(row, C.BorderSoft, 0.32, 1)
 
     return row
 end
@@ -346,36 +356,39 @@ end
 function Container:AddToggle(id, config)
     config = config or {}
 
-    local row = makeRow(self, 33)
+    local row = makeRow(self, 34)
 
     local titleLabel = text(
         row,
         config.Title or id,
-        10,
+        11,
         C.Text,
         Enum.Font.Gotham
     )
 
-    titleLabel.Position = UDim2.fromOffset(9, 0)
-    titleLabel.Size = UDim2.new(1, -58, 1, 0)
+    titleLabel.Position = UDim2.fromOffset(2, 0)
+    titleLabel.Size = UDim2.new(1, -40, 1, 0)
 
-    local switch = create("Frame", {
-        BackgroundColor3 = C.Border,
+    local box = create("Frame", {
+        BackgroundColor3 = Color3.fromRGB(5, 5, 7),
         BorderSizePixel = 0,
-        Size = UDim2.fromOffset(34, 18),
-        Position = UDim2.new(1, -43, 0.5, -9),
+        Size = UDim2.fromOffset(18, 18),
+        Position = UDim2.new(1, -22, 0.5, -9),
     }, row)
 
-    corner(switch, 9)
+    corner(box, 1)
+    stroke(box, C.Border, 0.05, 1)
 
-    local knob = create("Frame", {
-        BackgroundColor3 = C.Muted,
-        BorderSizePixel = 0,
-        Size = UDim2.fromOffset(12, 12),
-        Position = UDim2.fromOffset(3, 3),
-    }, switch)
-
-    corner(knob, 6)
+    local mark = text(
+        box,
+        "✓",
+        14,
+        C.Text,
+        Enum.Font.GothamBold,
+        Enum.TextXAlignment.Center
+    )
+    mark.Size = UDim2.fromScale(1, 1)
+    mark.Visible = false
 
     local hit = buttonBase(row)
     hit.Size = UDim2.fromScale(1, 1)
@@ -385,25 +398,8 @@ function Container:AddToggle(id, config)
 
     option._render = function(value)
         local enabled = value == true
-
-        tween(
-            switch,
-            {
-                BackgroundColor3 = enabled and C.AccentDark or C.Border,
-            },
-            0.1
-        )
-
-        tween(
-            knob,
-            {
-                BackgroundColor3 = enabled and C.Accent or C.Muted,
-                Position = enabled
-                    and UDim2.fromOffset(19, 3)
-                    or UDim2.fromOffset(3, 3),
-            },
-            0.1
-        )
+        box.BackgroundColor3 = enabled and C.Accent or Color3.fromRGB(5, 5, 7)
+        mark.Visible = enabled
     end
 
     option._render(option.Value)
@@ -413,11 +409,12 @@ function Container:AddToggle(id, config)
     end)
 
     self._window:_connect(hit.MouseEnter, function()
-        tween(row, {BackgroundColor3 = C.RowHover}, 0.08)
+        row.BackgroundTransparency = 0
+        row.BackgroundColor3 = C.RowHover
     end)
 
     self._window:_connect(hit.MouseLeave, function()
-        tween(row, {BackgroundColor3 = C.Row}, 0.08)
+        row.BackgroundTransparency = 1
     end)
 
     return option
@@ -431,7 +428,7 @@ function Container:AddSlider(id, config)
     local rounding = tonumber(config.Rounding) or 0
     local defaultValue = tonumber(config.Default) or minValue
 
-    local row = makeRow(self, 53)
+    local row = makeRow(self, 58)
 
     local titleLabel = text(
         row,
@@ -441,8 +438,8 @@ function Container:AddSlider(id, config)
         Enum.Font.Gotham
     )
 
-    titleLabel.Position = UDim2.fromOffset(9, 4)
-    titleLabel.Size = UDim2.new(1, -72, 0, 18)
+    titleLabel.Position = UDim2.fromOffset(2, 2)
+    titleLabel.Size = UDim2.new(1, -72, 0, 20)
 
     local valueLabel = text(
         row,
@@ -453,14 +450,14 @@ function Container:AddSlider(id, config)
         Enum.TextXAlignment.Right
     )
 
-    valueLabel.Position = UDim2.new(1, -67, 0, 4)
+    valueLabel.Position = UDim2.new(1, -67, 0, 2)
     valueLabel.Size = UDim2.fromOffset(58, 18)
 
     local track = create("Frame", {
-        BackgroundColor3 = Color3.fromRGB(34, 32, 39),
+        BackgroundColor3 = Color3.fromRGB(4, 4, 6),
         BorderSizePixel = 0,
-        Position = UDim2.new(0, 9, 1, -18),
-        Size = UDim2.new(1, -18, 0, 3),
+        Position = UDim2.new(0, 2, 1, -15),
+        Size = UDim2.new(1, -4, 0, 5),
     }, row)
 
     corner(track, 2)
@@ -474,11 +471,11 @@ function Container:AddSlider(id, config)
     corner(fill, 2)
 
     local knob = create("Frame", {
-        BackgroundColor3 = C.Accent,
+        BackgroundColor3 = C.Knob,
         BorderSizePixel = 0,
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.new(0, 0, 0.5, 0),
-        Size = UDim2.fromOffset(9, 9),
+        Size = UDim2.fromOffset(14, 14),
     }, track)
 
     corner(knob, 5)
@@ -802,9 +799,9 @@ function Tab:_ensureDefault()
         Size = UDim2.fromScale(1, 1),
         CanvasSize = UDim2.new(),
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ScrollBarThickness = 2,
+        ScrollBarThickness = 4,
         ScrollBarImageColor3 = C.Accent,
-        ScrollBarImageTransparency = 0.35,
+        ScrollBarImageTransparency = 0.08,
     }, self.Body)
 
     padding(scroll, 8, 8, 7, 8)
@@ -877,9 +874,9 @@ function Tab:AddGroup(config)
             ),
             CanvasSize = UDim2.new(),
             AutomaticCanvasSize = Enum.AutomaticSize.Y,
-            ScrollBarThickness = 2,
+            ScrollBarThickness = 4,
             ScrollBarImageColor3 = C.Accent,
-            ScrollBarImageTransparency = 0.45,
+            ScrollBarImageTransparency = 0.08,
         }, group)
 
         padding(scroll, 4, 4, 7, 8)
@@ -940,17 +937,18 @@ function Window:AddTab(config)
 
     local sidebarButton = create("TextButton", {
         BackgroundColor3 = C.Sidebar,
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Text = "     " .. titleValue,
+        Text = "      " .. titleValue,
         TextColor3 = C.Muted,
-        TextSize = 10,
-        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        Font = Enum.Font.GothamMedium,
         TextXAlignment = Enum.TextXAlignment.Left,
         AutoButtonColor = false,
-        Size = UDim2.new(1, -12, 0, 34),
+        Size = UDim2.new(1, -8, 0, 46),
     }, self.SidebarList)
 
-    corner(sidebarButton, 3)
+    corner(sidebarButton, 0)
 
     local indicator = create("Frame", {
         BackgroundColor3 = C.Accent,
@@ -965,14 +963,14 @@ function Window:AddTab(config)
     local iconLabel = text(
         sidebarButton,
         iconValue,
-        12,
+        16,
         C.Muted,
         Enum.Font.Gotham,
         Enum.TextXAlignment.Center
     )
 
-    iconLabel.Position = UDim2.fromOffset(8, 0)
-    iconLabel.Size = UDim2.fromOffset(18, 34)
+    iconLabel.Position = UDim2.fromOffset(10, 0)
+    iconLabel.Size = UDim2.fromOffset(22, 46)
 
     local page = create("Frame", {
         BackgroundTransparency = 1,
@@ -985,25 +983,40 @@ function Window:AddTab(config)
     local pageHeader = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 42),
+        Size = UDim2.new(1, 0, 0, 52),
     }, page)
 
-    local pageTitle = text(
-        pageHeader,
-        titleValue,
-        20,
-        C.Text,
-        Enum.Font.GothamMedium
-    )
+    create("Frame", {
+        BackgroundColor3 = C.Border,
+        BorderSizePixel = 0,
+        Position = UDim2.new(0, 0, 1, -1),
+        Size = UDim2.new(1, 0, 0, 1),
+    }, pageHeader)
 
-    pageTitle.Position = UDim2.fromOffset(8, 4)
-    pageTitle.Size = UDim2.new(1, -16, 0, 30)
+    local pagePill = create("Frame", {
+        BackgroundColor3 = C.AccentSoft,
+        BackgroundTransparency = 0.82,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(12, 9),
+        Size = UDim2.fromOffset(math.max(80, #titleValue * 8 + 28), 30),
+    }, pageHeader)
+    corner(pagePill, 5)
+
+    local pageTitle = text(
+        pagePill,
+        titleValue,
+        12,
+        C.Accent,
+        Enum.Font.GothamMedium,
+        Enum.TextXAlignment.Center
+    )
+    pageTitle.Size = UDim2.fromScale(1, 1)
 
     local body = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(0, 42),
-        Size = UDim2.new(1, 0, 1, -42),
+        Position = UDim2.fromOffset(0, 52),
+        Size = UDim2.new(1, 0, 1, -52),
     }, page)
 
     tab.Button = sidebarButton
@@ -1028,12 +1041,8 @@ function Window:AddTab(config)
                 tween(
                     sidebarButton,
                     {
-                        BackgroundColor3 =
-                            Color3.fromRGB(
-                                15,
-                                14,
-                                18
-                            ),
+                        BackgroundColor3 = C.SectionCap,
+                        BackgroundTransparency = 0.35,
                     },
                     0.08
                 )
@@ -1048,8 +1057,8 @@ function Window:AddTab(config)
                 tween(
                     sidebarButton,
                     {
-                        BackgroundColor3 =
-                            C.Sidebar,
+                        BackgroundColor3 = C.Sidebar,
+                        BackgroundTransparency = 1,
                     },
                     0.08
                 )
@@ -1103,8 +1112,8 @@ function Library:CreateWindow(config)
         )
         or 390
 
-    width = math.max(width, 560)
-    height = math.max(height, 350)
+    width = math.max(width, 680)
+    height = math.max(height, 470)
 
     local gui = create("ScreenGui", {
         Name = screenName,
@@ -1114,10 +1123,32 @@ function Library:CreateWindow(config)
         DisplayOrder = 1000,
     }, PlayerGui)
 
+    local shadowFar = create("Frame", {
+        Name = "ShadowFar",
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+        BackgroundTransparency = 0.58,
+        BorderSizePixel = 0,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 8, 0.5, 12),
+        Size = UDim2.fromOffset(width + 20, height + 24),
+    }, gui)
+    corner(shadowFar, 10)
+
+    local shadowNear = create("Frame", {
+        Name = "ShadowNear",
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+        BackgroundTransparency = 0.34,
+        BorderSizePixel = 0,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 3, 0.5, 5),
+        Size = UDim2.fromOffset(width + 8, height + 10),
+    }, gui)
+    corner(shadowNear, 8)
+
     local root = create("Frame", {
         Name = "Window",
         BackgroundColor3 = C.Background,
-        BackgroundTransparency = 0.02,
+        BackgroundTransparency = 0,
         BorderSizePixel = 0,
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
@@ -1125,20 +1156,15 @@ function Library:CreateWindow(config)
         ClipsDescendants = true,
     }, gui)
 
-    corner(root, 4)
+    corner(root, 7)
 
-    stroke(
-        root,
-        Color3.fromRGB(46, 39, 57),
-        0.06,
-        1
-    )
+    stroke(root, C.Border, 0, 1)
 
     local titlebar = create("Frame", {
         Name = "TitleBar",
         BackgroundColor3 = Color3.fromRGB(9, 9, 11),
         BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 32),
+        Size = UDim2.new(1, 0, 0, 28),
     }, root)
 
     local titleLabel = text(
@@ -1149,7 +1175,7 @@ function Library:CreateWindow(config)
         Enum.Font.GothamMedium
     )
 
-    titleLabel.Position = UDim2.fromOffset(12, 0)
+    titleLabel.Position = UDim2.fromOffset(14, 0)
     titleLabel.Size = UDim2.new(1, -94, 1, 0)
 
     local minButton = create("TextButton", {
@@ -1161,8 +1187,8 @@ function Library:CreateWindow(config)
         TextSize = 13,
         Font = Enum.Font.Gotham,
         AutoButtonColor = false,
-        Size = UDim2.fromOffset(32, 22),
-        Position = UDim2.new(1, -68, 0, 5),
+        Size = UDim2.fromOffset(30, 20),
+        Position = UDim2.new(1, -64, 0, 4),
     }, titlebar)
 
     local closeButton = create("TextButton", {
@@ -1174,16 +1200,16 @@ function Library:CreateWindow(config)
         TextSize = 14,
         Font = Enum.Font.Gotham,
         AutoButtonColor = false,
-        Size = UDim2.fromOffset(32, 22),
-        Position = UDim2.new(1, -36, 0, 5),
+        Size = UDim2.fromOffset(30, 20),
+        Position = UDim2.new(1, -32, 0, 4),
     }, titlebar)
 
     local sidebar = create("Frame", {
         Name = "Sidebar",
         BackgroundColor3 = C.Sidebar,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(0, 32),
-        Size = UDim2.new(0, 118, 1, -32),
+        Position = UDim2.fromOffset(0, 28),
+        Size = UDim2.new(0, 148, 1, -28),
     }, root)
 
     create("Frame", {
@@ -1196,30 +1222,32 @@ function Library:CreateWindow(config)
     local sidebarList = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(6, 9),
-        Size = UDim2.new(1, -6, 1, -18),
+        Position = UDim2.fromOffset(0, 22),
+        Size = UDim2.new(1, 0, 1, -32),
     }, sidebar)
 
-    list(sidebarList, 3, false)
+    list(sidebarList, 7, false)
 
     local content = create("Frame", {
         Name = "Content",
         BackgroundColor3 = C.Content,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(118, 32),
-        Size = UDim2.new(1, -118, 1, -32),
+        Position = UDim2.fromOffset(148, 28),
+        Size = UDim2.new(1, -148, 1, -28),
     }, root)
 
     local pages = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(8, 6),
-        Size = UDim2.new(1, -16, 1, -12),
+        Position = UDim2.fromOffset(10, 0),
+        Size = UDim2.new(1, -20, 1, -10),
     }, content)
 
     local window = setmetatable({
         Gui = gui,
         Root = root,
+        ShadowFar = shadowFar,
+        ShadowNear = shadowNear,
         Titlebar = titlebar,
         Sidebar = sidebar,
         SidebarList = sidebarList,
