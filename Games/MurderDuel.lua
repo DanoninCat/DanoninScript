@@ -20,7 +20,7 @@ local ThirdPerson = require(Shared:WaitForChild("ThirdPerson"))
 local RayCast = require(Util:WaitForChild("RayCast"))
 
 local Fluent = (function()
-    local source = readfile("CAT_EMPIRE_Fluent.lua")
+    local source = readfile("Fluent.lua")
     return loadstring(source)()
 end)()
 
