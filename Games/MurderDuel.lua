@@ -19,10 +19,10 @@ local FOVController = require(Shared:WaitForChild("FOVController"))
 local ThirdPerson = require(Shared:WaitForChild("ThirdPerson"))
 local RayCast = require(Util:WaitForChild("RayCast"))
 
-local Fluent = (function()
-    local source = readfile("Fluent.lua")
-    return loadstring(source)()
-end)()
+local Fluent = loadstring(game:HttpGet(
+    "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Libs/Fluent.lua",
+    true
+))()
 
 local State = {
     ESP = {
