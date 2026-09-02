@@ -211,7 +211,7 @@ local function GetESPGui()
     gui.Name = ESP_GUI_NAME
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 9996
+    gui.DisplayOrder = 100
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = GetPlayerGui()
     return gui
@@ -248,7 +248,9 @@ end
 local function NewLine(name, parent, thickness)
     local line = Instance.new("Frame")
     line.Name = name
-    line.AnchorPoint = Vector2.new(0, 0.5)
+    -- Center-anchor is important in Roblox. Rotation around a left-anchored
+    -- frame makes the visual endpoint drift away from the requested points.
+    line.AnchorPoint = Vector2.new(0.5, 0.5)
     line.BackgroundColor3 = ESP_ACCENT
     line.BackgroundTransparency = 0
     line.BorderSizePixel = 0
@@ -260,14 +262,23 @@ local function NewLine(name, parent, thickness)
 end
 
 local function SetLine(line, a, b, thickness, color)
+    if not line or not a or not b then
+        return
+    end
+
     local delta = b - a
     local length = delta.Magnitude
+
     if length < 0.5 then
         line.Visible = false
         return
     end
 
-    line.Position = UDim2.fromOffset(a.X, a.Y)
+    -- Position the frame at the exact midpoint of the two endpoints.
+    -- This keeps both ends glued to A and B after Rotation is applied.
+    local midpoint = (a + b) * 0.5
+
+    line.Position = UDim2.fromOffset(midpoint.X, midpoint.Y)
     line.Size = UDim2.fromOffset(length, thickness or 1)
     line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
     line.BackgroundColor3 = color or ESP_ACCENT
@@ -506,7 +517,7 @@ local function GetLocalScreenOrigin()
     -- fan out from the character and look detached/loose on third-person view.
     return Vector2.new(
         camera.ViewportSize.X * 0.5,
-        camera.ViewportSize.Y - 3
+        camera.ViewportSize.Y - 1
     )
 end
 
@@ -718,7 +729,7 @@ local function CreateFOVCircle()
     gui.Name = "FOVCircle"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 9998
+    gui.DisplayOrder = 110
     gui.Parent = GetPlayerGui()
 
     local circle = Instance.new("Frame")
@@ -915,7 +926,7 @@ local function CreateUI()
         Title = "CAT EMPIRE",
         SubTitle = "",
         TabWidth = 112,
-        Size = UDim2.fromOffset(720, 520),
+        Size = UDim2.fromOffset(980, 610),
         Acrylic = false,
         Animated = false,
         Theme = "CAT EMPIRE",
@@ -926,9 +937,21 @@ local function CreateUI()
     WindowRef = Window
 
     local Tabs = {
-        Combat = Window:AddTab({Title = "Aimbot", Icon = "crosshair"}),
-        Visuals = Window:AddTab({Title = "Visuals", Icon = "eye"}),
-        Exploits = Window:AddTab({Title = "Misc", Icon = "flask-conical"}),
+        Combat = Window:AddTab({
+            Title = "Aimbot",
+            Icon = "crosshair",
+            SubTabs = {"Aimbot", "Silent", "Trigger"},
+        }),
+        Visuals = Window:AddTab({
+            Title = "Visuals",
+            Icon = "eye",
+            SubTabs = {"Players", "Vehicles"},
+        }),
+        Exploits = Window:AddTab({
+            Title = "Misc",
+            Icon = "flask-conical",
+            SubTabs = {"Player", "Others", "Teleport"},
+        }),
         Cloud = Window:AddTab({Title = "Players", Icon = "cloud"}),
         Vehicles = Window:AddTab({Title = "Vehicles", Icon = "vehicle"}),
         Config = Window:AddTab({Title = "Settings", Icon = "settings"}),
