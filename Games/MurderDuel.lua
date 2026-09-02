@@ -6,6 +6,24 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 local Mouse = LocalPlayer:GetMouse()
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Extensions = ReplicatedStorage:WaitForChild("Extensions")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Util = ReplicatedStorage:WaitForChild("Util")
+
+local AimAssistController = require(Extensions:WaitForChild("AimAssistController"))
+local TargetSelector = require(Extensions:WaitForChild("TargetSelector"))
+local AimAdjuster = require(Extensions:WaitForChild("AimAdjuster"))
+local AimMagnetism = require(Extensions:WaitForChild("AimMagnetism"))
+local InputCategorizer = require(Extensions:WaitForChild("InputCategorizer"))
+local AimAssistEnum = require(Extensions:WaitForChild("AimAssistEnum"))
+local FOVController = require(Shared:WaitForChild("FOVController"))
+local KnifeFlight = require(Shared:WaitForChild("KnifeFlight"))
+local ThirdPerson = require(Shared:WaitForChild("ThirdPerson"))
+local CrosshairSettings = require(Shared:WaitForChild("CrosshairSettings"))
+local ShotPath = require(Util:WaitForChild("ShotPath"))
+local RayCast = require(Util:WaitForChild("RayCast"))
+
 local ESP_Objects = {}
 local aimbotEnabled = false
 local aimbotTarget = nil
@@ -15,14 +33,12 @@ local TeamCheckEnabled = true
 local ESPLines = {}
 local WindowRef = nil
 local UIClosed = false
-local CloseButton = nil
+local aimController = nil
 
 local function CloseUI()
     UIClosed = true
     if WindowRef then
-        pcall(function()
-            WindowRef:Destroy()
-        end)
+        pcall(function() WindowRef:Destroy() end)
         WindowRef = nil
     end
     for char, esp in pairs(ESP_Objects) do
@@ -46,6 +62,10 @@ local function CloseUI()
         local fovGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("FOVCircle")
         if fovGui then fovGui:Destroy() end
     end)
+    if aimController then
+        pcall(function() aimController:disable() end)
+        aimController = nil
+    end
 end
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -60,16 +80,12 @@ WindowRef = Fluent:CreateWindow({
     MinimizeKey = Enum.KeyCode.RightControl,
 })
 
-local function ToggleUI()
-    if WindowRef and WindowRef.Visible then
-        CloseUI()
-    end
-end
-
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.RightControl then
-        ToggleUI()
+        if WindowRef and WindowRef.Visible then
+            CloseUI()
+        end
     end
 end)
 
@@ -83,24 +99,29 @@ local Options = Fluent.Options
 
 local function getCharacters()
     local chars = {}
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            table.insert(chars, player.Character)
+    local Characters = workspace:FindFirstChild("Characters")
+    if Characters then
+        for _, child in pairs(Characters:GetChildren()) do
+            if child:IsA("Model") and child ~= LocalPlayer.Character then
+                table.insert(chars, child)
+            end
         end
     end
     return chars
 end
 
 local function isEnemy(char)
+    if not char then return false end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     if not humanoid then return false end
     if humanoid.Health <= 0 then return false end
+    if char == LocalPlayer.Character then return false end
     if TeamCheckEnabled then
         local myChar = LocalPlayer.Character
         if myChar then
-            local myTeam = myChar:GetAttribute("MatchSide") or myChar:GetAttribute("Team") or myChar:GetAttribute("Side")
-            local theirTeam = char:GetAttribute("MatchSide") or char:GetAttribute("Team") or char:GetAttribute("Side")
-            if myTeam and theirTeam and myTeam == theirTeam then
+            local mySide = myChar:GetAttribute("MatchSide")
+            local theirSide = char:GetAttribute("MatchSide")
+            if mySide and theirSide and mySide == theirSide then
                 return false
             end
         end
@@ -140,21 +161,6 @@ local function getClosestEnemyToCrosshair(maxDistance)
         end
     end
     return closest
-end
-
-local function aimAtPosition(position)
-    local cameraPos = Camera.CFrame.Position
-    local lookDir = (position - cameraPos).Unit
-    Camera.CFrame = CFrame.new(cameraPos, cameraPos + lookDir)
-end
-
-local function smoothAim(position, strength)
-    strength = strength or 0.5
-    local cameraPos = Camera.CFrame.Position
-    local targetDir = (position - cameraPos).Unit
-    local currentDir = Camera.CFrame.LookVector
-    local newDir = currentDir:Lerp(targetDir, strength)
-    Camera.CFrame = CFrame.new(cameraPos, cameraPos + newDir)
 end
 
 local function createESP(char)
@@ -209,9 +215,9 @@ local function updateESP()
         end
         local myChar = LocalPlayer.Character
         if myChar then
-            local myTeam = myChar:GetAttribute("MatchSide")
-            local theirTeam = char:GetAttribute("MatchSide")
-            if myTeam and theirTeam and myTeam ~= theirTeam then
+            local mySide = myChar:GetAttribute("MatchSide")
+            local theirSide = char:GetAttribute("MatchSide")
+            if mySide and theirSide and mySide ~= theirSide then
                 esp.highlight.FillColor = Color3.fromRGB(255, 0, 0)
                 esp.highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
                 esp.label.TextColor3 = Color3.fromRGB(255, 0, 0)
@@ -315,22 +321,47 @@ local function createFOVCircle(radius)
     fovCircle = gui
 end
 
+local function setupAimbot()
+    if aimController then
+        aimController:disable()
+        aimController = nil
+    end
+    
+    local Characters = workspace:FindFirstChild("Characters")
+    if not Characters then return end
+    
+    aimController = AimAssistController.new()
+    aimController:setCharacterFolder(Characters)
+    aimController:setRange(Options.AimFOV and Options.AimFOV.Value or 200)
+    aimController:setFieldOfView(Options.AimFOV and Options.AimFOV.Value or 200)
+    aimController:setSortingBehavior(AimAssistEnum.AimAssistSortingBehavior.Angle)
+    aimController:setIgnoreLineOfSight(false)
+    aimController:setType(AimAssistEnum.AimAssistType.Rotational)
+    aimController:setMethodStrength(AimAssistEnum.AimAssistMethod.Centering, 1)
+    aimController:setMethodStrength(AimAssistEnum.AimAssistMethod.Tracking, 0.5)
+    aimController:setMethodStrength(AimAssistEnum.AimAssistMethod.Friction, 0.3)
+    
+    if LocalPlayer.Character then
+        aimController:setSubject(LocalPlayer.Character)
+    end
+    
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        if aimController then
+            task.wait(0.5)
+            aimController:setSubject(char)
+        end
+    end)
+    
+    aimController:enable()
+end
+
 local function aimbotLoop()
     while not UIClosed do
         task.wait()
-        if aimbotEnabled and LocalPlayer.Character then
+        if aimbotEnabled and LocalPlayer.Character and aimController then
             local target = getClosestEnemyToCrosshair(fovRadius)
             if target then
                 aimbotTarget = target
-                local headPos = getHeadPosition(target)
-                if Options.SilentAim and Options.SilentAim.Value then
-                    pcall(function() aimAtPosition(headPos) end)
-                elseif Options.AimAssist and Options.AimAssist.Value then
-                    local strength = Options.AimStrength and Options.AimStrength.Value or 0.5
-                    pcall(function() smoothAim(headPos, strength) end)
-                else
-                    pcall(function() aimAtPosition(headPos) end)
-                end
             end
         end
     end
@@ -350,6 +381,28 @@ local function autoShootLoop()
                         tool:Deactivate()
                     end)
                 end
+            end
+        end
+    end
+end
+
+local function knifeFlightLoop()
+    while not UIClosed do
+        task.wait(0.1)
+        if Options.KnifePrediction and Options.KnifePrediction.Value then
+            local target = aimbotTarget
+            if target and LocalPlayer.Character then
+                local headPos = getHeadPosition(target)
+                local myPos = LocalPlayer.Character:GetPivot().Position
+                local dist = getDistance(myPos, headPos)
+                local params = KnifeFlight.PARAMS
+                local speed = params.THROW_SPEED
+                local gravity = params.GRAVITY_FACTOR
+                local time = dist / speed
+                local predictedPos = headPos + Vector3.new(0, -workspace.Gravity * gravity * time * time * 0.5, 0)
+                local direction = (predictedPos - myPos).Unit
+                local state = KnifeFlight.newState(myPos, direction * speed, 1, false)
+                print("Knife prediction active - Distance:", dist)
             end
         end
     end
@@ -436,6 +489,14 @@ Tabs.Aimbot:AddToggle("AimbotEnabled", {
 
 Options.AimbotEnabled:OnChanged(function(v)
     aimbotEnabled = v
+    if v and not UIClosed then
+        if not aimController then
+            setupAimbot()
+        end
+        task.spawn(aimbotLoop)
+    elseif aimController then
+        aimController:disable()
+    end
 end)
 
 Tabs.Aimbot:AddToggle("SilentAim", {
@@ -466,6 +527,10 @@ Tabs.Aimbot:AddSlider("AimFOV", {
 
 Options.AimFOV:OnChanged(function(v)
     fovRadius = v
+    if aimController then
+        aimController:setRange(v)
+        aimController:setFieldOfView(v)
+    end
 end)
 
 Tabs.FOV:AddSection("Círculo de FOV")
@@ -499,6 +564,10 @@ Options.FOVRadius:OnChanged(function(v)
     if Options.FOVCircleEnabled and Options.FOVCircleEnabled.Value and not UIClosed then
         createFOVCircle(fovRadius)
     end
+    if aimController then
+        aimController:setRange(v)
+        aimController:setFieldOfView(v)
+    end
 end)
 
 Tabs.FOV:AddSection("FOV da Câmera")
@@ -512,7 +581,7 @@ Tabs.FOV:AddSlider("GameFOV", {
 })
 
 Options.GameFOV:OnChanged(function(v)
-    Camera.FieldOfView = v
+    FOVController.SetBase(v)
 end)
 
 Tabs.Combat:AddSection("Combate Automático")
@@ -520,6 +589,39 @@ Tabs.Combat:AddSection("Combate Automático")
 Tabs.Combat:AddToggle("AutoShoot", {
     Title = "Auto Shoot",
     Default = false,
+})
+
+Options.AutoShoot:OnChanged(function(v)
+    if v then
+        task.spawn(autoShootLoop)
+    end
+end)
+
+Tabs.Combat:AddSection("Knife")
+
+Tabs.Combat:AddToggle("KnifePrediction", {
+    Title = "Knife Prediction",
+    Default = false,
+})
+
+Options.KnifePrediction:OnChanged(function(v)
+    if v then
+        task.spawn(knifeFlightLoop)
+    end
+end)
+
+Tabs.Combat:AddSection("Third Person")
+
+Tabs.Combat:AddButton({
+    Title = "Toggle Third Person",
+    Callback = function()
+        ThirdPerson.Toggle()
+        Fluent:Notify({
+            Title = "Third Person",
+            Content = "Toggled: " .. tostring(ThirdPerson.IsEnabled()),
+            Duration = 2,
+        })
+    end,
 })
 
 local function addCloseButton()
@@ -557,11 +659,8 @@ task.spawn(function()
     addCloseButton()
 end)
 
-task.spawn(aimbotLoop)
-task.spawn(autoShootLoop)
-
 Fluent:Notify({
     Title = "MurderDuels",
-    Content = "FPS Exploit carregado!",
+    Content = "FPS Exploit carregado! (Baseado no código do jogo)",
     Duration = 4,
 })
