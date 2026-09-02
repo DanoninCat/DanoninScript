@@ -1,6 +1,6 @@
 -- ============================================================
--- CAT EMPIRE | ESP FIXED EDITION
--- UI preta/roxa + ESPs independentes e corrigidas.
+-- CAT EMPIRE | FIVEM ESP ADAPTATION
+-- ESP 2D ancorado no personagem, inspirado na source PlayerESP.cpp.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -23,15 +23,21 @@ local Fluent = loadstring(game:HttpGet(
     true
 ))()
 
-local PURPLE = Color3.fromRGB(164, 82, 255)
+local PURPLE = Color3.fromRGB(121, 131, 207)
 
 local State = {
     ESP = {
         Enabled = false,
-        Highlight = true,
+        Box = true,
+        Skeleton = false,
+        Name = true,
+        HealthBar = true,
+        ArmorBar = false,
+        WeaponName = false,
         Distance = true,
-        Tracers = false,
+        Lines = false,
         TeamCheck = true,
+        RenderingDistance = 500,
     },
 
     Aim = {
@@ -54,7 +60,6 @@ local State = {
 }
 
 local ESPObjects = {}
-local TracerObjects = {}
 local Connections = {}
 
 local WindowRef = nil
@@ -187,25 +192,242 @@ local function GetDistance(a, b)
 end
 
 -- ============================================================
--- ESP: HIGHLIGHT + DISTANCE
+-- PLAYER ESP (adaptado da lógica do PlayerESP.cpp)
 -- ============================================================
 
-local function DestroyHighlight(data)
-    if data and data.Highlight then
-        pcall(function()
-            data.Highlight:Destroy()
-        end)
-        data.Highlight = nil
+local ESP_GUI_NAME = "CAT_EMPIRE_PlayerESP"
+local ESP_BLACK = Color3.fromRGB(0, 0, 0)
+local ESP_WHITE = Color3.fromRGB(235, 235, 240)
+local ESP_ACCENT = Color3.fromRGB(121, 131, 207)
+local ESP_ARMOR = Color3.fromRGB(25, 120, 245)
+
+local function GetESPGui()
+    local gui = GetPlayerGui():FindFirstChild(ESP_GUI_NAME)
+    if gui then
+        return gui
     end
+
+    gui = Instance.new("ScreenGui")
+    gui.Name = ESP_GUI_NAME
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 9996
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Parent = GetPlayerGui()
+    return gui
 end
 
-local function DestroyDistance(data)
-    if data and data.Distance then
-        pcall(function()
-            data.Distance:Destroy()
-        end)
-        data.Distance = nil
-        data.Label = nil
+local function NewESPFrame(name, parent)
+    local frame = Instance.new("Frame")
+    frame.Name = name
+    frame.BackgroundTransparency = 1
+    frame.BorderSizePixel = 0
+    frame.Visible = false
+    frame.Parent = parent
+    return frame
+end
+
+local function NewESPLabel(name, parent)
+    local label = Instance.new("TextLabel")
+    label.Name = name
+    label.BackgroundTransparency = 1
+    label.BorderSizePixel = 0
+    label.Font = Enum.Font.GothamMedium
+    label.TextSize = 12
+    label.TextColor3 = ESP_WHITE
+    label.TextStrokeColor3 = ESP_BLACK
+    label.TextStrokeTransparency = 0.15
+    label.TextXAlignment = Enum.TextXAlignment.Center
+    label.TextYAlignment = Enum.TextYAlignment.Center
+    label.Visible = false
+    label.ZIndex = 20
+    label.Parent = parent
+    return label
+end
+
+local function NewLine(name, parent, thickness)
+    local line = Instance.new("Frame")
+    line.Name = name
+    line.AnchorPoint = Vector2.new(0, 0.5)
+    line.BackgroundColor3 = ESP_ACCENT
+    line.BackgroundTransparency = 0
+    line.BorderSizePixel = 0
+    line.Size = UDim2.fromOffset(0, thickness or 1)
+    line.Visible = false
+    line.ZIndex = 12
+    line.Parent = parent
+    return line
+end
+
+local function SetLine(line, a, b, thickness, color)
+    local delta = b - a
+    local length = delta.Magnitude
+    if length < 0.5 then
+        line.Visible = false
+        return
+    end
+
+    line.Position = UDim2.fromOffset(a.X, a.Y)
+    line.Size = UDim2.fromOffset(length, thickness or 1)
+    line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+    line.BackgroundColor3 = color or ESP_ACCENT
+    line.Visible = true
+end
+
+local function FindPart(char, names)
+    for _, name in ipairs(names) do
+        local part = char:FindFirstChild(name)
+        if part and part:IsA("BasePart") then
+            return part
+        end
+    end
+    return nil
+end
+
+local function GetFootBottom(part)
+    if not part then return nil end
+    return part.Position - Vector3.new(0, part.Size.Y * 0.5, 0)
+end
+
+local function GetESPBounds(char)
+    local head = FindPart(char, {"Head"}) or GetTargetPart(char)
+    local root = GetTargetPart(char)
+    if not head or not root then
+        return nil
+    end
+
+    -- O FiveM calcula a caixa a partir da cabeça e dos pés.
+    -- Aqui usamos os equivalentes R15/R6 do Roblox.
+    local leftFoot = FindPart(char, {"LeftFoot", "LeftLowerLeg", "Left Leg"})
+    local rightFoot = FindPart(char, {"RightFoot", "RightLowerLeg", "Right Leg"})
+
+    local headTopWorld = head.Position + Vector3.new(0, math.max(head.Size.Y * 0.55, 0.35), 0)
+    local headScreen, headVisible = ProjectToScreen(headTopWorld)
+    local centerScreen, centerVisible = ProjectToScreen(root.Position)
+
+    if not headScreen or not centerScreen or not headVisible or not centerVisible then
+        return nil
+    end
+
+    local leftWorld = GetFootBottom(leftFoot)
+    local rightWorld = GetFootBottom(rightFoot)
+
+    if not leftWorld then
+        leftWorld = root.Position - Vector3.new(0, 3, 0)
+    end
+    if not rightWorld then
+        rightWorld = root.Position - Vector3.new(0, 3, 0)
+    end
+
+    local leftScreen, leftVisible = ProjectToScreen(leftWorld)
+    local rightScreen, rightVisible = ProjectToScreen(rightWorld)
+    if not leftScreen or not rightScreen or not leftVisible or not rightVisible then
+        return nil
+    end
+
+    local rawHeight = math.max(leftScreen.Y, rightScreen.Y) - headScreen.Y
+    if rawHeight <= 4 then
+        return nil
+    end
+
+    -- Mesma proporção da source FiveM: Width = Height / 1.8;
+    -- depois Height *= 1.2 para dar folga ao corpo.
+    local width = rawHeight / 1.8
+    local centerY = headScreen.Y + rawHeight / 2
+    local height = rawHeight * 1.2
+    local centerX = centerScreen.X
+
+    return {
+        X = centerX - width / 2,
+        Y = centerY - height / 2,
+        Width = width,
+        Height = height,
+        Center = Vector2.new(centerX, centerY),
+        BottomCenter = Vector2.new(centerX, centerY + height / 2),
+    }
+end
+
+local R15_BONES = {
+    {{"HumanoidRootPart", "LowerTorso"}, {"UpperTorso", "Torso"}},
+    {{"UpperTorso", "Torso"}, {"Head"}},
+    {{"UpperTorso", "Torso"}, {"LeftUpperArm", "Left Arm"}},
+    {{"LeftUpperArm", "Left Arm"}, {"LeftLowerArm", "Left Arm"}},
+    {{"LeftLowerArm", "Left Arm"}, {"LeftHand", "Left Arm"}},
+    {{"UpperTorso", "Torso"}, {"RightUpperArm", "Right Arm"}},
+    {{"RightUpperArm", "Right Arm"}, {"RightLowerArm", "Right Arm"}},
+    {{"RightLowerArm", "Right Arm"}, {"RightHand", "Right Arm"}},
+    {{"HumanoidRootPart", "LowerTorso", "Torso"}, {"LeftUpperLeg", "Left Leg"}},
+    {{"LeftUpperLeg", "Left Leg"}, {"LeftLowerLeg", "Left Leg"}},
+    {{"LeftLowerLeg", "Left Leg"}, {"LeftFoot", "Left Leg"}},
+    {{"HumanoidRootPart", "LowerTorso", "Torso"}, {"RightUpperLeg", "Right Leg"}},
+    {{"RightUpperLeg", "Right Leg"}, {"RightLowerLeg", "Right Leg"}},
+    {{"RightLowerLeg", "Right Leg"}, {"RightFoot", "Right Leg"}},
+}
+
+local function CreateESPData(char)
+    local gui = GetESPGui()
+    local data = {
+        Skeleton = {},
+    }
+
+    data.BoxOutline = NewESPFrame("BoxOutline_" .. char.Name, gui)
+    data.BoxOutline.BorderSizePixel = 3
+    data.BoxOutline.BorderColor3 = ESP_BLACK
+    data.BoxOutline.ZIndex = 8
+
+    data.Box = NewESPFrame("Box_" .. char.Name, gui)
+    data.Box.BorderSizePixel = 1
+    data.Box.BorderColor3 = ESP_ACCENT
+    data.Box.ZIndex = 9
+
+    data.HealthBack = NewESPFrame("HealthBack_" .. char.Name, gui)
+    data.HealthBack.BackgroundTransparency = 0
+    data.HealthBack.BackgroundColor3 = ESP_BLACK
+    data.HealthBack.ZIndex = 9
+
+    data.Health = NewESPFrame("Health_" .. char.Name, gui)
+    data.Health.BackgroundTransparency = 0
+    data.Health.BackgroundColor3 = Color3.fromRGB(0, 255, 12)
+    data.Health.ZIndex = 10
+
+    data.ArmorBack = NewESPFrame("ArmorBack_" .. char.Name, gui)
+    data.ArmorBack.BackgroundTransparency = 0
+    data.ArmorBack.BackgroundColor3 = ESP_BLACK
+    data.ArmorBack.ZIndex = 9
+
+    data.Armor = NewESPFrame("Armor_" .. char.Name, gui)
+    data.Armor.BackgroundTransparency = 0
+    data.Armor.BackgroundColor3 = ESP_ARMOR
+    data.Armor.ZIndex = 10
+
+    data.Name = NewESPLabel("Name_" .. char.Name, gui)
+    data.Weapon = NewESPLabel("Weapon_" .. char.Name, gui)
+    data.Distance = NewESPLabel("Distance_" .. char.Name, gui)
+    data.Line = NewLine("Line_" .. char.Name, gui, 1)
+
+    for index = 1, #R15_BONES do
+        data.Skeleton[index] = NewLine("Skeleton_" .. char.Name .. "_" .. index, gui, 1)
+    end
+
+    ESPObjects[char] = data
+    return data
+end
+
+local function HideESPData(data)
+    if not data then return end
+
+    for _, key in ipairs({
+        "BoxOutline", "Box", "HealthBack", "Health",
+        "ArmorBack", "Armor", "Name", "Weapon", "Distance", "Line"
+    }) do
+        local object = data[key]
+        if object then
+            object.Visible = false
+        end
+    end
+
+    for _, line in ipairs(data.Skeleton or {}) do
+        line.Visible = false
     end
 end
 
@@ -213,266 +435,250 @@ local function RemoveESP(char)
     local data = ESPObjects[char]
     if not data then return end
 
-    DestroyHighlight(data)
-    DestroyDistance(data)
+    for _, key in ipairs({
+        "BoxOutline", "Box", "HealthBack", "Health",
+        "ArmorBack", "Armor", "Name", "Weapon", "Distance", "Line"
+    }) do
+        local object = data[key]
+        if object then
+            pcall(function() object:Destroy() end)
+        end
+    end
+
+    for _, line in ipairs(data.Skeleton or {}) do
+        pcall(function() line:Destroy() end)
+    end
+
     ESPObjects[char] = nil
 end
 
-local function EnsureESPData(char)
-    local data = ESPObjects[char]
-    if not data then
-        data = {}
-        ESPObjects[char] = data
-    end
-    return data
-end
-
-local function EnsureHighlight(char, data)
-    if not State.ESP.Highlight then
-        DestroyHighlight(data)
-        return
-    end
-
-    if data.Highlight and data.Highlight.Parent then
-        data.Highlight.Enabled = true
-        return
-    end
-
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "CAT_EMPIRE_Highlight"
-    highlight.Adornee = char
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.FillColor = PURPLE
-    highlight.FillTransparency = 0.72
-    highlight.OutlineColor = PURPLE
-    highlight.OutlineTransparency = 0.05
-    highlight.Enabled = true
-    highlight.Parent = char
-
-    data.Highlight = highlight
-end
-
-local function EnsureDistance(char, data)
-    if not State.ESP.Distance then
-        DestroyDistance(data)
-        return
-    end
-
-    local adornee = char:FindFirstChild("Head") or GetTargetPart(char)
-    if not adornee then
-        DestroyDistance(data)
-        return
-    end
-
-    if data.Distance and data.Distance.Parent then
-        data.Distance.Adornee = adornee
-        return
-    end
-
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "CAT_EMPIRE_Distance"
-    billboard.Adornee = adornee
-    billboard.Size = UDim2.fromOffset(110, 24)
-    billboard.StudsOffset = Vector3.new(0, 2.5, 0)
-    billboard.AlwaysOnTop = true
-    billboard.LightInfluence = 0
-    billboard.MaxDistance = 10000
-    billboard.Parent = GetPlayerGui()
-
-    local label = Instance.new("TextLabel")
-    label.Name = "Distance"
-    label.Size = UDim2.fromScale(1, 1)
-    label.BackgroundTransparency = 1
-    label.BorderSizePixel = 0
-    label.Text = ""
-    label.TextColor3 = PURPLE
-    label.TextStrokeColor3 = Color3.new(0, 0, 0)
-    label.TextStrokeTransparency = 0.25
-    label.TextSize = 12
-    label.Font = Enum.Font.GothamBold
-    label.TextXAlignment = Enum.TextXAlignment.Center
-    label.Parent = billboard
-
-    data.Distance = billboard
-    data.Label = label
-end
-
-local function UpdateESP()
-    local myChar = LocalPlayer.Character
-
-    if not State.ESP.Enabled or not myChar then
-        for char in pairs(ESPObjects) do
-            RemoveESP(char)
-        end
-        return
-    end
-
-    local myRoot = GetTargetPart(myChar)
-    if not myRoot then
-        return
-    end
-
-    local current = {}
-
-    for _, char in ipairs(GetCharacters()) do
-        current[char] = true
-
-        if IsEnemy(char) then
-            local data = EnsureESPData(char)
-
-            EnsureHighlight(char, data)
-            EnsureDistance(char, data)
-
-            if data.Label then
-                local targetPart = GetTargetPart(char)
-                if targetPart then
-                    local distance = GetDistance(myRoot.Position, targetPart.Position)
-                    data.Label.Text = string.format("%.0f", distance)
-                else
-                    data.Label.Text = ""
-                end
-            end
-
-            -- Se os dois tipos estiverem desligados, não mantém uma entrada vazia.
-            if not data.Highlight and not data.Distance then
-                ESPObjects[char] = nil
-            end
-        else
-            RemoveESP(char)
-        end
-    end
-
+local function ClearESP()
     for char in pairs(ESPObjects) do
-        if not current[char] then
-            RemoveESP(char)
+        RemoveESP(char)
+    end
+end
+
+local function GetArmorValue(char)
+    local value = char:GetAttribute("Armor")
+    if value == nil then
+        local humanoid = GetHumanoid(char)
+        if humanoid then
+            value = humanoid:GetAttribute("Armor")
         end
     end
+    return math.clamp(tonumber(value) or 0, 0, 100)
 end
 
--- ============================================================
--- TRACERS
--- ============================================================
-
-local function GetTracerGui()
-    local playerGui = GetPlayerGui()
-    local gui = playerGui:FindFirstChild("CAT_EMPIRE_Tracers")
-
-    if gui then
-        return gui
-    end
-
-    gui = Instance.new("ScreenGui")
-    gui.Name = "CAT_EMPIRE_Tracers"
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 9997
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.Parent = playerGui
-
-    return gui
-end
-
-local function CreateTracer(char)
-    if TracerObjects[char] then
-        return TracerObjects[char]
-    end
-
-    local line = Instance.new("Frame")
-    line.Name = "Tracer_" .. char.Name
-    line.AnchorPoint = Vector2.new(0, 0.5)
-    line.BackgroundColor3 = PURPLE
-    line.BackgroundTransparency = 0.28
-    line.BorderSizePixel = 0
-    line.Size = UDim2.fromOffset(0, 1)
-    line.Visible = false
-    line.ZIndex = 10
-    line.Parent = GetTracerGui()
-
-    TracerObjects[char] = line
-    return line
-end
-
-local function RemoveTracer(char)
-    local line = TracerObjects[char]
-    if not line then return end
-
-    pcall(function()
-        line:Destroy()
-    end)
-    TracerObjects[char] = nil
-end
-
-local function ClearTracers()
-    for char in pairs(TracerObjects) do
-        RemoveTracer(char)
-    end
-end
-
-local function GetTracerOrigin(viewportSize)
-    if State.Visual.TracerOrigin == "Center" then
-        return Vector2.new(viewportSize.X * 0.5, viewportSize.Y * 0.5)
-    end
-
-    if State.Visual.TracerOrigin == "Bottom" then
-        return Vector2.new(viewportSize.X * 0.5, viewportSize.Y - 2)
-    end
-
-    -- BottomCenter
-    return Vector2.new(viewportSize.X * 0.5, viewportSize.Y * 0.90)
-end
-
-local function UpdateTracers()
-    if not State.ESP.Enabled or not State.ESP.Tracers then
-        ClearTracers()
-        return
-    end
-
+local function GetLocalScreenOrigin()
     local camera = GetCamera()
     if not camera then
-        ClearTracers()
+        return Vector2.new(0, 0)
+    end
+
+    local myPart = GetTargetPart(LocalPlayer.Character)
+    if myPart then
+        local screen, visible = ProjectToScreen(myPart.Position)
+        if screen and visible then
+            return Vector2.new(screen.X, screen.Y)
+        end
+    end
+
+    return Vector2.new(camera.ViewportSize.X * 0.5, camera.ViewportSize.Y - 4)
+end
+
+local function UpdateSkeleton(char, data)
+    if not State.ESP.Skeleton then
+        for _, line in ipairs(data.Skeleton) do
+            line.Visible = false
+        end
         return
     end
 
-    local origin = GetTracerOrigin(camera.ViewportSize)
-    local current = {}
+    for index, pair in ipairs(R15_BONES) do
+        local a = FindPart(char, pair[1])
+        local b = FindPart(char, pair[2])
+        local line = data.Skeleton[index]
 
-    for _, char in ipairs(GetCharacters()) do
-        current[char] = true
+        if a and b then
+            local aScreen, aVisible = ProjectToScreen(a.Position)
+            local bScreen, bVisible = ProjectToScreen(b.Position)
 
-        if IsEnemy(char) then
-            local targetPart = GetTargetPart(char)
-            local line = CreateTracer(char)
-
-            if targetPart then
-                local screenPos, onScreen = ProjectToScreen(targetPart.Position)
-
-                if onScreen and screenPos then
-                    local target = Vector2.new(screenPos.X, screenPos.Y)
-                    local delta = target - origin
-                    local length = delta.Magnitude
-
-                    if length > 0.5 then
-                        line.Position = UDim2.fromOffset(origin.X, origin.Y)
-                        line.Size = UDim2.fromOffset(length, 1)
-                        line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
-                        line.Visible = true
-                    else
-                        line.Visible = false
-                    end
-                else
-                    line.Visible = false
-                end
+            if aScreen and bScreen and aVisible and bVisible then
+                SetLine(
+                    line,
+                    Vector2.new(aScreen.X, aScreen.Y),
+                    Vector2.new(bScreen.X, bScreen.Y),
+                    1,
+                    ESP_ACCENT
+                )
             else
                 line.Visible = false
             end
         else
-            RemoveTracer(char)
+            line.Visible = false
         end
     end
+end
 
-    for char in pairs(TracerObjects) do
-        if not current[char] then
-            RemoveTracer(char)
+local function UpdatePlayerESP(char, data, myRoot)
+    if not State.ESP.Enabled or not IsEnemy(char) then
+        HideESPData(data)
+        return
+    end
+
+    local targetRoot = GetTargetPart(char)
+    local humanoid = GetHumanoid(char)
+    if not targetRoot or not humanoid then
+        HideESPData(data)
+        return
+    end
+
+    local distance = GetDistance(myRoot.Position, targetRoot.Position)
+    if distance > State.ESP.RenderingDistance then
+        HideESPData(data)
+        return
+    end
+
+    local bounds = GetESPBounds(char)
+    if not bounds then
+        HideESPData(data)
+        return
+    end
+
+    local x = bounds.X
+    local y = bounds.Y
+    local width = bounds.Width
+    local height = bounds.Height
+
+    if State.ESP.Box then
+        data.BoxOutline.Position = UDim2.fromOffset(x - 1, y - 1)
+        data.BoxOutline.Size = UDim2.fromOffset(width + 2, height + 2)
+        data.BoxOutline.Visible = true
+
+        data.Box.Position = UDim2.fromOffset(x, y)
+        data.Box.Size = UDim2.fromOffset(width, height)
+        data.Box.Visible = true
+    else
+        data.BoxOutline.Visible = false
+        data.Box.Visible = false
+    end
+
+    local bottomPadding = State.ESP.Box and 3 or 0
+
+    if State.ESP.HealthBar then
+        local maxHealth = math.max(humanoid.MaxHealth, 1)
+        local ratio = math.clamp(humanoid.Health / maxHealth, 0, 1)
+        local healthColor
+
+        if humanoid.Health <= 0 then
+            healthColor = Color3.fromRGB(255, 0, 0)
+        elseif humanoid.Health <= maxHealth / 2 then
+            healthColor = Color3.fromRGB(255, 255, 0)
+        else
+            healthColor = Color3.fromRGB(0, 255, 12)
+        end
+
+        data.HealthBack.Position = UDim2.fromOffset(x - 8, y - 1)
+        data.HealthBack.Size = UDim2.fromOffset(4, height + 2)
+        data.HealthBack.Visible = true
+
+        data.Health.Position = UDim2.fromOffset(x - 7, y + height * (1 - ratio))
+        data.Health.Size = UDim2.fromOffset(2, height * ratio)
+        data.Health.BackgroundColor3 = healthColor
+        data.Health.Visible = true
+    else
+        data.HealthBack.Visible = false
+        data.Health.Visible = false
+    end
+
+    if State.ESP.ArmorBar then
+        local armor = GetArmorValue(char)
+        if armor > 0 then
+            data.ArmorBack.Position = UDim2.fromOffset(x - 1, y + height + bottomPadding)
+            data.ArmorBack.Size = UDim2.fromOffset(width + 2, 4)
+            data.ArmorBack.Visible = true
+
+            data.Armor.Position = UDim2.fromOffset(x, y + height + bottomPadding + 1)
+            data.Armor.Size = UDim2.fromOffset(width * (armor / 100), 2)
+            data.Armor.Visible = true
+            bottomPadding += 5
+        else
+            data.ArmorBack.Visible = false
+            data.Armor.Visible = false
+        end
+    else
+        data.ArmorBack.Visible = false
+        data.Armor.Visible = false
+    end
+
+    local labelY = y + height + bottomPadding
+
+    if State.ESP.Name then
+        data.Name.Text = char.Name
+        data.Name.Position = UDim2.fromOffset(x - 35, labelY)
+        data.Name.Size = UDim2.fromOffset(width + 70, 14)
+        data.Name.Visible = true
+        labelY += 14
+    else
+        data.Name.Visible = false
+    end
+
+    if State.ESP.WeaponName then
+        local tool = char:FindFirstChildOfClass("Tool")
+        data.Weapon.Text = tool and tool.Name or "Unarmed"
+        data.Weapon.Position = UDim2.fromOffset(x - 35, labelY)
+        data.Weapon.Size = UDim2.fromOffset(width + 70, 14)
+        data.Weapon.Visible = true
+        labelY += 14
+    else
+        data.Weapon.Visible = false
+    end
+
+    if State.ESP.Distance then
+        data.Distance.Text = string.format("%d studs", math.floor(distance + 0.5))
+        data.Distance.Position = UDim2.fromOffset(x - 35, labelY)
+        data.Distance.Size = UDim2.fromOffset(width + 70, 14)
+        data.Distance.Visible = true
+    else
+        data.Distance.Visible = false
+    end
+
+    if State.ESP.Lines then
+        SetLine(data.Line, GetLocalScreenOrigin(), bounds.Center, 1, ESP_ACCENT)
+    else
+        data.Line.Visible = false
+    end
+
+    UpdateSkeleton(char, data)
+end
+
+local function UpdateESP()
+    if not State.ESP.Enabled then
+        for _, data in pairs(ESPObjects) do
+            HideESPData(data)
+        end
+        return
+    end
+
+    local myRoot = GetTargetPart(LocalPlayer.Character)
+    if not myRoot then
+        for _, data in pairs(ESPObjects) do
+            HideESPData(data)
+        end
+        return
+    end
+
+    local current = {}
+
+    for _, char in ipairs(GetCharacters()) do
+        current[char] = true
+        local data = ESPObjects[char] or CreateESPData(char)
+        UpdatePlayerESP(char, data, myRoot)
+    end
+
+    for char in pairs(ESPObjects) do
+        if not current[char] or not char.Parent then
+            RemoveESP(char)
         end
     end
 end
@@ -660,12 +866,8 @@ local function Cleanup(skipWindow)
     UIClosed = true
     DisconnectAll()
 
-    for char in pairs(ESPObjects) do
-        RemoveESP(char)
-    end
-
-    ClearTracers()
-    DestroyNamedGui("CAT_EMPIRE_Tracers")
+    ClearESP()
+    DestroyNamedGui(ESP_GUI_NAME)
     DestroyNamedGui("FOVCircle")
 
     TargetData.Current = nil
@@ -689,7 +891,7 @@ local function CreateUI()
         Title = "CAT EMPIRE",
         SubTitle = "",
         TabWidth = 112,
-        Size = UDim2.fromOffset(590, 390),
+        Size = UDim2.fromOffset(660, 430),
         Acrylic = false,
         Animated = false,
         Theme = "CAT EMPIRE",
@@ -824,133 +1026,207 @@ local function CreateUI()
         end
     end)
 
-    -- VISUALS
-    local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 8})
+    -- VISUALS - layout inspirado na source FiveM: Players ESP + Preview.
+    local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
     local visualLeft = visualGrid:AddElement()
     local visualRight = visualGrid:AddElement()
 
-    visualLeft:AddSection("ESP")
+    visualLeft:AddSection("Players ESP")
 
     visualLeft:AddToggle("ESPEnabled", {
-        Title = "ESP Enabled",
+        Title = "Toggle",
         Default = false,
     })
-
     Fluent.Options.ESPEnabled:OnChanged(function(value)
         State.ESP.Enabled = value
-
         if not value then
-            for char in pairs(ESPObjects) do
-                RemoveESP(char)
-            end
-            ClearTracers()
+            for _, data in pairs(ESPObjects) do HideESPData(data) end
         else
             UpdateESP()
         end
     end)
 
-    visualLeft:AddToggle("ESPHighlight", {
-        Title = "Highlight",
-        Default = true,
+    visualLeft:AddSlider("ESPRenderDistance", {
+        Title = "Rendering Distance",
+        Min = 25,
+        Max = 1000,
+        Default = 500,
+        Rounding = 0,
     })
-
-    Fluent.Options.ESPHighlight:OnChanged(function(value)
-        State.ESP.Highlight = value
-        UpdateESP()
+    Fluent.Options.ESPRenderDistance:OnChanged(function(value)
+        State.ESP.RenderingDistance = value
     end)
 
-    visualLeft:AddToggle("ESPDistance", {
-        Title = "Distance",
-        Default = true,
-    })
+    visualLeft:AddToggle("ESPBox", {Title = "Box", Default = true})
+    Fluent.Options.ESPBox:OnChanged(function(value) State.ESP.Box = value end)
 
-    Fluent.Options.ESPDistance:OnChanged(function(value)
-        State.ESP.Distance = value
-        UpdateESP()
-    end)
+    visualLeft:AddToggle("ESPSkeleton", {Title = "Skeleton", Default = false})
+    Fluent.Options.ESPSkeleton:OnChanged(function(value) State.ESP.Skeleton = value end)
 
-    visualLeft:AddToggle("TeamCheck", {
-        Title = "Team Check",
-        Default = true,
-    })
+    visualLeft:AddToggle("ESPHealth", {Title = "Health Bar", Default = true})
+    Fluent.Options.ESPHealth:OnChanged(function(value) State.ESP.HealthBar = value end)
 
+    visualLeft:AddToggle("ESPArmor", {Title = "Armor Bar", Default = false})
+    Fluent.Options.ESPArmor:OnChanged(function(value) State.ESP.ArmorBar = value end)
+
+    visualLeft:AddToggle("ESPName", {Title = "Name", Default = true})
+    Fluent.Options.ESPName:OnChanged(function(value) State.ESP.Name = value end)
+
+    visualLeft:AddToggle("ESPWeapon", {Title = "Weapon Name", Default = false})
+    Fluent.Options.ESPWeapon:OnChanged(function(value) State.ESP.WeaponName = value end)
+
+    visualLeft:AddToggle("ESPDistance", {Title = "Distance", Default = true})
+    Fluent.Options.ESPDistance:OnChanged(function(value) State.ESP.Distance = value end)
+
+    visualLeft:AddToggle("ESPLines", {Title = "Lines", Default = false})
+    Fluent.Options.ESPLines:OnChanged(function(value) State.ESP.Lines = value end)
+
+    visualLeft:AddToggle("TeamCheck", {Title = "Team Check", Default = true})
     Fluent.Options.TeamCheck:OnChanged(function(value)
         State.ESP.TeamCheck = value
-
         if Fluent.Options.CombatTeamCheck
             and Fluent.Options.CombatTeamCheck.Value ~= value
         then
             Fluent.Options.CombatTeamCheck:SetValue(value)
         end
-
-        UpdateESP()
-        UpdateTracers()
     end)
 
-    visualRight:AddSection("ESP Lines")
+    -- Preview semelhante à coluna da direita do Interface.cpp, sem usar imagem.
+    local previewSection = visualRight:AddSection("Preview")
+    local preview = Instance.new("Frame")
+    preview.Name = "ESPPreview"
+    preview.BackgroundColor3 = Color3.fromRGB(7, 7, 9)
+    preview.BorderSizePixel = 0
+    preview.Size = UDim2.new(1, 0, 0, 230)
+    preview.LayoutOrder = 2
+    preview.Parent = previewSection
 
-    visualRight:AddToggle("ESPTracers", {
-        Title = "Tracers",
-        Default = false,
-    })
+    local previewCorner = Instance.new("UICorner")
+    previewCorner.CornerRadius = UDim.new(0, 4)
+    previewCorner.Parent = preview
 
-    Fluent.Options.ESPTracers:OnChanged(function(value)
-        State.ESP.Tracers = value
+    local previewStroke = Instance.new("UIStroke")
+    previewStroke.Color = Color3.fromRGB(35, 36, 42)
+    previewStroke.Transparency = 0.15
+    previewStroke.Thickness = 1
+    previewStroke.Parent = preview
 
-        if value then
-            UpdateTracers()
+    local pBoxOutline = Instance.new("Frame")
+    pBoxOutline.BackgroundTransparency = 1
+    pBoxOutline.BorderColor3 = Color3.new(0, 0, 0)
+    pBoxOutline.BorderSizePixel = 3
+    pBoxOutline.Position = UDim2.new(0.5, -47, 0, 24)
+    pBoxOutline.Size = UDim2.fromOffset(94, 156)
+    pBoxOutline.Parent = preview
+
+    local pBox = Instance.new("Frame")
+    pBox.BackgroundTransparency = 1
+    pBox.BorderColor3 = ESP_ACCENT
+    pBox.BorderSizePixel = 1
+    pBox.Position = UDim2.new(0.5, -46, 0, 25)
+    pBox.Size = UDim2.fromOffset(92, 154)
+    pBox.Parent = preview
+
+    local pHealthBack = Instance.new("Frame")
+    pHealthBack.BackgroundColor3 = Color3.new(0, 0, 0)
+    pHealthBack.BorderSizePixel = 0
+    pHealthBack.Position = UDim2.new(0.5, -54, 0, 24)
+    pHealthBack.Size = UDim2.fromOffset(4, 156)
+    pHealthBack.Parent = preview
+
+    local pHealth = Instance.new("Frame")
+    pHealth.BackgroundColor3 = Color3.fromRGB(0, 255, 12)
+    pHealth.BorderSizePixel = 0
+    pHealth.Position = UDim2.new(0.5, -53, 0, 54)
+    pHealth.Size = UDim2.fromOffset(2, 125)
+    pHealth.Parent = preview
+
+    local pArmorBack = Instance.new("Frame")
+    pArmorBack.BackgroundColor3 = Color3.new(0, 0, 0)
+    pArmorBack.BorderSizePixel = 0
+    pArmorBack.Position = UDim2.new(0.5, -47, 0, 183)
+    pArmorBack.Size = UDim2.fromOffset(94, 4)
+    pArmorBack.Parent = preview
+
+    local pArmor = Instance.new("Frame")
+    pArmor.BackgroundColor3 = ESP_ARMOR
+    pArmor.BorderSizePixel = 0
+    pArmor.Position = UDim2.new(0.5, -46, 0, 184)
+    pArmor.Size = UDim2.fromOffset(72, 2)
+    pArmor.Parent = preview
+
+    local pName = Instance.new("TextLabel")
+    pName.BackgroundTransparency = 1
+    pName.Text = "username"
+    pName.TextColor3 = Color3.fromRGB(235, 235, 240)
+    pName.TextStrokeTransparency = 0.15
+    pName.Font = Enum.Font.GothamMedium
+    pName.TextSize = 11
+    pName.Position = UDim2.new(0.5, -70, 0, 190)
+    pName.Size = UDim2.fromOffset(140, 14)
+    pName.Parent = preview
+
+    local pDistance = pName:Clone()
+    pDistance.Text = "0 studs"
+    pDistance.Position = UDim2.new(0.5, -70, 0, 204)
+    pDistance.Parent = preview
+
+    local pLine = Instance.new("Frame")
+    pLine.AnchorPoint = Vector2.new(0, 0.5)
+    pLine.BackgroundColor3 = ESP_ACCENT
+    pLine.BorderSizePixel = 0
+    pLine.Position = UDim2.new(0.5, 0, 1, -5)
+    pLine.Size = UDim2.fromOffset(0, 1)
+    pLine.Parent = preview
+
+    local function UpdatePreview()
+        pBoxOutline.Visible = State.ESP.Box
+        pBox.Visible = State.ESP.Box
+        pHealthBack.Visible = State.ESP.HealthBar
+        pHealth.Visible = State.ESP.HealthBar
+        pArmorBack.Visible = State.ESP.ArmorBar
+        pArmor.Visible = State.ESP.ArmorBar
+        pName.Visible = State.ESP.Name
+        pDistance.Visible = State.ESP.Distance
+
+        if State.ESP.Lines then
+            local a = Vector2.new(preview.AbsoluteSize.X * 0.5, preview.AbsoluteSize.Y - 5)
+            local b = Vector2.new(preview.AbsoluteSize.X * 0.5, 102)
+            local d = b - a
+            pLine.Position = UDim2.fromOffset(a.X, a.Y)
+            pLine.Size = UDim2.fromOffset(d.Magnitude, 1)
+            pLine.Rotation = math.deg(math.atan2(d.Y, d.X))
+            pLine.Visible = true
         else
-            ClearTracers()
+            pLine.Visible = false
         end
-    end)
+    end
 
-    visualRight:AddDropdown("TracerOrigin", {
-        Title = "Origin",
-        Values = {"Bottom Center", "Center", "Bottom"},
-        Default = 1,
-    })
+    for _, optionName in ipairs({
+        "ESPBox", "ESPHealth", "ESPArmor", "ESPName", "ESPDistance", "ESPLines"
+    }) do
+        Fluent.Options[optionName]:OnChanged(UpdatePreview)
+    end
+    task.defer(UpdatePreview)
 
-    Fluent.Options.TracerOrigin:OnChanged(function(value)
-        if value == "Bottom Center" then
-            State.Visual.TracerOrigin = "BottomCenter"
-        else
-            State.Visual.TracerOrigin = value
-        end
-    end)
-
-    visualRight:AddSection("FOV")
-
-    visualRight:AddToggle("FOVCircle", {
-        Title = "Draw FOV",
-        Default = false,
-    })
-
+    visualRight:AddSection("Camera / FOV")
+    visualRight:AddToggle("FOVCircle", {Title = "Draw FOV", Default = false})
     Fluent.Options.FOVCircle:OnChanged(function(value)
         State.Visual.FOVCircle = value
         UpdateFOVCircle()
     end)
 
     visualRight:AddSlider("FOVRadius", {
-        Title = "FOV Radius",
-        Min = 30,
-        Max = 500,
-        Default = 200,
-        Rounding = 0,
+        Title = "FOV Radius", Min = 30, Max = 500, Default = 200, Rounding = 0,
     })
-
     Fluent.Options.FOVRadius:OnChanged(function(value)
         State.Visual.FOVRadius = value
         UpdateFOVCircle()
     end)
 
     visualRight:AddSlider("CameraFOV", {
-        Title = "Camera FOV",
-        Min = 40,
-        Max = 120,
-        Default = 70,
-        Rounding = 0,
+        Title = "Camera FOV", Min = 40, Max = 120, Default = 70, Rounding = 0,
     })
-
     Fluent.Options.CameraFOV:OnChanged(function(value)
         State.Visual.CameraFOV = value
         FOVController.SetBase(value)
@@ -996,7 +1272,7 @@ local function CreateUI()
     local distanceLabel = configRight:AddLabel("Distance: --")
     local visibleLabel = configRight:AddLabel("Visible: --")
     local espCountLabel = configRight:AddLabel("ESP Objects: 0")
-    local tracerCountLabel = configRight:AddLabel("Tracers: 0")
+    local lineCountLabel = configRight:AddLabel("ESP Lines: 0")
 
     task.spawn(function()
         while not UIClosed do
@@ -1019,13 +1295,15 @@ local function CreateUI()
                 espCount += 1
             end
 
-            local tracerCount = 0
-            for _ in pairs(TracerObjects) do
-                tracerCount += 1
+            local lineCount = 0
+            for _, data in pairs(ESPObjects) do
+                if data.Line and data.Line.Visible then
+                    lineCount += 1
+                end
             end
 
             espCountLabel:SetText("ESP Objects: " .. espCount)
-            tracerCountLabel:SetText("Tracers: " .. tracerCount)
+            lineCountLabel:SetText("ESP Lines: " .. lineCount)
         end
     end)
 end
@@ -1033,26 +1311,19 @@ end
 local function SetupConnections()
     table.insert(Connections, RunService.RenderStepped:Connect(function()
         if UIClosed then return end
-
         UpdateESP()
-        UpdateTracers()
     end))
 
     table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function()
         TargetData.Current = nil
         TargetData.Position = nil
-
-        task.defer(function()
-            UpdateESP()
-            UpdateTracers()
-        end)
+        task.defer(UpdateESP)
     end))
 
     local characters = workspace:FindFirstChild("Characters")
     if characters then
         table.insert(Connections, characters.ChildRemoved:Connect(function(child)
             RemoveESP(child)
-            RemoveTracer(child)
         end))
     end
 end
