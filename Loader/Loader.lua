@@ -11,7 +11,7 @@ local Games = {
     [75995379831247] = BASE .. "DigAndGrow.lua",
     [94717504417144] = BASE .. "AnimeCapture.lua",
     [6442957604]     = BASE .. "CustomPCTycoon.lua",
-    [120851538706364] = BASE .. "MurderDuels.lua",
+    [120851538706364] = BASE .. "MurderDuel.lua",
 }
 
 -- ============================================================
