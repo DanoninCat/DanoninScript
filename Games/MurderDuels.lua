@@ -1,5 +1,5 @@
 -- ============================================================
--- CAT EMPIRE | FPS EXPLOIT HUB v2.0
+-- CAT EMPIRE | FPS EXPLOIT HUB v2.1
 -- ============================================================
 -- GitHub: @DanoninCat
 -- Jogo: Cat Empire (ID: 120851538706364)
@@ -13,6 +13,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
+local GuiService = game:GetService("GuiService")
 
 -- ============================================================
 -- [VARIÁVEIS GLOBAIS]
@@ -28,14 +29,59 @@ local fovCircle = nil
 local fovRadius = 200
 local TeamCheckEnabled = true
 local ESPLines = {}
+local WindowRef = nil
+local UIClosed = false
+
+-- ============================================================
+-- [FUNÇÃO PARA FECHAR UI]
+-- ============================================================
+local function CloseUI()
+    if WindowRef then
+        pcall(function()
+            WindowRef:Destroy()
+        end)
+        WindowRef = nil
+    end
+    
+    -- Limpa todos os objetos ESP
+    for char, esp in pairs(ESP_Objects) do
+        pcall(function()
+            esp.highlight:Destroy()
+            esp.billboard:Destroy()
+        end)
+    end
+    ESP_Objects = {}
+    
+    -- Limpa linhas ESP
+    for char, line in pairs(ESPLines) do
+        pcall(function() line:Destroy() end)
+    end
+    ESPLines = {}
+    
+    -- Limpa FOV Circle
+    if fovCircle then
+        pcall(function() fovCircle:Destroy() end)
+        fovCircle = nil
+    end
+    
+    -- Limpa ScreenGuis extras
+    pcall(function()
+        local screenGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("ESP_Lines")
+        if screenGui then screenGui:Destroy() end
+    end)
+    
+    UIClosed = true
+end
 
 -- ============================================================
 -- [UI - FLUENT]
 -- ============================================================
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local Window = Fluent:CreateWindow({
+
+-- Criar a janela com fechamento por tecla
+WindowRef = Fluent:CreateWindow({
     Title = "Cat Empire",
-    SubTitle = "FPS Exploit v2.0",
+    SubTitle = "FPS Exploit v2.1",
     TabWidth = 160,
     Size = UDim2.fromOffset(620, 480),
     Acrylic = true,
@@ -43,14 +89,43 @@ local Window = Fluent:CreateWindow({
     MinimizeKey = Enum.KeyCode.RightControl,
 })
 
+-- Sobrescrever o comportamento de fechamento
+local originalClose = WindowRef.Close
+WindowRef.Close = function()
+    CloseUI()
+    if originalClose then
+        originalClose()
+    end
+end
+
+-- Fechar com RightControl
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.KeyCode == Enum.KeyCode.RightControl then
+        CloseUI()
+    end
+end)
+
+-- Fechar com ESC também
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.KeyCode == Enum.KeyCode.Escape then
+        if WindowRef and WindowRef.Visible then
+            CloseUI()
+        end
+    end
+end)
+
 -- ============================================================
 -- [TABS]
 -- ============================================================
 local Tabs = {
-    ESP = Window:AddTab({ Title = "ESP", Icon = "eye" }),
-    Aimbot = Window:AddTab({ Title = "Aimbot", Icon = "crosshair" }),
-    FOV = Window:AddTab({ Title = "FOV", Icon = "circle" }),
-    Combat = Window:AddTab({ Title = "Combat", Icon = "swords" }),
+    ESP = WindowRef:AddTab({ Title = "ESP", Icon = "eye" }),
+    Aimbot = WindowRef:AddTab({ Title = "Aimbot", Icon = "crosshair" }),
+    FOV = WindowRef:AddTab({ Title = "FOV", Icon = "circle" }),
+    Combat = WindowRef:AddTab({ Title = "Combat", Icon = "swords" }),
 }
 local Options = Fluent.Options
 
@@ -163,6 +238,8 @@ end
 
 -- Cria ESP para um personagem
 local function createESP(char)
+    if UIClosed then return end
+    
     local esp = {}
     
     local highlight = Instance.new("Highlight")
@@ -198,6 +275,8 @@ end
 
 -- Atualiza ESP de todos os personagens
 local function updateESP()
+    if UIClosed then return end
+    
     for char, esp in pairs(ESP_Objects) do
         if not char.Parent or not char:FindFirstChildOfClass("Humanoid") then
             pcall(function()
@@ -241,7 +320,7 @@ end
 
 -- Loop do ESP
 local function ESPLoop()
-    while Options.ESPEnabled and Options.ESPEnabled.Value do
+    while Options.ESPEnabled and Options.ESPEnabled.Value and not UIClosed do
         task.wait(0.1)
         updateESP()
     end
@@ -253,6 +332,8 @@ end
 
 -- Cria uma linha de ESP
 local function createESPLine(char)
+    if UIClosed then return end
+    
     local screenGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("ESP_Lines") or Instance.new("ScreenGui")
     screenGui.Name = "ESP_Lines"
     screenGui.ResetOnSpawn = false
@@ -271,6 +352,8 @@ end
 
 -- Atualiza as linhas de ESP
 local function updateESPLines()
+    if UIClosed then return end
+    
     for char, line in pairs(ESPLines) do
         if not char.Parent or not char:FindFirstChildOfClass("Humanoid") then
             pcall(function() line:Destroy() end)
@@ -308,7 +391,7 @@ end
 
 -- Loop das linhas
 local function ESPLinesLoop()
-    while Options.ESPLines and Options.ESPLines.Value do
+    while Options.ESPLines and Options.ESPLines.Value and not UIClosed do
         task.wait()
         updateESPLines()
     end
@@ -320,7 +403,12 @@ end
 
 -- Cria o círculo de FOV
 local function createFOVCircle(radius)
-    if fovCircle then fovCircle:Destroy() end
+    if fovCircle then 
+        pcall(function() fovCircle:Destroy() end)
+        fovCircle = nil
+    end
+    
+    if UIClosed then return end
     
     local gui = Instance.new("ScreenGui")
     gui.Name = "FOVCircle"
@@ -358,7 +446,7 @@ end
 -- ============================================================
 
 local function aimbotLoop()
-    while true do
+    while not UIClosed do
         task.wait()
         if aimbotEnabled and LocalPlayer.Character then
             local target = getClosestEnemyToCrosshair(fovRadius)
@@ -384,7 +472,7 @@ end
 -- ============================================================
 
 local function autoShootLoop()
-    while true do
+    while not UIClosed do
         task.wait(0.1)
         if Options.AutoShoot and Options.AutoShoot.Value then
             local target = aimbotTarget
@@ -414,7 +502,7 @@ Tabs.ESP:AddToggle("ESPEnabled", {
 })
 
 Options.ESPEnabled:OnChanged(function(v)
-    if v then
+    if v and not UIClosed then
         for _, char in pairs(getCharacters()) do
             if isEnemy(char) then
                 createESP(char)
@@ -450,7 +538,7 @@ Tabs.ESP:AddToggle("ESPLines", {
 })
 
 Options.ESPLines:OnChanged(function(v)
-    if v then
+    if v and not UIClosed then
         for _, char in pairs(getCharacters()) do
             if isEnemy(char) then
                 createESPLine(char)
@@ -535,11 +623,11 @@ Tabs.FOV:AddToggle("FOVCircleEnabled", {
 })
 
 Options.FOVCircleEnabled:OnChanged(function(v)
-    if v then
+    if v and not UIClosed then
         createFOVCircle(fovRadius)
     else
         if fovCircle then
-            fovCircle:Destroy()
+            pcall(function() fovCircle:Destroy() end)
             fovCircle = nil
         end
     end
@@ -555,7 +643,7 @@ Tabs.FOV:AddSlider("FOVRadius", {
 
 Options.FOVRadius:OnChanged(function(v)
     fovRadius = v
-    if Options.FOVCircleEnabled and Options.FOVCircleEnabled.Value then
+    if Options.FOVCircleEnabled and Options.FOVCircleEnabled.Value and not UIClosed then
         createFOVCircle(fovRadius)
     end
 end)
@@ -586,6 +674,53 @@ Tabs.Combat:AddToggle("AutoShoot", {
 })
 
 -- ============================================================
+-- [BOTÃO DE FECHAR NA UI]
+-- ============================================================
+
+-- Adiciona um botão de fechar na UI
+local function addCloseButton()
+    if not WindowRef then return end
+    
+    -- Tenta encontrar o container da UI e adicionar um botão X
+    local success, gui = pcall(function()
+        return WindowRef.Gui
+    end)
+    
+    if success and gui then
+        local closeBtn = Instance.new("TextButton")
+        closeBtn.Name = "CloseButton"
+        closeBtn.Size = UDim2.new(0, 30, 0, 30)
+        closeBtn.Position = UDim2.new(1, -35, 0, 5)
+        closeBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+        closeBtn.BackgroundTransparency = 0.3
+        closeBtn.Text = "✕"
+        closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        closeBtn.TextSize = 20
+        closeBtn.Font = Enum.Font.GothamBold
+        closeBtn.BorderSizePixel = 0
+        closeBtn.Parent = gui
+        
+        closeBtn.MouseButton1Click:Connect(function()
+            CloseUI()
+        end)
+        
+        -- Efeito hover
+        closeBtn.MouseEnter:Connect(function()
+            closeBtn.BackgroundTransparency = 0
+        end)
+        closeBtn.MouseLeave:Connect(function()
+            closeBtn.BackgroundTransparency = 0.3
+        end)
+    end
+end
+
+-- Tenta adicionar o botão depois que a UI carregar
+task.spawn(function()
+    task.wait(0.5)
+    addCloseButton()
+end)
+
+-- ============================================================
 -- [INICIAR LOOPS]
 -- ============================================================
 
@@ -598,14 +733,16 @@ task.spawn(autoShootLoop)
 
 Fluent:Notify({
     Title = "Cat Empire",
-    Content = "FPS Exploit v2.0 carregado!",
+    Content = "FPS Exploit v2.1 carregado!",
     Duration = 4,
 })
 
 print("============================================================")
-print("CAT EMPIRE | FPS EXPLOIT HUB v2.0")
+print("CAT EMPIRE | FPS EXPLOIT HUB v2.1")
 print("GitHub: @DanoninCat")
 print("============================================================")
+print("[✓] Fechar com RightControl ou ESC")
+print("[✓] Botão X para fechar")
 print("[✓] ESP com Highlight + Distância")
 print("[✓] ESP Lines (Tracers)")
 print("[✓] Team Check")
