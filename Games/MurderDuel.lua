@@ -198,7 +198,7 @@ end
 local ESP_GUI_NAME = "CAT_EMPIRE_PlayerESP"
 local ESP_BLACK = Color3.fromRGB(0, 0, 0)
 local ESP_WHITE = Color3.fromRGB(235, 235, 240)
-local ESP_ACCENT = Color3.fromRGB(121, 131, 207)
+local ESP_ACCENT = Color3.fromRGB(78, 91, 222)
 local ESP_ARMOR = Color3.fromRGB(25, 120, 245)
 
 local function GetESPGui()
@@ -290,60 +290,87 @@ local function GetFootBottom(part)
 end
 
 local function GetESPBounds(char)
-    local head = FindPart(char, {"Head"}) or GetTargetPart(char)
-    local root = GetTargetPart(char)
-    if not head or not root then
+    local camera = GetCamera()
+    if not camera or not char then
         return nil
     end
 
-    -- O FiveM calcula a caixa a partir da cabeça e dos pés.
-    -- Aqui usamos os equivalentes R15/R6 do Roblox.
-    local leftFoot = FindPart(char, {"LeftFoot", "LeftLowerLeg", "Left Leg"})
-    local rightFoot = FindPart(char, {"RightFoot", "RightLowerLeg", "Right Leg"})
+    -- Roblox-native adaptation:
+    -- project the actual model bounding box so every visual stays glued
+    -- to the avatar instead of relying on loose head/foot approximations.
+    local ok, boxCFrame, boxSize = pcall(function()
+        local cf, size = char:GetBoundingBox()
+        return cf, size
+    end)
 
-    local headTopWorld = head.Position + Vector3.new(0, math.max(head.Size.Y * 0.55, 0.35), 0)
-    local headScreen, headVisible = ProjectToScreen(headTopWorld)
-    local centerScreen, centerVisible = ProjectToScreen(root.Position)
-
-    if not headScreen or not centerScreen or not headVisible or not centerVisible then
+    if not ok or not boxCFrame or not boxSize then
         return nil
     end
 
-    local leftWorld = GetFootBottom(leftFoot)
-    local rightWorld = GetFootBottom(rightFoot)
+    local half = boxSize * 0.5
+    local corners = {
+        Vector3.new(-half.X, -half.Y, -half.Z),
+        Vector3.new(-half.X, -half.Y,  half.Z),
+        Vector3.new(-half.X,  half.Y, -half.Z),
+        Vector3.new(-half.X,  half.Y,  half.Z),
+        Vector3.new( half.X, -half.Y, -half.Z),
+        Vector3.new( half.X, -half.Y,  half.Z),
+        Vector3.new( half.X,  half.Y, -half.Z),
+        Vector3.new( half.X,  half.Y,  half.Z),
+    }
 
-    if not leftWorld then
-        leftWorld = root.Position - Vector3.new(0, 3, 0)
-    end
-    if not rightWorld then
-        rightWorld = root.Position - Vector3.new(0, 3, 0)
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    local valid = 0
+
+    for _, localCorner in ipairs(corners) do
+        local worldCorner = boxCFrame:PointToWorldSpace(localCorner)
+        local screen = camera:WorldToViewportPoint(worldCorner)
+
+        if screen.Z > 0 then
+            minX = math.min(minX, screen.X)
+            minY = math.min(minY, screen.Y)
+            maxX = math.max(maxX, screen.X)
+            maxY = math.max(maxY, screen.Y)
+            valid += 1
+        end
     end
 
-    local leftScreen, leftVisible = ProjectToScreen(leftWorld)
-    local rightScreen, rightVisible = ProjectToScreen(rightWorld)
-    if not leftScreen or not rightScreen or not leftVisible or not rightVisible then
+    if valid < 4 then
         return nil
     end
 
-    local rawHeight = math.max(leftScreen.Y, rightScreen.Y) - headScreen.Y
-    if rawHeight <= 4 then
+    local width = maxX - minX
+    local height = maxY - minY
+
+    if width < 3 or height < 6 then
         return nil
     end
 
-    -- Mesma proporção da source FiveM: Width = Height / 1.8;
-    -- depois Height *= 1.2 para dar folga ao corpo.
-    local width = rawHeight / 1.8
-    local centerY = headScreen.Y + rawHeight / 2
-    local height = rawHeight * 1.2
-    local centerX = centerScreen.X
+    -- Source-inspired breathing room, but kept symmetrical around Roblox's
+    -- real projected bounds so the ESP does not float away from the model.
+    local padX = math.max(2, width * 0.06)
+    local padY = math.max(2, height * 0.035)
+
+    minX -= padX
+    maxX += padX
+    minY -= padY
+    maxY += padY
+
+    width = maxX - minX
+    height = maxY - minY
+
+    local centerX = (minX + maxX) * 0.5
+    local centerY = (minY + maxY) * 0.5
 
     return {
-        X = centerX - width / 2,
-        Y = centerY - height / 2,
+        X = minX,
+        Y = minY,
         Width = width,
         Height = height,
         Center = Vector2.new(centerX, centerY),
-        BottomCenter = Vector2.new(centerX, centerY + height / 2),
+        BottomCenter = Vector2.new(centerX, maxY),
+        TopCenter = Vector2.new(centerX, minY),
     }
 end
 
@@ -376,7 +403,7 @@ local function CreateESPData(char)
     data.BoxOutline.ZIndex = 8
 
     data.Box = NewESPFrame("Box_" .. char.Name, gui)
-    data.Box.BorderSizePixel = 1
+    data.Box.BorderSizePixel = 2
     data.Box.BorderColor3 = ESP_ACCENT
     data.Box.ZIndex = 9
 
@@ -403,7 +430,7 @@ local function CreateESPData(char)
     data.Name = NewESPLabel("Name_" .. char.Name, gui)
     data.Weapon = NewESPLabel("Weapon_" .. char.Name, gui)
     data.Distance = NewESPLabel("Distance_" .. char.Name, gui)
-    data.Line = NewLine("Line_" .. char.Name, gui, 1)
+    data.Line = NewLine("Line_" .. char.Name, gui, 2)
 
     for index = 1, #R15_BONES do
         data.Skeleton[index] = NewLine("Skeleton_" .. char.Name .. "_" .. index, gui, 1)
@@ -475,15 +502,12 @@ local function GetLocalScreenOrigin()
         return Vector2.new(0, 0)
     end
 
-    local myPart = GetTargetPart(LocalPlayer.Character)
-    if myPart then
-        local screen, visible = ProjectToScreen(myPart.Position)
-        if screen and visible then
-            return Vector2.new(screen.X, screen.Y)
-        end
-    end
-
-    return Vector2.new(camera.ViewportSize.X * 0.5, camera.ViewportSize.Y - 4)
+    -- Stable tracer origin. Using the projected local avatar made all lines
+    -- fan out from the character and look detached/loose on third-person view.
+    return Vector2.new(
+        camera.ViewportSize.X * 0.5,
+        camera.ViewportSize.Y - 3
+    )
 end
 
 local function UpdateSkeleton(char, data)
@@ -635,7 +659,7 @@ local function UpdatePlayerESP(char, data, myRoot)
     end
 
     if State.ESP.Distance then
-        data.Distance.Text = string.format("%d studs", math.floor(distance + 0.5))
+        data.Distance.Text = string.format("%d", math.floor(distance + 0.5))
         data.Distance.Position = UDim2.fromOffset(x - 35, labelY)
         data.Distance.Size = UDim2.fromOffset(width + 70, 14)
         data.Distance.Visible = true
@@ -644,7 +668,7 @@ local function UpdatePlayerESP(char, data, myRoot)
     end
 
     if State.ESP.Lines then
-        SetLine(data.Line, GetLocalScreenOrigin(), bounds.Center, 1, ESP_ACCENT)
+        SetLine(data.Line, GetLocalScreenOrigin(), bounds.BottomCenter, 2, ESP_ACCENT)
     else
         data.Line.Visible = false
     end
@@ -891,7 +915,7 @@ local function CreateUI()
         Title = "CAT EMPIRE",
         SubTitle = "",
         TabWidth = 112,
-        Size = UDim2.fromOffset(660, 430),
+        Size = UDim2.fromOffset(720, 520),
         Acrylic = false,
         Animated = false,
         Theme = "CAT EMPIRE",
@@ -902,12 +926,19 @@ local function CreateUI()
     WindowRef = Window
 
     local Tabs = {
-        Combat = Window:AddTab({Title = "Combat", Icon = "crosshair"}),
+        Combat = Window:AddTab({Title = "Aimbot", Icon = "crosshair"}),
         Visuals = Window:AddTab({Title = "Visuals", Icon = "eye"}),
-        Exploits = Window:AddTab({Title = "Exploits", Icon = "flask-conical"}),
-        Cloud = Window:AddTab({Title = "Cloud", Icon = "cloud"}),
-        Config = Window:AddTab({Title = "Config", Icon = "settings"}),
+        Exploits = Window:AddTab({Title = "Misc", Icon = "flask-conical"}),
+        Cloud = Window:AddTab({Title = "Players", Icon = "cloud"}),
+        Vehicles = Window:AddTab({Title = "Vehicles", Icon = "vehicle"}),
+        Config = Window:AddTab({Title = "Settings", Icon = "settings"}),
     }
+
+    Tabs.Vehicles:AddSection("Vehicles")
+    Tabs.Vehicles:AddParagraph({
+        Title = "Vehicle ESP",
+        Content = "Reserved for vehicle-specific visuals.",
+    })
 
     -- COMBAT
     local combatGrid = Tabs.Combat:AddGroup({Columns = 2, Gap = 8})
