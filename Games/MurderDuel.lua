@@ -1,3 +1,7 @@
+-- ============================================================
+-- MURDER DUELS | FPS EXPLOIT HUB v3.0
+-- ============================================================
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -11,93 +15,85 @@ local Extensions = ReplicatedStorage:WaitForChild("Extensions")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Util = ReplicatedStorage:WaitForChild("Util")
 
-local AimAssistController = require(Extensions:WaitForChild("AimAssistController"))
-local TargetSelector = require(Extensions:WaitForChild("TargetSelector"))
-local AimAdjuster = require(Extensions:WaitForChild("AimAdjuster"))
-local AimMagnetism = require(Extensions:WaitForChild("AimMagnetism"))
-local InputCategorizer = require(Extensions:WaitForChild("InputCategorizer"))
-local AimAssistEnum = require(Extensions:WaitForChild("AimAssistEnum"))
 local FOVController = require(Shared:WaitForChild("FOVController"))
-local KnifeFlight = require(Shared:WaitForChild("KnifeFlight"))
 local ThirdPerson = require(Shared:WaitForChild("ThirdPerson"))
-local CrosshairSettings = require(Shared:WaitForChild("CrosshairSettings"))
-local ShotPath = require(Util:WaitForChild("ShotPath"))
 local RayCast = require(Util:WaitForChild("RayCast"))
 
-local ESP_Objects = {}
-local aimbotEnabled = false
-local aimbotTarget = nil
-local fovCircle = nil
-local fovRadius = 200
-local TeamCheckEnabled = true
-local ESPLines = {}
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+
+local State = {
+    ESP = {
+        Enabled = false,
+        Highlight = false,
+        Distance = false,
+        Tracers = false,
+        TeamCheck = true,
+    },
+    Aim = {
+        Enabled = false,
+        Silent = false,
+        Assist = false,
+        Strength = 0.5,
+        Radius = 200,
+        Target = nil,
+        Smoothing = 0.35,
+    },
+    Visual = {
+        FOVCircle = false,
+        FOVRadius = 200,
+        CameraFOV = 70,
+        TracerOrigin = "BottomCenter",
+    },
+    UI = {
+        Visible = true,
+        Minimized = false,
+    }
+}
+
+local ESPObjects = {}
+local TracerObjects = {}
+local Connections = {}
+local Loops = {}
 local WindowRef = nil
 local UIClosed = false
-local aimController = nil
+local TargetData = {
+    Current = nil,
+    Position = nil,
+    Distance = 0,
+    Angle = 0,
+    Visible = false,
+}
 
-local function CloseUI()
+local function Cleanup()
     UIClosed = true
+    for _, conn in pairs(Connections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    Connections = {}
+    for _, loop in pairs(Loops) do
+        loop = false
+    end
+    Loops = {}
+    for char, data in pairs(ESPObjects) do
+        pcall(function()
+            if data.Highlight then data.Highlight:Destroy() end
+            if data.Distance then data.Distance:Destroy() end
+        end)
+    end
+    ESPObjects = {}
+    for _, tracer in pairs(TracerObjects) do
+        pcall(function() tracer:Destroy() end)
+    end
+    TracerObjects = {}
     if WindowRef then
         pcall(function() WindowRef:Destroy() end)
         WindowRef = nil
     end
-    for char, esp in pairs(ESP_Objects) do
-        pcall(function()
-            esp.highlight:Destroy()
-            esp.billboard:Destroy()
-        end)
-    end
-    ESP_Objects = {}
-    for char, line in pairs(ESPLines) do
-        pcall(function() line:Destroy() end)
-    end
-    ESPLines = {}
-    if fovCircle then
-        pcall(function() fovCircle:Destroy() end)
-        fovCircle = nil
-    end
-    pcall(function()
-        local screenGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("ESP_Lines")
-        if screenGui then screenGui:Destroy() end
-        local fovGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("FOVCircle")
-        if fovGui then fovGui:Destroy() end
-    end)
-    if aimController then
-        pcall(function() aimController:disable() end)
-        aimController = nil
-    end
+    TargetData.Current = nil
+    TargetData.Position = nil
 end
 
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-
-WindowRef = Fluent:CreateWindow({
-    Title = "MurderDuels",
-    SubTitle = "FPS Exploit",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(620, 480),
-    Acrylic = true,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.RightControl,
-})
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.RightControl then
-        if WindowRef and WindowRef.Visible then
-            CloseUI()
-        end
-    end
-end)
-
-local Tabs = {
-    ESP = WindowRef:AddTab({ Title = "ESP", Icon = "eye" }),
-    Aimbot = WindowRef:AddTab({ Title = "Aimbot", Icon = "crosshair" }),
-    FOV = WindowRef:AddTab({ Title = "FOV", Icon = "circle" }),
-    Combat = WindowRef:AddTab({ Title = "Combat", Icon = "swords" }),
-}
-local Options = Fluent.Options
-
-local function getCharacters()
+local function GetCharacters()
     local chars = {}
     local Characters = workspace:FindFirstChild("Characters")
     if Characters then
@@ -110,13 +106,12 @@ local function getCharacters()
     return chars
 end
 
-local function isEnemy(char)
+local function IsEnemy(char)
     if not char then return false end
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return false end
-    if humanoid.Health <= 0 then return false end
     if char == LocalPlayer.Character then return false end
-    if TeamCheckEnabled then
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+    if State.ESP.TeamCheck then
         local myChar = LocalPlayer.Character
         if myChar then
             local mySide = myChar:GetAttribute("MatchSide")
@@ -129,7 +124,7 @@ local function isEnemy(char)
     return true
 end
 
-local function getHeadPosition(char)
+local function GetHeadPosition(char)
     local head = char:FindFirstChild("Head")
     if head then return head.Position end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
@@ -137,179 +132,233 @@ local function getHeadPosition(char)
     return char:GetPivot().Position
 end
 
-local function getDistance(pos1, pos2)
+local function GetDistance(pos1, pos2)
     return (pos1 - pos2).Magnitude
 end
 
-local function getClosestEnemyToCrosshair(maxDistance)
+local function IsOnScreen(position)
+    local screenPos, onScreen = Camera:WorldToViewportPoint(position)
+    return onScreen, screenPos
+end
+
+local function GetClosestTarget()
     local closest = nil
-    local closestDist = maxDistance or 300
-    for _, char in pairs(getCharacters()) do
-        if isEnemy(char) then
+    local closestDist = State.Aim.Radius
+    local closestAngle = 999
+    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+    
+    for _, char in pairs(GetCharacters()) do
+        if IsEnemy(char) then
             local head = char:FindFirstChild("Head")
             if head then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                local screenPos, onScreen = IsOnScreen(head.Position)
                 if onScreen then
-                    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                    local screenVec = Vector2.new(screenPos.X, screenPos.Y)
+                    local dist = (screenVec - mousePos).Magnitude
                     if dist < closestDist then
-                        closestDist = dist
-                        closest = char
+                        local angle = math.deg(math.atan2(screenPos.Y - mousePos.Y, screenPos.X - mousePos.X))
+                        if math.abs(angle) < closestAngle then
+                            closestDist = dist
+                            closestAngle = math.abs(angle)
+                            closest = char
+                        end
                     end
                 end
             end
         end
     end
+    
     return closest
 end
 
-local function createESP(char)
-    if UIClosed then return end
-    local esp = {}
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "ESP_Highlight"
-    highlight.FillColor = Color3.fromRGB(255, 0, 0)
-    highlight.FillTransparency = 0.5
-    highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
-    highlight.OutlineTransparency = 0
-    highlight.Parent = char
-    esp.highlight = highlight
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "ESP_Distance"
-    billboard.Size = UDim2.new(0, 100, 0, 30)
-    billboard.StudsOffset = Vector3.new(0, 2.5, 0)
-    billboard.AlwaysOnTop = true
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.fromRGB(255, 0, 0)
-    label.TextStrokeTransparency = 0
-    label.TextSize = 16
-    label.Font = Enum.Font.GothamBold
-    label.Parent = billboard
-    billboard.Parent = char
-    esp.label = label
-    esp.billboard = billboard
-    ESP_Objects[char] = esp
+local function CreateESP(char)
+    if ESPObjects[char] then return end
+    local data = {}
+    
+    if State.ESP.Highlight then
+        local highlight = Instance.new("Highlight")
+        highlight.FillColor = Color3.fromRGB(255, 0, 0)
+        highlight.FillTransparency = 0.5
+        highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
+        highlight.OutlineTransparency = 0
+        highlight.Parent = char
+        data.Highlight = highlight
+    end
+    
+    if State.ESP.Distance then
+        local billboard = Instance.new("BillboardGui")
+        billboard.Size = UDim2.new(0, 100, 0, 30)
+        billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+        billboard.AlwaysOnTop = true
+        billboard.Parent = char
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(255, 0, 0)
+        label.TextStrokeTransparency = 0
+        label.TextSize = 16
+        label.Font = Enum.Font.GothamBold
+        label.Parent = billboard
+        
+        data.Distance = billboard
+        data.Label = label
+    end
+    
+    ESPObjects[char] = data
 end
 
-local function updateESP()
-    if UIClosed then return end
-    for char, esp in pairs(ESP_Objects) do
-        if not char.Parent or not char:FindFirstChildOfClass("Humanoid") then
-            pcall(function()
-                esp.highlight:Destroy()
-                esp.billboard:Destroy()
-            end)
-            ESP_Objects[char] = nil
-            continue
+local function RemoveESP(char)
+    local data = ESPObjects[char]
+    if data then
+        pcall(function()
+            if data.Highlight then data.Highlight:Destroy() end
+            if data.Distance then data.Distance:Destroy() end
+        end)
+        ESPObjects[char] = nil
+    end
+end
+
+local function UpdateESP()
+    if not State.ESP.Enabled then
+        for char in pairs(ESPObjects) do
+            RemoveESP(char)
         end
-        local humanoid = char:FindFirstChildOfClass("Humanoid")
-        if humanoid.Health <= 0 then
-            pcall(function()
-                esp.highlight:Destroy()
-                esp.billboard:Destroy()
-            end)
-            ESP_Objects[char] = nil
-            continue
-        end
-        local myChar = LocalPlayer.Character
-        if myChar then
-            local mySide = myChar:GetAttribute("MatchSide")
-            local theirSide = char:GetAttribute("MatchSide")
-            if mySide and theirSide and mySide ~= theirSide then
-                esp.highlight.FillColor = Color3.fromRGB(255, 0, 0)
-                esp.highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
-                esp.label.TextColor3 = Color3.fromRGB(255, 0, 0)
-            else
-                esp.highlight.FillColor = Color3.fromRGB(255, 200, 0)
-                esp.highlight.OutlineColor = Color3.fromRGB(255, 200, 0)
-                esp.label.TextColor3 = Color3.fromRGB(255, 200, 0)
+        return
+    end
+    
+    local currentChars = {}
+    for _, char in pairs(GetCharacters()) do
+        currentChars[char] = true
+        if IsEnemy(char) then
+            if not ESPObjects[char] then
+                CreateESP(char)
+            end
+            local data = ESPObjects[char]
+            if data and data.Label then
+                local dist = GetDistance(char:GetPivot().Position, LocalPlayer.Character:GetPivot().Position)
+                data.Label.Text = string.format("%.0f", dist)
+            end
+        else
+            if ESPObjects[char] then
+                RemoveESP(char)
             end
         end
-        local dist = getDistance(char:GetPivot().Position, LocalPlayer.Character:GetPivot().Position)
-        esp.label.Text = string.format("%.0f studs", dist)
+    end
+    
+    for char in pairs(ESPObjects) do
+        if not currentChars[char] then
+            RemoveESP(char)
+        end
     end
 end
 
-local function ESPLoop()
-    while Options.ESPEnabled and Options.ESPEnabled.Value and not UIClosed do
-        task.wait(0.1)
-        updateESP()
+local function CreateTracer(char)
+    if TracerObjects[char] then return end
+    
+    local screenGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("Tracers")
+    if not screenGui then
+        screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "Tracers"
+        screenGui.ResetOnSpawn = false
+        screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
     end
-end
-
-local function createESPLine(char)
-    if UIClosed then return end
-    local screenGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("ESP_Lines") or Instance.new("ScreenGui")
-    screenGui.Name = "ESP_Lines"
-    screenGui.ResetOnSpawn = false
-    screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    
     local line = Instance.new("Frame")
-    line.Name = "Line_" .. char.Name
+    line.Name = "Tracer_" .. char.Name
     line.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    line.BackgroundTransparency = 0.5
+    line.BackgroundTransparency = 0.3
     line.BorderSizePixel = 0
     line.Parent = screenGui
     line.ZIndex = 999
-    ESPLines[char] = line
+    line.Visible = true
+    
+    TracerObjects[char] = line
 end
 
-local function updateESPLines()
-    if UIClosed then return end
-    for char, line in pairs(ESPLines) do
-        if not char.Parent or not char:FindFirstChildOfClass("Humanoid") then
-            pcall(function() line:Destroy() end)
-            ESPLines[char] = nil
-            continue
+local function RemoveTracer(char)
+    local line = TracerObjects[char]
+    if line then
+        pcall(function() line:Destroy() end)
+        TracerObjects[char] = nil
+    end
+end
+
+local function UpdateTracers()
+    if not State.ESP.Tracers then
+        for char in pairs(TracerObjects) do
+            RemoveTracer(char)
         end
-        local headPos = getHeadPosition(char)
-        local screenPos, onScreen = Camera:WorldToViewportPoint(headPos)
-        if onScreen then
-            local centerX = Camera.ViewportSize.X / 2
-            local centerY = Camera.ViewportSize.Y / 2
-            local x1 = centerX
-            local y1 = centerY
-            local x2 = screenPos.X
-            local y2 = screenPos.Y
-            local dx = x2 - x1
-            local dy = y2 - y1
-            local length = math.sqrt(dx * dx + dy * dy)
-            local angle = math.atan2(dy, dx)
-            line.Size = UDim2.new(0, length, 0, 2)
-            line.Position = UDim2.new(0, x1, 0, y1 - 1)
-            line.Rotation = math.deg(angle)
-            line.Visible = true
-            line.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        return
+    end
+    
+    local viewportX = Camera.ViewportSize.X
+    local viewportY = Camera.ViewportSize.Y
+    local originX = viewportX / 2
+    local originY = viewportY * 0.85
+    
+    if State.Visual.TracerOrigin == "Center" then
+        originX = viewportX / 2
+        originY = viewportY / 2
+    elseif State.Visual.TracerOrigin == "Bottom" then
+        originX = viewportX / 2
+        originY = viewportY * 0.95
+    end
+    
+    local currentChars = {}
+    for _, char in pairs(GetCharacters()) do
+        currentChars[char] = true
+        if IsEnemy(char) then
+            if not TracerObjects[char] then
+                CreateTracer(char)
+            end
+            local line = TracerObjects[char]
+            local headPos = GetHeadPosition(char)
+            local screenPos, onScreen = IsOnScreen(headPos)
+            
+            if onScreen then
+                local dx = screenPos.X - originX
+                local dy = screenPos.Y - originY
+                local length = math.sqrt(dx * dx + dy * dy)
+                local angle = math.atan2(dy, dx)
+                
+                line.Size = UDim2.new(0, length, 0, 2)
+                line.Position = UDim2.new(0, originX, 0, originY - 1)
+                line.Rotation = math.deg(angle)
+                line.Visible = true
+                line.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+                line.BackgroundTransparency = 0.3
+            else
+                line.Visible = false
+            end
         else
-            line.Visible = false
+            if TracerObjects[char] then
+                RemoveTracer(char)
+            end
+        end
+    end
+    
+    for char in pairs(TracerObjects) do
+        if not currentChars[char] then
+            RemoveTracer(char)
         end
     end
 end
 
-local function ESPLinesLoop()
-    while Options.ESPLines and Options.ESPLines.Value and not UIClosed do
-        task.wait()
-        updateESPLines()
-    end
-end
-
-local function createFOVCircle(radius)
-    if fovCircle then 
-        pcall(function() fovCircle:Destroy() end)
-        fovCircle = nil
-    end
-    if UIClosed then return end
+local function CreateFOVCircle()
+    local radius = State.Visual.FOVRadius
+    
     local gui = Instance.new("ScreenGui")
     gui.Name = "FOVCircle"
     gui.ResetOnSpawn = false
     gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    
     local frame = Instance.new("Frame")
-    frame.Name = "Circle"
     frame.Size = UDim2.new(0, radius * 2, 0, radius * 2)
     frame.Position = UDim2.new(0.5, -radius, 0.5, -radius)
     frame.BackgroundTransparency = 1
     frame.Parent = gui
+    
     local circle = Instance.new("ImageLabel")
     circle.Size = UDim2.new(1, 0, 1, 0)
     circle.Position = UDim2.new(0, 0, 0, 0)
@@ -318,349 +367,437 @@ local function createFOVCircle(radius)
     circle.ImageColor3 = Color3.fromRGB(0, 255, 255)
     circle.ImageTransparency = 0.3
     circle.Parent = frame
-    fovCircle = gui
+    
+    return gui
 end
 
-local function setupAimbot()
-    if aimController then
-        aimController:disable()
-        aimController = nil
+local function UpdateFOVCircle()
+    if State.Visual.FOVCircle then
+        local existing = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("FOVCircle")
+        if existing then existing:Destroy() end
+        CreateFOVCircle()
+    else
+        local existing = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("FOVCircle")
+        if existing then existing:Destroy() end
     end
-    
-    local Characters = workspace:FindFirstChild("Characters")
-    if not Characters then return end
-    
-    aimController = AimAssistController.new()
-    aimController:setCharacterFolder(Characters)
-    aimController:setRange(Options.AimFOV and Options.AimFOV.Value or 200)
-    aimController:setFieldOfView(Options.AimFOV and Options.AimFOV.Value or 200)
-    aimController:setSortingBehavior(AimAssistEnum.AimAssistSortingBehavior.Angle)
-    aimController:setIgnoreLineOfSight(false)
-    aimController:setType(AimAssistEnum.AimAssistType.Rotational)
-    aimController:setMethodStrength(AimAssistEnum.AimAssistMethod.Centering, 1)
-    aimController:setMethodStrength(AimAssistEnum.AimAssistMethod.Tracking, 0.5)
-    aimController:setMethodStrength(AimAssistEnum.AimAssistMethod.Friction, 0.3)
-    
-    if LocalPlayer.Character then
-        aimController:setSubject(LocalPlayer.Character)
-    end
-    
-    LocalPlayer.CharacterAdded:Connect(function(char)
-        if aimController then
-            task.wait(0.5)
-            aimController:setSubject(char)
-        end
-    end)
-    
-    aimController:enable()
 end
 
-local function aimbotLoop()
-    while not UIClosed do
+local function AimLoop()
+    while not UIClosed and State.Aim.Enabled do
         task.wait()
-        if aimbotEnabled and LocalPlayer.Character and aimController then
-            local target = getClosestEnemyToCrosshair(fovRadius)
-            if target then
-                aimbotTarget = target
+        local target = GetClosestTarget()
+        if target then
+            TargetData.Current = target
+            TargetData.Position = GetHeadPosition(target)
+            TargetData.Distance = GetDistance(LocalPlayer.Character:GetPivot().Position, TargetData.Position)
+            
+            local screenPos, onScreen = IsOnScreen(TargetData.Position)
+            local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+            TargetData.Angle = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+            TargetData.Visible = onScreen
+            
+            if State.Aim.Silent then
+                local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+                if tool then
+                    local direction = (TargetData.Position - Camera.CFrame.Position).Unit
+                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + direction)
+                end
+            elseif State.Aim.Assist then
+                local screenPos2, onScreen2 = IsOnScreen(TargetData.Position)
+                if onScreen2 then
+                    local targetScreen = Vector2.new(screenPos2.X, screenPos2.Y)
+                    local mousePos2 = Vector2.new(Mouse.X, Mouse.Y)
+                    local diff = targetScreen - mousePos2
+                    local strength = State.Aim.Strength * State.Aim.Smoothing
+                    local newMousePos = mousePos2 + diff * strength
+                    Mouse.X = newMousePos.X
+                    Mouse.Y = newMousePos.Y
+                end
+            end
+        else
+            TargetData.Current = nil
+            TargetData.Position = nil
+        end
+    end
+end
+
+local function AutoShootLoop()
+    while not UIClosed do
+        task.wait(0.1)
+        if State.Aim.Enabled and TargetData.Current then
+            local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+            if tool then
+                pcall(function()
+                    tool:Activate()
+                    task.wait(0.05)
+                    tool:Deactivate()
+                end)
             end
         end
     end
 end
 
-local function autoShootLoop()
+local function MainLoop()
     while not UIClosed do
         task.wait(0.1)
-        if Options.AutoShoot and Options.AutoShoot.Value then
-            local target = aimbotTarget
-            if target then
-                local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
-                if tool then
-                    pcall(function()
-                        tool:Activate()
-                        task.wait(0.05)
-                        tool:Deactivate()
-                    end)
+        if State.ESP.Enabled then
+            UpdateESP()
+        end
+        if State.ESP.Tracers then
+            UpdateTracers()
+        end
+    end
+end
+
+local FluentWindow
+local function CreateUI()
+    FluentWindow = Fluent:CreateWindow({
+        Title = "MurderDuels",
+        SubTitle = "FPS Exploit v3.0",
+        TabWidth = 160,
+        Size = UDim2.fromOffset(620, 480),
+        Acrylic = true,
+        Theme = "Dark",
+        MinimizeKey = Enum.KeyCode.RightControl,
+    })
+    WindowRef = FluentWindow
+    
+    local Tabs = {
+        ESP = FluentWindow:AddTab({ Title = "ESP", Icon = "eye" }),
+        Aim = FluentWindow:AddTab({ Title = "Aim", Icon = "crosshair" }),
+        Visual = FluentWindow:AddTab({ Title = "Visual", Icon = "circle" }),
+        Diagnostics = FluentWindow:AddTab({ Title = "Debug", Icon = "bug" }),
+    }
+    
+    Tabs.ESP:AddSection("ESP Geral")
+    
+    Tabs.ESP:AddToggle("ESPEnabled", {
+        Title = "ESP Ativado",
+        Default = false,
+    })
+    Fluent.Options.ESPEnabled:OnChanged(function(v)
+        State.ESP.Enabled = v
+        if not v then
+            for char in pairs(ESPObjects) do
+                RemoveESP(char)
+            end
+            for char in pairs(TracerObjects) do
+                RemoveTracer(char)
+            end
+        end
+    end)
+    
+    Tabs.ESP:AddToggle("ESPHighlight", {
+        Title = "Highlight",
+        Default = true,
+    })
+    Fluent.Options.ESPHighlight:OnChanged(function(v)
+        State.ESP.Highlight = v
+        for char in pairs(ESPObjects) do
+            RemoveESP(char)
+        end
+        if State.ESP.Enabled then
+            for _, char in pairs(GetCharacters()) do
+                if IsEnemy(char) then
+                    CreateESP(char)
                 end
             end
         end
-    end
-end
-
-local function knifeFlightLoop()
-    while not UIClosed do
-        task.wait(0.1)
-        if Options.KnifePrediction and Options.KnifePrediction.Value then
-            local target = aimbotTarget
-            if target and LocalPlayer.Character then
-                local headPos = getHeadPosition(target)
-                local myPos = LocalPlayer.Character:GetPivot().Position
-                local dist = getDistance(myPos, headPos)
-                local params = KnifeFlight.PARAMS
-                local speed = params.THROW_SPEED
-                local gravity = params.GRAVITY_FACTOR
-                local time = dist / speed
-                local predictedPos = headPos + Vector3.new(0, -workspace.Gravity * gravity * time * time * 0.5, 0)
-                local direction = (predictedPos - myPos).Unit
-                local state = KnifeFlight.newState(myPos, direction * speed, 1, false)
-                print("Knife prediction active - Distance:", dist)
-            end
-        end
-    end
-end
-
-Tabs.ESP:AddSection("ESP Geral")
-
-Tabs.ESP:AddToggle("ESPEnabled", {
-    Title = "ESP Ativado",
-    Default = false,
-})
-
-Options.ESPEnabled:OnChanged(function(v)
-    if v and not UIClosed then
-        for _, char in pairs(getCharacters()) do
-            if isEnemy(char) then
-                createESP(char)
-            end
-        end
-        task.spawn(ESPLoop)
-    else
-        for char, esp in pairs(ESP_Objects) do
-            pcall(function()
-                esp.highlight:Destroy()
-                esp.billboard:Destroy()
-            end)
-        end
-        ESP_Objects = {}
-    end
-end)
-
-Tabs.ESP:AddToggle("ESPBox", {
-    Title = "ESP Highlight",
-    Default = true,
-})
-
-Tabs.ESP:AddToggle("ESPDistance", {
-    Title = "ESP Distância",
-    Default = true,
-})
-
-Tabs.ESP:AddSection("ESP Lines")
-
-Tabs.ESP:AddToggle("ESPLines", {
-    Title = "Linhas (Tracers)",
-    Default = false,
-})
-
-Options.ESPLines:OnChanged(function(v)
-    if v and not UIClosed then
-        for _, char in pairs(getCharacters()) do
-            if isEnemy(char) then
-                createESPLine(char)
-            end
-        end
-        task.spawn(ESPLinesLoop)
-    else
-        for char, line in pairs(ESPLines) do
-            pcall(function() line:Destroy() end)
-        end
-        ESPLines = {}
-        local screenGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("ESP_Lines")
-        if screenGui then screenGui:Destroy() end
-    end
-end)
-
-Tabs.ESP:AddSection("Time / Equipe")
-
-Tabs.ESP:AddToggle("TeamCheck", {
-    Title = "Team Check",
-    Default = true,
-})
-
-Options.TeamCheck:OnChanged(function(v)
-    TeamCheckEnabled = v
-end)
-
-Tabs.Aimbot:AddSection("Configurações do Aimbot")
-
-Tabs.Aimbot:AddToggle("AimbotEnabled", {
-    Title = "Aimbot Ativado",
-    Default = false,
-})
-
-Options.AimbotEnabled:OnChanged(function(v)
-    aimbotEnabled = v
-    if v and not UIClosed then
-        if not aimController then
-            setupAimbot()
-        end
-        task.spawn(aimbotLoop)
-    elseif aimController then
-        aimController:disable()
-    end
-end)
-
-Tabs.Aimbot:AddToggle("SilentAim", {
-    Title = "Silent Aim",
-    Default = false,
-})
-
-Tabs.Aimbot:AddToggle("AimAssist", {
-    Title = "Aim Assist",
-    Default = true,
-})
-
-Tabs.Aimbot:AddSlider("AimStrength", {
-    Title = "Força da Mira",
-    Min = 0.1,
-    Max = 1,
-    Default = 0.5,
-    Rounding = 2,
-})
-
-Tabs.Aimbot:AddSlider("AimFOV", {
-    Title = "FOV do Aimbot",
-    Min = 50,
-    Max = 500,
-    Default = 200,
-    Rounding = 0,
-})
-
-Options.AimFOV:OnChanged(function(v)
-    fovRadius = v
-    if aimController then
-        aimController:setRange(v)
-        aimController:setFieldOfView(v)
-    end
-end)
-
-Tabs.FOV:AddSection("Círculo de FOV")
-
-Tabs.FOV:AddToggle("FOVCircleEnabled", {
-    Title = "Círculo de FOV",
-    Default = false,
-})
-
-Options.FOVCircleEnabled:OnChanged(function(v)
-    if v and not UIClosed then
-        createFOVCircle(fovRadius)
-    else
-        if fovCircle then
-            pcall(function() fovCircle:Destroy() end)
-            fovCircle = nil
-        end
-    end
-end)
-
-Tabs.FOV:AddSlider("FOVRadius", {
-    Title = "Raio do FOV",
-    Min = 30,
-    Max = 500,
-    Default = 200,
-    Rounding = 0,
-})
-
-Options.FOVRadius:OnChanged(function(v)
-    fovRadius = v
-    if Options.FOVCircleEnabled and Options.FOVCircleEnabled.Value and not UIClosed then
-        createFOVCircle(fovRadius)
-    end
-    if aimController then
-        aimController:setRange(v)
-        aimController:setFieldOfView(v)
-    end
-end)
-
-Tabs.FOV:AddSection("FOV da Câmera")
-
-Tabs.FOV:AddSlider("GameFOV", {
-    Title = "FOV da Câmera",
-    Min = 40,
-    Max = 120,
-    Default = 70,
-    Rounding = 0,
-})
-
-Options.GameFOV:OnChanged(function(v)
-    FOVController.SetBase(v)
-end)
-
-Tabs.Combat:AddSection("Combate Automático")
-
-Tabs.Combat:AddToggle("AutoShoot", {
-    Title = "Auto Shoot",
-    Default = false,
-})
-
-Options.AutoShoot:OnChanged(function(v)
-    if v then
-        task.spawn(autoShootLoop)
-    end
-end)
-
-Tabs.Combat:AddSection("Knife")
-
-Tabs.Combat:AddToggle("KnifePrediction", {
-    Title = "Knife Prediction",
-    Default = false,
-})
-
-Options.KnifePrediction:OnChanged(function(v)
-    if v then
-        task.spawn(knifeFlightLoop)
-    end
-end)
-
-Tabs.Combat:AddSection("Third Person")
-
-Tabs.Combat:AddButton({
-    Title = "Toggle Third Person",
-    Callback = function()
-        ThirdPerson.Toggle()
-        Fluent:Notify({
-            Title = "Third Person",
-            Content = "Toggled: " .. tostring(ThirdPerson.IsEnabled()),
-            Duration = 2,
-        })
-    end,
-})
-
-local function addCloseButton()
-    if not WindowRef then return end
-    local success, gui = pcall(function()
-        return WindowRef.Gui
     end)
+    
+    Tabs.ESP:AddToggle("ESPDistance", {
+        Title = "Distância",
+        Default = true,
+    })
+    Fluent.Options.ESPDistance:OnChanged(function(v)
+        State.ESP.Distance = v
+        for char in pairs(ESPObjects) do
+            RemoveESP(char)
+        end
+        if State.ESP.Enabled then
+            for _, char in pairs(GetCharacters()) do
+                if IsEnemy(char) then
+                    CreateESP(char)
+                end
+            end
+        end
+    end)
+    
+    Tabs.ESP:AddSection("ESP Lines")
+    
+    Tabs.ESP:AddToggle("ESPTracers", {
+        Title = "Tracers",
+        Default = false,
+    })
+    Fluent.Options.ESPTracers:OnChanged(function(v)
+        State.ESP.Tracers = v
+        if not v then
+            for char in pairs(TracerObjects) do
+                RemoveTracer(char)
+            end
+        end
+    end)
+    
+    Tabs.ESP:AddDropdown("TracerOrigin", {
+        Title = "Origem",
+        Values = {"Center", "BottomCenter", "Bottom"},
+        Default = 2,
+    })
+    Fluent.Options.TracerOrigin:OnChanged(function(v)
+        State.Visual.TracerOrigin = v
+    end)
+    
+    Tabs.ESP:AddSection("Filtros")
+    
+    Tabs.ESP:AddToggle("TeamCheck", {
+        Title = "Team Check",
+        Default = true,
+    })
+    Fluent.Options.TeamCheck:OnChanged(function(v)
+        State.ESP.TeamCheck = v
+    end)
+    
+    Tabs.Aim:AddSection("Aimbot")
+    
+    Tabs.Aim:AddToggle("AimbotEnabled", {
+        Title = "Aimbot Ativado",
+        Default = false,
+    })
+    Fluent.Options.AimbotEnabled:OnChanged(function(v)
+        State.Aim.Enabled = v
+        if v then
+            task.spawn(AimLoop)
+        end
+    end)
+    
+    Tabs.Aim:AddToggle("SilentAim", {
+        Title = "Silent Aim",
+        Default = false,
+    })
+    Fluent.Options.SilentAim:OnChanged(function(v)
+        State.Aim.Silent = v
+        if v then
+            State.Aim.Assist = false
+            Fluent.Options.AimAssist:SetValue(false)
+        end
+    end)
+    
+    Tabs.Aim:AddToggle("AimAssist", {
+        Title = "Aim Assist",
+        Default = false,
+    })
+    Fluent.Options.AimAssist:OnChanged(function(v)
+        State.Aim.Assist = v
+        if v then
+            State.Aim.Silent = false
+            Fluent.Options.SilentAim:SetValue(false)
+        end
+    end)
+    
+    Tabs.Aim:AddSlider("AimStrength", {
+        Title = "Força",
+        Min = 0.1,
+        Max = 1,
+        Default = 0.5,
+        Rounding = 2,
+    })
+    Fluent.Options.AimStrength:OnChanged(function(v)
+        State.Aim.Strength = v
+    end)
+    
+    Tabs.Aim:AddSlider("AimSmoothing", {
+        Title = "Suavidade",
+        Min = 0.1,
+        Max = 1,
+        Default = 0.35,
+        Rounding = 2,
+    })
+    Fluent.Options.AimSmoothing:OnChanged(function(v)
+        State.Aim.Smoothing = v
+    end)
+    
+    Tabs.Aim:AddSlider("AimFOV", {
+        Title = "FOV do Aimbot",
+        Min = 50,
+        Max = 500,
+        Default = 200,
+        Rounding = 0,
+    })
+    Fluent.Options.AimFOV:OnChanged(function(v)
+        State.Aim.Radius = v
+    end)
+    
+    Tabs.Aim:AddSection("Auto")
+    
+    Tabs.Aim:AddToggle("AutoShoot", {
+        Title = "Auto Shoot",
+        Default = false,
+    })
+    Fluent.Options.AutoShoot:OnChanged(function(v)
+        if v then
+            task.spawn(AutoShootLoop)
+        end
+    end)
+    
+    Tabs.Visual:AddSection("FOV Circle")
+    
+    Tabs.Visual:AddToggle("FOVCircle", {
+        Title = "Mostrar Círculo",
+        Default = false,
+    })
+    Fluent.Options.FOVCircle:OnChanged(function(v)
+        State.Visual.FOVCircle = v
+        UpdateFOVCircle()
+    end)
+    
+    Tabs.Visual:AddSlider("FOVRadius", {
+        Title = "Raio",
+        Min = 30,
+        Max = 500,
+        Default = 200,
+        Rounding = 0,
+    })
+    Fluent.Options.FOVRadius:OnChanged(function(v)
+        State.Visual.FOVRadius = v
+        UpdateFOVCircle()
+    end)
+    
+    Tabs.Visual:AddSection("Câmera")
+    
+    Tabs.Visual:AddSlider("CameraFOV", {
+        Title = "FOV da Câmera",
+        Min = 40,
+        Max = 120,
+        Default = 70,
+        Rounding = 0,
+    })
+    Fluent.Options.CameraFOV:OnChanged(function(v)
+        State.Visual.CameraFOV = v
+        FOVController.SetBase(v)
+    end)
+    
+    Tabs.Visual:AddButton({
+        Title = "Toggle Third Person",
+        Callback = function()
+            ThirdPerson.Toggle()
+        end,
+    })
+    
+    Tabs.Diagnostics:AddSection("Status")
+    
+    local targetLabel = Tabs.Diagnostics:AddLabel("Target: None")
+    local distanceLabel = Tabs.Diagnostics:AddLabel("Distance: --")
+    local angleLabel = Tabs.Diagnostics:AddLabel("Angle: --")
+    local visibleLabel = Tabs.Diagnostics:AddLabel("Visible: --")
+    local espCountLabel = Tabs.Diagnostics:AddLabel("ESP Objects: 0")
+    local tracerCountLabel = Tabs.Diagnostics:AddLabel("Tracers: 0")
+    
+    task.spawn(function()
+        while not UIClosed do
+            task.wait(0.5)
+            if TargetData.Current then
+                targetLabel:SetText("Target: " .. TargetData.Current.Name)
+                distanceLabel:SetText("Distance: " .. string.format("%.0f", TargetData.Distance))
+                angleLabel:SetText("Angle: " .. string.format("%.1f", TargetData.Angle))
+                visibleLabel:SetText("Visible: " .. tostring(TargetData.Visible))
+            else
+                targetLabel:SetText("Target: None")
+                distanceLabel:SetText("Distance: --")
+                angleLabel:SetText("Angle: --")
+                visibleLabel:SetText("Visible: --")
+            end
+            
+            local espCount = 0
+            for _ in pairs(ESPObjects) do espCount = espCount + 1 end
+            espCountLabel:SetText("ESP Objects: " .. espCount)
+            
+            local tracerCount = 0
+            for _ in pairs(TracerObjects) do tracerCount = tracerCount + 1 end
+            tracerCountLabel:SetText("Tracers: " .. tracerCount)
+        end
+    end)
+    
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 30, 0, 30)
+    closeBtn.Position = UDim2.new(1, -35, 0, 5)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    closeBtn.BackgroundTransparency = 0.3
+    closeBtn.Text = "✕"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.TextSize = 20
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.BorderSizePixel = 0
+    
+    local success, gui = pcall(function() return FluentWindow.Gui end)
     if success and gui then
-        local closeBtn = Instance.new("TextButton")
-        closeBtn.Name = "CloseButton"
-        closeBtn.Size = UDim2.new(0, 30, 0, 30)
-        closeBtn.Position = UDim2.new(1, -35, 0, 5)
-        closeBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-        closeBtn.BackgroundTransparency = 0.3
-        closeBtn.Text = "✕"
-        closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        closeBtn.TextSize = 20
-        closeBtn.Font = Enum.Font.GothamBold
-        closeBtn.BorderSizePixel = 0
         closeBtn.Parent = gui
-        closeBtn.MouseButton1Click:Connect(function()
-            CloseUI()
-        end)
-        closeBtn.MouseEnter:Connect(function()
-            closeBtn.BackgroundTransparency = 0
-        end)
-        closeBtn.MouseLeave:Connect(function()
-            closeBtn.BackgroundTransparency = 0.3
-        end)
+        closeBtn.MouseButton1Click:Connect(Cleanup)
+        closeBtn.MouseEnter:Connect(function() closeBtn.BackgroundTransparency = 0 end)
+        closeBtn.MouseLeave:Connect(function() closeBtn.BackgroundTransparency = 0.3 end)
     end
 end
 
-task.spawn(function()
-    task.wait(0.5)
-    addCloseButton()
+local function SetupConnections()
+    table.insert(Connections, RunService.RenderStepped:Connect(function()
+        if not UIClosed then
+            if State.ESP.Enabled then
+                UpdateESP()
+            end
+            if State.ESP.Tracers then
+                UpdateTracers()
+            end
+        end
+    end))
+    
+    table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        TargetData.Current = nil
+        TargetData.Position = nil
+    end))
+    
+    table.insert(Connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == Enum.KeyCode.RightControl then
+            if WindowRef and WindowRef.Visible then
+                if State.UI.Minimized then
+                    State.UI.Minimized = false
+                    WindowRef.Visible = true
+                else
+                    State.UI.Minimized = true
+                    WindowRef.Visible = false
+                end
+            end
+        end
+    end))
+end
+
+local function Init()
+    Cleanup()
+    UIClosed = false
+    CreateUI()
+    SetupConnections()
+    task.spawn(MainLoop)
+    
+    Fluent:Notify({
+        Title = "MurderDuels",
+        Content = "FPS Exploit v3.0 carregado!",
+        Duration = 4,
+    })
+end
+
+local function ToggleUI()
+    if WindowRef and WindowRef.Visible then
+        Cleanup()
+    else
+        Init()
+    end
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.RightControl then
+        ToggleUI()
+    end
 end)
 
-Fluent:Notify({
-    Title = "MurderDuels",
-    Content = "FPS Exploit carregado! (Baseado no código do jogo)",
-    Duration = 4,
-})
+Init()
