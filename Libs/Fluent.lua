@@ -217,7 +217,7 @@ local aa = {
             Window = nil,
             WindowFrame = nil,
             Unloaded = false,
-            Theme = "Crimson",
+            Theme = "CAT EMPIRE",
             FischBypass = (game and game.GameId == 5750914919) or false,
             DialogOpen = false,
             UseAcrylic = false,
@@ -4658,7 +4658,7 @@ local aa = {
                         l(
                         "TextButton",
                         {
-                            Size = UDim2.new(0, 34, 1, -8),
+                            Size = UDim2.new(0, 30, 1, -10),
                             AnchorPoint = Vector2.new(1, 0),
                             BackgroundTransparency = 1,
                             Parent = q,
@@ -4667,7 +4667,7 @@ local aa = {
                             ThemeTag = {BackgroundColor3 = "Text"}
                         },
                         {
-                            l("UICorner", {CornerRadius = UDim.new(0, 7)}),
+                            l("UICorner", {CornerRadius = UDim.new(0, 3)}),
                             l(
                                 "ImageLabel",
                                 {
@@ -4966,6 +4966,9 @@ local aa = {
                             {
                                 Title = "Yes",
                                 Callback = function()
+                                    local env = (getgenv and getgenv()) or _G
+                                    local hook = env and env.CAT_EMPIRE_CLEANUP
+                                    if hook then pcall(hook) end
                                     p:Destroy()
                                 end
                             },
@@ -9902,82 +9905,72 @@ local aa = {
 
         return af
     end,
-    [48] = function() --[[ Amethyst ]]
+    [48] = function() --[[ CAT_EMPIRE_THEME ]]
         b(48)
         return {
-            Name = "Deep Violet",
-            Accent = Color3.fromRGB(97, 62, 167),
-            AcrylicMain = Color3.fromRGB(20, 20, 20),
-            AcrylicBorder = Color3.fromRGB(110, 90, 130),
-            AcrylicGradient = ColorSequence.new(Color3.fromRGB(85, 57, 139), Color3.fromRGB(40, 25, 65)),
-            AcrylicNoise = 0.92,
-            TitleBarLine = Color3.fromRGB(95, 75, 110),
-            Tab = Color3.fromRGB(160, 140, 180),
-            Element = Color3.fromRGB(140, 120, 160),
-            ElementBorder = Color3.fromRGB(60, 50, 70),
-            InElementBorder = Color3.fromRGB(100, 90, 110),
-            ElementTransparency = 0.87,
-            ToggleSlider = Color3.fromRGB(140, 120, 160),
-            ToggleToggled = Color3.fromRGB(0, 0, 0),
-            SliderRail = Color3.fromRGB(140, 120, 160),
-            CheckboxUnchecked = Color3.fromRGB(140, 120, 160),
-            CheckboxChecked = Color3.fromRGB(97, 62, 167),
-            CheckboxCheck = Color3.fromRGB(0, 0, 0),
-            ProgressBarRail = Color3.fromRGB(140, 120, 160),
-            ProgressBarFill = Color3.fromRGB(97, 62, 167),
-            DropdownFrame = Color3.fromRGB(170, 160, 200),
-            DropdownHolder = Color3.fromRGB(60, 45, 80),
-            DropdownBorder = Color3.fromRGB(50, 40, 65),
-            DropdownOption = Color3.fromRGB(140, 120, 160),
-            Keybind = Color3.fromRGB(140, 120, 160),
-            Input = Color3.fromRGB(140, 120, 160),
-            InputFocused = Color3.fromRGB(20, 10, 30),
-            InputIndicator = Color3.fromRGB(170, 150, 190),
-            Dialog = Color3.fromRGB(60, 45, 80),
-            DialogHolder = Color3.fromRGB(45, 30, 65),
-            DialogHolderLine = Color3.fromRGB(40, 25, 60),
-            DialogButton = Color3.fromRGB(60, 45, 80),
-            DialogButtonBorder = Color3.fromRGB(95, 80, 110),
-            DialogBorder = Color3.fromRGB(85, 70, 100),
-            DialogInput = Color3.fromRGB(70, 55, 85),
-            DialogInputLine = Color3.fromRGB(175, 160, 190),
-            Text = Color3.fromRGB(240, 240, 240),
-            SubText = Color3.fromRGB(170, 170, 170),
-            Hover = Color3.fromRGB(140, 120, 160),
-            HoverChange = 0.04,
-            ShineEnabled = true,
-            Shine = {
-                Speed = 0.5,
-                RotationSpeed = 25,
-                ColorSequence = ColorSequence.new(
-                    {
-                        ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 25, 65)),
-                        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(160, 120, 220)),
-                        ColorSequenceKeypoint.new(1, Color3.fromRGB(40, 25, 65))
-                    }
-                ),
-            },
-            StrokeShine = true,
-            StrokeDark = Color3.fromRGB(110, 90, 130),
+            Name = "CAT EMPIRE",
+            Accent = Color3.fromRGB(151, 71, 255),
+            AcrylicMain = Color3.fromRGB(8, 8, 11),
+            AcrylicBorder = Color3.fromRGB(42, 35, 54),
+            AcrylicGradient = ColorSequence.new(Color3.fromRGB(15, 12, 20), Color3.fromRGB(7, 7, 9)),
+            AcrylicNoise = 1,
+            TitleBarLine = Color3.fromRGB(34, 30, 42),
+            Tab = Color3.fromRGB(28, 25, 34),
+            Element = Color3.fromRGB(20, 18, 25),
+            ElementBorder = Color3.fromRGB(38, 34, 45),
+            InElementBorder = Color3.fromRGB(50, 43, 61),
+            ElementTransparency = 0.08,
+            ToggleSlider = Color3.fromRGB(151, 71, 255),
+            ToggleToggled = Color3.fromRGB(7, 7, 9),
+            SliderRail = Color3.fromRGB(45, 39, 53),
+            CheckboxUnchecked = Color3.fromRGB(55, 49, 63),
+            CheckboxChecked = Color3.fromRGB(151, 71, 255),
+            CheckboxCheck = Color3.fromRGB(8, 8, 10),
+            ProgressBarRail = Color3.fromRGB(45, 39, 53),
+            ProgressBarFill = Color3.fromRGB(151, 71, 255),
+            DropdownFrame = Color3.fromRGB(18, 16, 22),
+            DropdownHolder = Color3.fromRGB(12, 11, 15),
+            DropdownBorder = Color3.fromRGB(43, 37, 52),
+            DropdownOption = Color3.fromRGB(25, 21, 31),
+            Keybind = Color3.fromRGB(23, 20, 28),
+            Input = Color3.fromRGB(18, 16, 22),
+            InputFocused = Color3.fromRGB(12, 10, 16),
+            InputIndicator = Color3.fromRGB(177, 119, 255),
+            Dialog = Color3.fromRGB(17, 15, 21),
+            DialogHolder = Color3.fromRGB(11, 10, 14),
+            DialogHolderLine = Color3.fromRGB(36, 31, 43),
+            DialogButton = Color3.fromRGB(24, 21, 29),
+            DialogButtonBorder = Color3.fromRGB(55, 45, 68),
+            DialogBorder = Color3.fromRGB(45, 38, 54),
+            DialogInput = Color3.fromRGB(21, 18, 26),
+            DialogInputLine = Color3.fromRGB(151, 71, 255),
+            Text = Color3.fromRGB(238, 237, 241),
+            SubText = Color3.fromRGB(130, 126, 139),
+            Hover = Color3.fromRGB(54, 42, 68),
+            HoverChange = 0.025,
+            ShineEnabled = false,
+            StrokeShine = false,
+            StrokeDark = Color3.fromRGB(42, 35, 54),
+            IconColor = Color3.fromRGB(184, 137, 255),
+            IconSize = 14,
             ButtonGradient = {
-                Background = ColorSequence.new(
-                    {
-                        ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 25, 65)),
-                        ColorSequenceKeypoint.new(1, Color3.fromRGB(160, 120, 220))
-                    }
-                ),
-                Stroke = ColorSequence.new(
-                    {
-                        ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 25, 65)),
-                        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(160, 120, 220)),
-                        ColorSequenceKeypoint.new(1, Color3.fromRGB(40, 25, 65))
-                    }
-                ),
+                Background = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0, Color3.fromRGB(104, 39, 190)),
+                    ColorSequenceKeypoint.new(1, Color3.fromRGB(151, 71, 255)),
+                }),
+                Stroke = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0, Color3.fromRGB(72, 43, 100)),
+                    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(151, 71, 255)),
+                    ColorSequenceKeypoint.new(1, Color3.fromRGB(72, 43, 100)),
+                }),
             },
-            Background = "rbxassetid://136310484943077",
-            BackgroundTransparency = 0.15,
+            ThemeAccentColors = {
+                Color3.fromRGB(151, 71, 255),
+                Color3.fromRGB(104, 39, 190),
+            },
         }
     end,
+
     [49] = function() --[[ Dark ]]
         b(49)
         return {
