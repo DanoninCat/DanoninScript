@@ -28,33 +28,17 @@ jobs:
           p = Path('Games/MurderDuel.lua')
           s = p.read_text(encoding='utf-8')
 
-          # Fix a forward-reference issue found during the new review.
-          anchor = '''    local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
-              local visualLeft = visualGrid:AddElement()
-              local visualRight = visualGrid:AddElement()
+          # Fix only the preview callback forward reference. Use tiny exact
+          # replacements so the restore aborts rather than drifting silently.
+          anchor = '    local visualRight = visualGrid:AddElement()\n'
+          if s.count(anchor) != 1:
+              raise SystemExit('visualRight anchor count != 1; refusing restore')
+          s = s.replace(anchor, anchor + '    local UpdatePreview\n', 1)
 
-              visualLeft:AddSection("Players ESP")
-          '''
-          replacement = '''    local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
-              local visualLeft = visualGrid:AddElement()
-              local visualRight = visualGrid:AddElement()
-              local UpdatePreview
-
-              visualLeft:AddSection("Players ESP")
-          '''
-          if anchor not in s:
-              raise SystemExit('Visual grid anchor missing; refusing partial restore.')
-          s = s.replace(anchor, replacement, 1)
-
-          old = '''    local function UpdatePreview()
-              pBox.BorderColor3 = ESP_COLORS.Box
-          '''
-          new = '''    UpdatePreview = function()
-              pBox.BorderColor3 = ESP_COLORS.Box
-          '''
-          if old not in s:
-              raise SystemExit('UpdatePreview block missing; refusing partial restore.')
-          s = s.replace(old, new, 1)
+          old = '    local function UpdatePreview()\n'
+          if s.count(old) != 1:
+              raise SystemExit('UpdatePreview declaration count != 1; refusing restore')
+          s = s.replace(old, '    UpdatePreview = function()\n', 1)
 
           p.write_text(s, encoding='utf-8')
           PY
@@ -68,20 +52,21 @@ jobs:
           s = Path('Games/MurderDuel.lua').read_text(encoding='utf-8')
 
           checks = {
-              'Box ESP': 'Box = true' in s and 'ESPBox' in s,
-              'Skeleton ESP': 'Skeleton = true' in s and 'ESPSkeleton' in s,
+              'Box ESP': 'Box = true' in s and 'ESPBox' in s and 'data.BoxStroke' in s,
+              'Skeleton ESP': 'Skeleton = true' in s and 'ESPSkeleton' in s and 'R15_BONES' in s and 'R6_BONES' in s,
               'Name ESP': 'Name = true' in s and 'ESPName' in s,
               'Distance ESP': 'Distance = true' in s and 'ESPDistance' in s,
               'Lines ESP': 'Lines = true' in s and 'ESPLines' in s,
               'No Highlight replacement': 'ESP_Highlight' not in s and 'Highlight = ' not in s,
-              'Top-screen line origin': 'GetLocalScreenOrigin' in s and 'camera.ViewportSize.X * 0.5' in s,
+              'Top-screen line origin': 'GetLocalScreenOrigin' in s and 'camera.ViewportSize.X * 0.5' in s and '        2\n' in s,
               'Head-top line anchor': 'GetESPHeadTopScreen' in s and 'head.Size.Y * 0.5' in s,
               'Thin ESP line': 'data.Line = NewLine("Line_" .. char.Name, gui, 1)' in s,
               'Thin FOV': 'outline.Thickness = 1' in s,
               'No legacy image FOV': 'rbxassetid://3570695787' not in s,
               'ESP color selects': 'BindESPColorSelect' in s and '"White", "Red", "Blue", "Purple", "Pink"' in s,
               'ESP preview': 'ESPPreview' in s,
-              'Mobile UI size': 'UISize' in s,
+              'No Health/Weapon regression': 'ESPHealth' not in s and 'ESPWeapon' not in s,
+              'Mobile UI size': 'UISize' in s and 'Min = 50' in s and 'Max = 110' in s,
           }
 
           failed = [name for name, ok in checks.items() if not ok]
@@ -103,22 +88,15 @@ jobs:
           new = Path('Games/MurderDuel.lua').read_text(encoding='utf-8').splitlines()
           diff = list(difflib.unified_diff(old, new, lineterm=''))
 
-          # Only the intentional UpdatePreview forward-declaration fix may differ
-          # from the known-good pre-overwrite visual build.
           added = [line[1:] for line in diff if line.startswith('+') and not line.startswith('+++')]
           removed = [line[1:] for line in diff if line.startswith('-') and not line.startswith('---')]
 
-          expected_added = {
-              '    local UpdatePreview',
-              '    UpdatePreview = function()',
-          }
-          expected_removed = {
-              '    local function UpdatePreview()',
-          }
+          expected_added = ['    local UpdatePreview', '    UpdatePreview = function()']
+          expected_removed = ['    local function UpdatePreview()']
 
-          if set(added) != expected_added or set(removed) != expected_removed:
+          if sorted(added) != sorted(expected_added) or sorted(removed) != sorted(expected_removed):
               print('\n'.join(diff[:200]))
-              raise SystemExit('Review pass 2 failed: unexpected drift from V11.')
+              raise SystemExit('Review pass 2 failed: unexpected drift from V11')
           print('Review pass 2: OK')
           PY
 
@@ -132,13 +110,12 @@ jobs:
           m = Path('Games/MurderDuel.lua').read_text(encoding='utf-8')
           f = Path('Libs/Fluent.lua').read_text(encoding='utf-8')
 
-          # Previous UI crash must stay fixed.
+          # The previous one-tab UI crash must remain fixed.
           assert f.count('local SetSidebarIconColor') == 1
           assert f.count('SetSidebarIconColor = function') == 1
           assert f.index('local SetSidebarIconColor') < f.index('function Window:_selectTab')
           assert f.index('SetSidebarIconColor = function') > f.index('function Window:_selectTab')
 
-          # API used by restored UI must exist in Fluent.
           for api in [
               'function Tab:AddGroup',
               'function Tab:AddToggle',
@@ -150,9 +127,15 @@ jobs:
           ]:
               assert api in f, api
 
-          # Catch the same forward-reference class in preview callbacks.
+          # Preview callbacks can now safely reference UpdatePreview.
           assert m.index('local UpdatePreview') < m.index('Fluent.Options.ESPBox:OnChanged')
           assert m.index('UpdatePreview = function') > m.index('Fluent.Options.ESPBox:OnChanged')
+
+          # No overwrite-era visual backend should survive this restore.
+          assert 'ESP_Highlight' not in m
+          assert 'local ESP = {}' not in m
+          assert 'local ESPLines = {}' not in m
+          assert 'Image = "rbxassetid://3570695787"' not in m
 
           print('Review pass 3: OK')
           PY
