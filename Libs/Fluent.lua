@@ -18,22 +18,22 @@ local Library = {
 }
 
 local C = {
-    Background = Color3.fromRGB(5, 5, 7),
-    Sidebar = Color3.fromRGB(8, 8, 10),
-    Content = Color3.fromRGB(7, 7, 9),
-    Section = Color3.fromRGB(10, 10, 12),
-    SectionCap = Color3.fromRGB(15, 15, 18),
-    Row = Color3.fromRGB(10, 10, 12),
-    RowHover = Color3.fromRGB(16, 16, 20),
-    Border = Color3.fromRGB(20, 20, 24),
-    BorderSoft = Color3.fromRGB(14, 14, 18),
-    Accent = Color3.fromRGB(255, 24, 116),
-    AccentDark = Color3.fromRGB(184, 18, 84),
-    AccentSoft = Color3.fromRGB(255, 62, 146),
-    Text = Color3.fromRGB(245, 245, 245),
-    Muted = Color3.fromRGB(155, 155, 165),
-    Muted2 = Color3.fromRGB(90, 90, 102),
-    Knob = Color3.fromRGB(250, 250, 250),
+    Background = Color3.fromRGB(5, 5, 8),
+    Sidebar = Color3.fromRGB(8, 8, 12),
+    Content = Color3.fromRGB(7, 7, 11),
+    Section = Color3.fromRGB(10, 10, 15),
+    SectionCap = Color3.fromRGB(15, 15, 23),
+    Row = Color3.fromRGB(10, 10, 15),
+    RowHover = Color3.fromRGB(17, 17, 26),
+    Border = Color3.fromRGB(24, 24, 36),
+    BorderSoft = Color3.fromRGB(16, 16, 25),
+    Accent = Color3.fromRGB(92, 72, 255),
+    AccentDark = Color3.fromRGB(65, 52, 210),
+    AccentSoft = Color3.fromRGB(126, 108, 255),
+    Text = Color3.fromRGB(245, 245, 248),
+    Muted = Color3.fromRGB(158, 158, 174),
+    Muted2 = Color3.fromRGB(92, 92, 112),
+    Knob = Color3.fromRGB(250, 250, 252),
 }
 
 local function create(className, props, parent)
@@ -266,20 +266,23 @@ function Window:_selectTab(tab)
         candidate.Indicator.Visible = false
         candidate.Button.BackgroundColor3 = active and C.Accent or C.Sidebar
         candidate.Button.BackgroundTransparency = active and 0 or 1
-        candidate.Button.TextColor3 = active and C.Text or C.Muted
         candidate.IconLabel.TextColor3 = active and C.Text or C.Muted
+
+        if candidate.TitleLabel then
+            candidate.TitleLabel.TextColor3 = active and C.Text or C.Muted
+        end
     end
 
     self.ActiveTab = tab
 end
 
 local ICONS = {
-    crosshair = "◉",
-    eye = "◌",
+    pc = "🖥",
+    eye = "👁",
     ["flask-conical"] = "◇",
     cloud = "◎",
-    vehicle = "◆",
     settings = "⚙",
+    paint = "🪣",
 }
 
 -- ============================================================
@@ -678,6 +681,174 @@ function Container:AddDropdown(id, config)
     return option
 end
 
+
+function Container:AddSelect(id, config)
+    config = config or {}
+
+    local values = config.Values or {}
+    local index = tonumber(config.Default) or 1
+    index = math.clamp(index, 1, math.max(#values, 1))
+
+    local initial = values[index] or ""
+    local row = makeRow(self, 36)
+
+    local iconLabel = text(
+        row,
+        config.Icon or "🪣",
+        14,
+        C.Accent,
+        Enum.Font.GothamBold,
+        Enum.TextXAlignment.Center
+    )
+    iconLabel.Position = UDim2.fromOffset(1, 0)
+    iconLabel.Size = UDim2.fromOffset(24, 36)
+
+    local titleLabel = text(
+        row,
+        config.Title or id,
+        10,
+        C.Text,
+        Enum.Font.Gotham
+    )
+    titleLabel.Position = UDim2.fromOffset(28, 0)
+    titleLabel.Size = UDim2.new(0.36, -28, 1, 0)
+
+    local valueBox = create("Frame", {
+        BackgroundColor3 = Color3.fromRGB(13, 13, 20),
+        BorderSizePixel = 0,
+        Position = UDim2.new(0.36, 0, 0, 4),
+        Size = UDim2.new(0.64, -6, 1, -8),
+        ZIndex = 10,
+    }, row)
+    corner(valueBox, 4)
+    stroke(valueBox, C.Border, 0.15, 1)
+
+    local swatch = create("Frame", {
+        BackgroundColor3 = C.Accent,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(7, 7),
+        Size = UDim2.fromOffset(10, 10),
+        ZIndex = 11,
+    }, valueBox)
+    corner(swatch, 3)
+
+    local valueLabel = text(
+        valueBox,
+        initial,
+        9,
+        C.Muted,
+        Enum.Font.Gotham
+    )
+    valueLabel.Position = UDim2.fromOffset(23, 0)
+    valueLabel.Size = UDim2.new(1, -46, 1, 0)
+    valueLabel.ZIndex = 11
+
+    local arrow = text(
+        valueBox,
+        "⌄",
+        11,
+        C.Muted2,
+        Enum.Font.Gotham,
+        Enum.TextXAlignment.Center
+    )
+    arrow.Position = UDim2.new(1, -22, 0, 0)
+    arrow.Size = UDim2.fromOffset(22, 28)
+    arrow.ZIndex = 11
+
+    local option = Option.new(id, initial)
+
+    local colorMap = config.ColorMap or {}
+
+    option._render = function(value)
+        valueLabel.Text = tostring(value)
+        swatch.BackgroundColor3 =
+            colorMap[value] or C.Accent
+    end
+    option._render(initial)
+
+    local hit = buttonBase(valueBox)
+    hit.Size = UDim2.fromScale(1, 1)
+    hit.ZIndex = 12
+
+    local popup = nil
+
+    local function closePopup()
+        if popup then
+            popup:Destroy()
+            popup = nil
+        end
+    end
+
+    self._window:_connect(hit.MouseButton1Click, function()
+        if popup then
+            closePopup()
+            return
+        end
+
+        if #values == 0 then
+            return
+        end
+
+        popup = create("Frame", {
+            Name = id .. "_SelectPopup",
+            BackgroundColor3 = Color3.fromRGB(10, 10, 16),
+            BorderSizePixel = 0,
+            Position = UDim2.fromOffset(
+                valueBox.AbsolutePosition.X,
+                valueBox.AbsolutePosition.Y + valueBox.AbsoluteSize.Y + 4
+            ),
+            Size = UDim2.fromOffset(
+                math.max(valueBox.AbsoluteSize.X, 120),
+                (#values * 28) + 8
+            ),
+            ZIndex = 5000,
+        }, self._window.Gui)
+        corner(popup, 5)
+        stroke(popup, C.Border, 0, 1)
+        padding(popup, 4, 4, 4, 4)
+        list(popup, 2, false)
+
+        for _, value in ipairs(values) do
+            local item = create("TextButton", {
+                BackgroundColor3 = Color3.fromRGB(13, 13, 20),
+                BorderSizePixel = 0,
+                Text = "",
+                AutoButtonColor = false,
+                Size = UDim2.new(1, 0, 0, 26),
+                ZIndex = 5001,
+            }, popup)
+            corner(item, 3)
+
+            local itemSwatch = create("Frame", {
+                BackgroundColor3 = colorMap[value] or C.Accent,
+                BorderSizePixel = 0,
+                Position = UDim2.fromOffset(7, 8),
+                Size = UDim2.fromOffset(10, 10),
+                ZIndex = 5002,
+            }, item)
+            corner(itemSwatch, 3)
+
+            local itemLabel = text(
+                item,
+                value,
+                10,
+                C.Text,
+                Enum.Font.Gotham
+            )
+            itemLabel.Position = UDim2.fromOffset(24, 0)
+            itemLabel.Size = UDim2.new(1, -28, 1, 0)
+            itemLabel.ZIndex = 5002
+
+            self._window:_connect(item.MouseButton1Click, function()
+                option:SetValue(value)
+                closePopup()
+            end)
+        end
+    end)
+
+    return option
+end
+
 function Container:AddButton(config)
     if type(config) == "string" then
         config = {Title = config}
@@ -911,6 +1082,10 @@ function Tab:AddDropdown(...)
     return self:_ensureDefault():AddDropdown(...)
 end
 
+function Tab:AddSelect(...)
+    return self:_ensureDefault():AddSelect(...)
+end
+
 function Tab:AddButton(...)
     return self:_ensureDefault():AddButton(...)
 end
@@ -941,11 +1116,7 @@ function Window:AddTab(config)
         BackgroundColor3 = C.Sidebar,
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Text = "      " .. titleValue,
-        TextColor3 = C.Muted,
-        TextSize = 14,
-        Font = Enum.Font.GothamMedium,
-        TextXAlignment = Enum.TextXAlignment.Left,
+        Text = "",
         AutoButtonColor = false,
         Size = UDim2.new(1, -10, 0, 36),
     }, self.SidebarList)
@@ -967,9 +1138,18 @@ function Window:AddTab(config)
         Enum.Font.GothamBold,
         Enum.TextXAlignment.Center
     )
+    iconLabel.Position = UDim2.fromOffset(8, 0)
+    iconLabel.Size = UDim2.fromOffset(26, 36)
 
-    iconLabel.Position = UDim2.fromOffset(10, 0)
-    iconLabel.Size = UDim2.fromOffset(22, 36)
+    local titleLabel = text(
+        sidebarButton,
+        titleValue,
+        13,
+        C.Muted,
+        Enum.Font.GothamMedium
+    )
+    titleLabel.Position = UDim2.fromOffset(40, 0)
+    titleLabel.Size = UDim2.new(1, -46, 1, 0)
 
     local page = create("Frame", {
         BackgroundTransparency = 1,
@@ -1014,6 +1194,7 @@ function Window:AddTab(config)
     tab.Button = sidebarButton
     tab.Indicator = indicator
     tab.IconLabel = iconLabel
+    tab.TitleLabel = titleLabel
     tab.Page = page
     tab.Body = body
 

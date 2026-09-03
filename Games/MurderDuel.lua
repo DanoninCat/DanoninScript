@@ -27,12 +27,10 @@ local PURPLE = Color3.fromRGB(121, 131, 207)
 
 local State = {
     ESP = {
-        Enabled = false,
+        Enabled = true,
         Box = true,
         Skeleton = true,
         Name = true,
-        HealthBar = true,
-        WeaponName = true,
         Distance = true,
         Lines = true,
         TeamCheck = true,
@@ -226,47 +224,6 @@ local function GetESPDisplayName(char)
     return char and char.Name or "NPC"
 end
 
-local function GetWeaponDisplayName(char)
-    if not char then
-        return "Unarmed"
-    end
-
-    local tool = char:FindFirstChildOfClass("Tool")
-    if tool then
-        return tool.Name
-    end
-
-    for _, attributeName in ipairs({
-        "WeaponName",
-        "CurrentWeapon",
-        "Weapon",
-    }) do
-        local value = char:GetAttribute(attributeName)
-        if value ~= nil and tostring(value) ~= "" then
-            return tostring(value)
-        end
-    end
-
-    for _, valueName in ipairs({
-        "WeaponName",
-        "CurrentWeapon",
-        "Weapon",
-    }) do
-        local valueObject = char:FindFirstChild(
-            valueName,
-            true
-        )
-        if valueObject
-            and valueObject:IsA("StringValue")
-            and valueObject.Value ~= ""
-        then
-            return valueObject.Value
-        end
-    end
-
-    return "Unarmed"
-end
-
 local function GetHumanoid(char)
     if not char then return nil end
     return char:FindFirstChildOfClass("Humanoid")
@@ -359,7 +316,6 @@ local ESP_COLORS = {
     Skeleton = ESP_ACCENT,
     Lines = ESP_ACCENT,
     Name = ESP_WHITE,
-    Weapon = ESP_WHITE,
     Distance = ESP_WHITE,
 }
 
@@ -677,18 +633,7 @@ local function CreateESPData(char)
     data.BoxStroke.Transparency = 0
     data.BoxStroke.Parent = data.Box
 
-    data.HealthBack = NewESPFrame("HealthBack_" .. char.Name, gui)
-    data.HealthBack.BackgroundTransparency = 0
-    data.HealthBack.BackgroundColor3 = ESP_BLACK
-    data.HealthBack.ZIndex = 9
-
-    data.Health = NewESPFrame("Health_" .. char.Name, gui)
-    data.Health.BackgroundTransparency = 0
-    data.Health.BackgroundColor3 = Color3.fromRGB(0, 255, 12)
-    data.Health.ZIndex = 10
-
     data.Name = NewESPLabel("Name_" .. char.Name, gui)
-    data.Weapon = NewESPLabel("Weapon_" .. char.Name, gui)
     data.Distance = NewESPLabel("Distance_" .. char.Name, gui)
     data.Line = NewLine("Line_" .. char.Name, gui, 2)
 
@@ -709,8 +654,7 @@ local function HideESPData(data)
     if not data then return end
 
     for _, key in ipairs({
-        "BoxOutline", "Box", "HealthBack", "Health",
-        "Name", "Weapon", "Distance", "Line"
+        "BoxOutline", "Box", "Name", "Distance", "Line"
     }) do
         local object = data[key]
         if object then
@@ -728,8 +672,7 @@ local function RemoveESP(char)
     if not data then return end
 
     for _, key in ipairs({
-        "BoxOutline", "Box", "HealthBack", "Health",
-        "Name", "Weapon", "Distance", "Line"
+        "BoxOutline", "Box", "Name", "Distance", "Line"
     }) do
         local object = data[key]
         if object then
@@ -839,7 +782,6 @@ local function UpdatePlayerESP(char, data, myRoot)
         data.BoxStroke.Color = ESP_COLORS.Box
     end
     data.Name.TextColor3 = ESP_COLORS.Name
-    data.Weapon.TextColor3 = ESP_COLORS.Weapon
     data.Distance.TextColor3 = ESP_COLORS.Distance
 
     if State.ESP.Box then
@@ -857,32 +799,6 @@ local function UpdatePlayerESP(char, data, myRoot)
 
     local bottomPadding = State.ESP.Box and 5 or 2
 
-    if State.ESP.HealthBar then
-        local maxHealth = math.max(humanoid.MaxHealth, 1)
-        local ratio = math.clamp(humanoid.Health / maxHealth, 0, 1)
-        local healthColor
-
-        if humanoid.Health <= 0 then
-            healthColor = Color3.fromRGB(255, 0, 0)
-        elseif humanoid.Health <= maxHealth / 2 then
-            healthColor = Color3.fromRGB(255, 255, 0)
-        else
-            healthColor = Color3.fromRGB(0, 255, 12)
-        end
-
-        data.HealthBack.Position = UDim2.fromOffset(x - 8, y - 1)
-        data.HealthBack.Size = UDim2.fromOffset(4, height + 2)
-        data.HealthBack.Visible = true
-
-        data.Health.Position = UDim2.fromOffset(x - 7, y + height * (1 - ratio))
-        data.Health.Size = UDim2.fromOffset(2, height * ratio)
-        data.Health.BackgroundColor3 = healthColor
-        data.Health.Visible = true
-    else
-        data.HealthBack.Visible = false
-        data.Health.Visible = false
-    end
-
     local labelY = y + height + bottomPadding
 
     if State.ESP.Name then
@@ -893,16 +809,6 @@ local function UpdatePlayerESP(char, data, myRoot)
         labelY += 14
     else
         data.Name.Visible = false
-    end
-
-    if State.ESP.WeaponName then
-        data.Weapon.Text = GetWeaponDisplayName(char)
-        data.Weapon.Position = UDim2.fromOffset(x - 35, labelY)
-        data.Weapon.Size = UDim2.fromOffset(width + 70, 14)
-        data.Weapon.Visible = true
-        labelY += 14
-    else
-        data.Weapon.Visible = false
     end
 
     if State.ESP.Distance then
@@ -1202,7 +1108,7 @@ local function CreateUI()
     local Tabs = {
         Combat = Window:AddTab({
             Title = "Aimbot",
-            Icon = "crosshair",
+            Icon = "pc",
             SubTabs = {"Aimbot", "Silent"},
         }),
         Visuals = Window:AddTab({
@@ -1312,12 +1218,6 @@ local function CreateUI()
         end
     end)
 
-    combatRight:AddSection("Combat Status")
-    combatRight:AddParagraph({
-        Title = "State",
-        Content = "Aim state and target data are shown in Settings > Diagnostics.",
-    })
-
     combatRight:AddSection("Target Filters")
 
     combatRight:AddToggle("CombatTeamCheck", {
@@ -1339,47 +1239,6 @@ local function CreateUI()
     local visualRight = visualGrid:AddElement()
 
     visualLeft:AddSection("Players ESP")
-
-    visualLeft:AddToggle("ESPEnabled", {
-        Title = "Toggle",
-        Default = false,
-    })
-    Fluent.Options.ESPEnabled:OnChanged(function(value)
-        State.ESP.Enabled = value
-
-        if value then
-            -- Restore the old one-click behavior:
-            -- enabling the master toggle enables every player ESP layer.
-            local allOptions = {
-                {"ESPBox", "Box"},
-                {"ESPSkeleton", "Skeleton"},
-                {"ESPHealth", "HealthBar"},
-                {"ESPName", "Name"},
-                {"ESPWeapon", "WeaponName"},
-                {"ESPDistance", "Distance"},
-                {"ESPLines", "Lines"},
-            }
-
-            for _, entry in ipairs(allOptions) do
-                local optionId = entry[1]
-                local stateKey = entry[2]
-
-                State.ESP[stateKey] = true
-
-                local option = Fluent.Options[optionId]
-                if option and option.Value ~= true then
-                    option:SetValue(true)
-                end
-            end
-
-            UpdateESP()
-            UpdatePreview()
-        else
-            for _, data in pairs(ESPObjects) do
-                HideESPData(data)
-            end
-        end
-    end)
 
     visualLeft:AddSlider("ESPRenderDistance", {
         Title = "Rendering Distance",
@@ -1407,23 +1266,9 @@ local function CreateUI()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("ESPHealth", {Title = "Health Bar", Default = true})
-    Fluent.Options.ESPHealth:OnChanged(function(value)
-        State.ESP.HealthBar = value
-        UpdateESP()
-        UpdatePreview()
-    end)
-
     visualLeft:AddToggle("ESPName", {Title = "Name", Default = true})
     Fluent.Options.ESPName:OnChanged(function(value)
         State.ESP.Name = value
-        UpdateESP()
-        UpdatePreview()
-    end)
-
-    visualLeft:AddToggle("ESPWeapon", {Title = "Weapon Name", Default = true})
-    Fluent.Options.ESPWeapon:OnChanged(function(value)
-        State.ESP.WeaponName = value
         UpdateESP()
         UpdatePreview()
     end)
@@ -1489,20 +1334,6 @@ local function CreateUI()
     pBox.Size = UDim2.fromOffset(92, 154)
     pBox.Parent = preview
 
-    local pHealthBack = Instance.new("Frame")
-    pHealthBack.BackgroundColor3 = Color3.new(0, 0, 0)
-    pHealthBack.BorderSizePixel = 0
-    pHealthBack.Position = UDim2.new(0.5, -54, 0, 24)
-    pHealthBack.Size = UDim2.fromOffset(4, 156)
-    pHealthBack.Parent = preview
-
-    local pHealth = Instance.new("Frame")
-    pHealth.BackgroundColor3 = Color3.fromRGB(0, 255, 12)
-    pHealth.BorderSizePixel = 0
-    pHealth.Position = UDim2.new(0.5, -53, 0, 54)
-    pHealth.Size = UDim2.fromOffset(2, 125)
-    pHealth.Parent = preview
-
     local pName = Instance.new("TextLabel")
     pName.BackgroundTransparency = 1
     pName.Text = "username"
@@ -1518,11 +1349,6 @@ local function CreateUI()
     pDistance.Text = "0 studs"
     pDistance.Position = UDim2.new(0.5, -70, 0, 204)
     pDistance.Parent = preview
-
-    local pWeapon = pName:Clone()
-    pWeapon.Text = "Unarmed"
-    pWeapon.Position = UDim2.new(0.5, -70, 0, 218)
-    pWeapon.Parent = preview
 
     local previewSkeleton = {}
     local skeletonPoints = {
@@ -1555,17 +1381,13 @@ local function CreateUI()
     local function UpdatePreview()
         pBox.BorderColor3 = ESP_COLORS.Box
         pName.TextColor3 = ESP_COLORS.Name
-        pWeapon.TextColor3 = ESP_COLORS.Weapon
         pDistance.TextColor3 = ESP_COLORS.Distance
         pLine.BackgroundColor3 = ESP_COLORS.Lines
 
         pBoxOutline.Visible = State.ESP.Box
         pBox.Visible = State.ESP.Box
-        pHealthBack.Visible = State.ESP.HealthBar
-        pHealth.Visible = State.ESP.HealthBar
         pName.Visible = State.ESP.Name
         pDistance.Visible = State.ESP.Distance
-        pWeapon.Visible = State.ESP.WeaponName
 
         if State.ESP.Lines then
             local a = Vector2.new(
@@ -1614,8 +1436,8 @@ local function CreateUI()
     end
 
     for _, optionName in ipairs({
-        "ESPBox", "ESPSkeleton", "ESPHealth",
-        "ESPName", "ESPWeapon", "ESPDistance", "ESPLines"
+        "ESPBox", "ESPSkeleton",
+        "ESPName", "ESPDistance", "ESPLines"
     }) do
         Fluent.Options[optionName]:OnChanged(UpdatePreview)
     end
@@ -1623,76 +1445,46 @@ local function CreateUI()
     visualRight:AddSection("ESP Colors")
 
     local colorPresets = {
-        Indigo = Color3.fromRGB(78, 91, 222),
         White = Color3.fromRGB(245, 245, 247),
-        Red = Color3.fromRGB(230, 70, 80),
-        Green = Color3.fromRGB(70, 220, 120),
-        Blue = Color3.fromRGB(25, 120, 245),
-        Yellow = Color3.fromRGB(245, 210, 70),
+        Red = Color3.fromRGB(235, 65, 75),
+        Blue = Color3.fromRGB(35, 125, 255),
+        Purple = Color3.fromRGB(118, 78, 255),
+        Pink = Color3.fromRGB(255, 65, 150),
     }
 
     local colorNames = {
-        "Indigo", "White", "Red",
-        "Green", "Blue", "Yellow",
+        "White", "Red", "Blue", "Purple", "Pink",
     }
 
-    local function BindESPColorOption(
+    local function BindESPColorSelect(
         id,
         title,
         key,
         defaultIndex
     )
-        visualRight:AddDropdown(id, {
+        visualRight:AddSelect(id, {
             Title = title,
+            Icon = "🪣",
             Values = colorNames,
+            ColorMap = colorPresets,
             Default = defaultIndex,
         })
 
         Fluent.Options[id]:OnChanged(function(value)
             ESP_COLORS[key] =
                 colorPresets[value]
-                or colorPresets.Indigo
+                or colorPresets.Purple
             UpdateESP()
             UpdatePreview()
         end)
     end
 
-    BindESPColorOption(
-        "BoxColor",
-        "Box Color",
-        "Box",
-        1
-    )
-    BindESPColorOption(
-        "SkeletonColor",
-        "Skeleton Color",
-        "Skeleton",
-        1
-    )
-    BindESPColorOption(
-        "LineColor",
-        "Lines Color",
-        "Lines",
-        1
-    )
-    BindESPColorOption(
-        "NameColor",
-        "Name Color",
-        "Name",
-        2
-    )
-    BindESPColorOption(
-        "WeaponColor",
-        "Weapon Color",
-        "Weapon",
-        2
-    )
-    BindESPColorOption(
-        "DistanceColor",
-        "Distance Color",
-        "Distance",
-        2
-    )
+    BindESPColorSelect("BoxColor", "Box", "Box", 4)
+    BindESPColorSelect("SkeletonColor", "Skeleton", "Skeleton", 4)
+    BindESPColorSelect("LineColor", "Lines", "Lines", 4)
+    BindESPColorSelect("NameColor", "Name", "Name", 1)
+    BindESPColorSelect("DistanceColor", "Distance", "Distance", 1)
+
 
 
     visualRight:AddSection("Camera / FOV")
@@ -1745,13 +1537,10 @@ local function CreateUI()
     playersRight:AddSection("Information")
     local nearestNameLabel = playersRight:AddLabel("Name: --")
     local nearestDistanceLabel = playersRight:AddLabel("Distance: --")
-    local nearestHealthLabel = playersRight:AddLabel("Health: --")
-    local nearestWeaponLabel = playersRight:AddLabel("Weapon: --")
 
     -- CONFIG
-    local configGrid = Tabs.Config:AddGroup({Columns = 2, Gap = 8})
+    local configGrid = Tabs.Config:AddGroup({Columns = 1, Gap = 8})
     local configLeft = configGrid:AddElement()
-    local configRight = configGrid:AddElement()
 
     configLeft:AddSection("Interface")
 
@@ -1787,59 +1576,9 @@ local function CreateUI()
         end,
     })
 
-    configRight:AddSection("Diagnostics")
-
-    local targetLabel = configRight:AddLabel("Target: None")
-    local distanceLabel = configRight:AddLabel("Distance: --")
-    local visibleLabel = configRight:AddLabel("Visible: --")
-    local aimEnabledLabel = configRight:AddLabel("Aim: OFF")
-    local aimModeLabel = configRight:AddLabel("Mode: None")
-    local espCountLabel = configRight:AddLabel("ESP Objects: 0")
-    local lineCountLabel = configRight:AddLabel("ESP Lines: 0")
-
     task.spawn(function()
         while not UIClosed do
             task.wait(0.5)
-
-            aimEnabledLabel:SetText(
-                "Aim: " .. (State.Aim.Enabled and "ON" or "OFF")
-            )
-
-            local modeName = "None"
-            if State.Aim.Silent then
-                modeName = "Silent"
-            elseif State.Aim.Assist then
-                modeName = "Assist"
-            end
-            aimModeLabel:SetText("Mode: " .. modeName)
-
-            if TargetData.Current then
-                targetLabel:SetText("Target: " .. TargetData.Current.Name)
-                distanceLabel:SetText(
-                    "Distance: " .. string.format("%.0f", TargetData.Distance)
-                )
-                visibleLabel:SetText("Visible: " .. tostring(TargetData.Visible))
-            else
-                targetLabel:SetText("Target: None")
-                distanceLabel:SetText("Distance: --")
-                visibleLabel:SetText("Visible: --")
-            end
-
-            local espCount = 0
-            for _ in pairs(ESPObjects) do
-                espCount += 1
-            end
-
-            local lineCount = 0
-            for _, data in pairs(ESPObjects) do
-                if data.Line and data.Line.Visible then
-                    lineCount += 1
-                end
-            end
-
-            espCountLabel:SetText("ESP Objects: " .. espCount)
-            lineCountLabel:SetText("ESP Lines: " .. lineCount)
-
 
             -- Source-inspired players list sorted by distance.
             local localRoot = GetTargetPart(LocalPlayer.Character)
@@ -1858,7 +1597,6 @@ local function CreateUI()
                                     localRoot.Position,
                                     root.Position
                                 ),
-                                Health = humanoid.Health,
                             })
                         end
                     end
@@ -1898,24 +1636,9 @@ local function CreateUI()
                         math.floor(nearest.Distance + 0.5)
                     )
                 )
-                nearestHealthLabel:SetText(
-                    "Health: " .. string.format(
-                        "%.0f",
-                        nearest.Health
-                    )
-                )
-
-                local tool = nearest.Character:FindFirstChildOfClass("Tool")
-                nearestWeaponLabel:SetText(
-                    "Weapon: " .. (
-                        tool and tool.Name or "Unarmed"
-                    )
-                )
             else
                 nearestNameLabel:SetText("Name: --")
                 nearestDistanceLabel:SetText("Distance: --")
-                nearestHealthLabel:SetText("Health: --")
-                nearestWeaponLabel:SetText("Weapon: --")
             end
         end
     end)
