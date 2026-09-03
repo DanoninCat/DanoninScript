@@ -1010,18 +1010,34 @@ local function GetClosestTarget()
     return closest
 end
 
-local AimLoopRunning = false
+local CombatLoopRunning = false
 
-local function AimLoop()
-    if AimLoopRunning then return end
-    AimLoopRunning = true
+local function IsCombatTrackingEnabled()
+    return State.Aim.Enabled
+        or State.Aim.Silent
+        or State.Aim.Assist
+end
+
+local function ResetTargetData()
+    TargetData.Current = nil
+    TargetData.Position = nil
+    TargetData.Distance = 0
+    TargetData.Angle = 0
+    TargetData.Visible = false
+end
+
+local function CombatTrackingLoop()
+    if CombatLoopRunning then
+        return
+    end
+
+    CombatLoopRunning = true
 
     while not UIClosed do
         RunService.RenderStepped:Wait()
 
-        if not State.Aim.Enabled then
-            TargetData.Current = nil
-            TargetData.Position = nil
+        if not IsCombatTrackingEnabled() then
+            ResetTargetData()
             break
         end
 
@@ -1038,48 +1054,39 @@ local function AimLoop()
             TargetData.Visible = onScreen
 
             if myRoot then
-                TargetData.Distance = GetDistance(myRoot.Position, targetPosition)
+                TargetData.Distance = GetDistance(
+                    myRoot.Position,
+                    targetPosition
+                )
+            else
+                TargetData.Distance = 0
             end
 
             if screenPos then
                 local mousePos = Vector2.new(Mouse.X, Mouse.Y)
                 TargetData.Angle = (
-                    Vector2.new(screenPos.X, screenPos.Y) - mousePos
+                    Vector2.new(screenPos.X, screenPos.Y)
+                    - mousePos
                 ).Magnitude
-            end
-
-            -- Mantém o comportamento que já existia no script.
-            local camera = GetCamera()
-
-            if State.Aim.Silent and camera then
-                local tool = myChar:FindFirstChildOfClass("Tool")
-                if tool then
-                    local direction = (targetPosition - camera.CFrame.Position).Unit
-                    camera.CFrame = CFrame.new(
-                        camera.CFrame.Position,
-                        camera.CFrame.Position + direction
-                    )
-                end
-            elseif State.Aim.Assist and screenPos and onScreen then
-                local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-                local targetScreen = Vector2.new(screenPos.X, screenPos.Y)
-                local diff = targetScreen - mousePos
-                local strength = State.Aim.Strength * State.Aim.Smoothing
-                local newMousePos = mousePos + diff * strength
-
-                pcall(function()
-                    Mouse.X = newMousePos.X
-                    Mouse.Y = newMousePos.Y
-                end)
+            else
+                TargetData.Angle = 0
             end
         else
-            TargetData.Current = nil
-            TargetData.Position = nil
-            TargetData.Visible = false
+            ResetTargetData()
         end
     end
 
-    AimLoopRunning = false
+    CombatLoopRunning = false
+end
+
+local function RefreshCombatTracking()
+    if IsCombatTrackingEnabled() then
+        if not CombatLoopRunning then
+            task.spawn(CombatTrackingLoop)
+        end
+    else
+        ResetTargetData()
+    end
 end
 
 -- ============================================================
@@ -1161,16 +1168,7 @@ local function CreateUI()
 
     Fluent.Options.AimbotEnabled:OnChanged(function(value)
         State.Aim.Enabled = value
-
-        if value then
-            task.spawn(AimLoop)
-        else
-            TargetData.Current = nil
-            TargetData.Position = nil
-            TargetData.Distance = 0
-            TargetData.Angle = 0
-            TargetData.Visible = false
-        end
+        RefreshCombatTracking()
     end)
 
     combatLeft:AddToggle("AimAssist", {
@@ -1180,11 +1178,7 @@ local function CreateUI()
 
     Fluent.Options.AimAssist:OnChanged(function(value)
         State.Aim.Assist = value
-
-        if value and Fluent.Options.SilentAim then
-            State.Aim.Silent = false
-            Fluent.Options.SilentAim:SetValue(false)
-        end
+        RefreshCombatTracking()
     end)
 
     combatLeft:AddSlider("AimFOV", {
@@ -1234,11 +1228,7 @@ local function CreateUI()
 
     Fluent.Options.SilentAim:OnChanged(function(value)
         State.Aim.Silent = value
-
-        if value and Fluent.Options.AimAssist then
-            State.Aim.Assist = false
-            Fluent.Options.AimAssist:SetValue(false)
-        end
+        RefreshCombatTracking()
     end)
 
     combatRight:AddSection("Target Filters")
