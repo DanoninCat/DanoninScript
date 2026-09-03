@@ -60,6 +60,7 @@ local Connections = {}
 
 local WindowRef = nil
 local UIClosed = false
+local IsCleaningUp = false
 
 local TargetData = {
     Current = nil,
@@ -110,6 +111,28 @@ local function GetCharacters()
     return result
 end
 
+local PlayerCache = {}
+
+local function RegisterCharacter(player, character)
+    if character then
+        PlayerCache[character] = player
+    end
+end
+
+local function UnregisterCharacter(character)
+    if character then
+        PlayerCache[character] = nil
+    end
+end
+
+local function UnregisterPlayer(player)
+    for character, cachedPlayer in pairs(PlayerCache) do
+        if cachedPlayer == player then
+            PlayerCache[character] = nil
+        end
+    end
+end
+
 local IsAlive
 
 local function GetPlayerFromCharacter(char)
@@ -117,20 +140,20 @@ local function GetPlayerFromCharacter(char)
         return nil
     end
 
+    local cached = PlayerCache[char]
+    if cached and cached.Parent == Players then
+        return cached
+    end
+
     -- Direct Roblox character match.
     for _, player in ipairs(Players:GetPlayers()) do
         if player.Character == char then
+            RegisterCharacter(player, char)
             return player
         end
     end
 
-    -- Some games mirror player characters under workspace.Characters.
-    local byName = Players:FindFirstChild(char.Name)
-    if byName and byName:IsA("Player") then
-        return byName
-    end
-
-    -- Attribute fallbacks for mirrored/custom character models.
+    -- Attribute fallbacks are stronger than a mirrored model name.
     local userId = char:GetAttribute("UserId")
         or char:GetAttribute("PlayerUserId")
         or char:GetAttribute("OwnerUserId")
@@ -138,9 +161,17 @@ local function GetPlayerFromCharacter(char)
     if userId ~= nil then
         for _, player in ipairs(Players:GetPlayers()) do
             if player.UserId == tonumber(userId) then
+                RegisterCharacter(player, char)
                 return player
             end
         end
+    end
+
+    -- Some games mirror player characters under workspace.Characters.
+    local byName = Players:FindFirstChild(char.Name)
+    if byName and byName:IsA("Player") then
+        RegisterCharacter(byName, char)
+        return byName
     end
 
     return nil
@@ -1093,27 +1124,40 @@ end
 -- CLEANUP
 -- ============================================================
 
-local function Cleanup(skipWindow)
-    UIClosed = true
-    DisconnectAll()
-
-    ClearESP()
-    DestroyNamedGui(ESP_GUI_NAME)
-    DestroyNamedGui("FOVCircle")
-    FOVGui = nil
-    FOVFrame = nil
-    FOVStroke = nil
-
-    TargetData.Current = nil
-    TargetData.Position = nil
-
-    if WindowRef and not skipWindow then
-        pcall(function()
-            WindowRef:Destroy()
-        end)
+local function Cleanup()
+    if IsCleaningUp then
+        return
     end
 
-    WindowRef = nil
+    IsCleaningUp = true
+
+    local ok, err = pcall(function()
+        UIClosed = true
+        DisconnectAll()
+        table.clear(PlayerCache)
+
+        ClearESP()
+        DestroyNamedGui(ESP_GUI_NAME)
+        DestroyNamedGui("FOVCircle")
+        FOVGui = nil
+        FOVFrame = nil
+        FOVStroke = nil
+
+        ResetTargetData()
+
+        if WindowRef then
+            pcall(function()
+                WindowRef:Destroy()
+            end)
+            WindowRef = nil
+        end
+    end)
+
+    IsCleaningUp = false
+
+    if not ok then
+        warn("[CAT_EMPIRE] Cleanup error:", err)
+    end
 end
 
 -- ============================================================
@@ -1673,9 +1717,14 @@ local function SetupConnections()
         task.defer(UpdateESP)
     end))
 
+    table.insert(Connections, Players.PlayerRemoving:Connect(function(player)
+        UnregisterPlayer(player)
+    end))
+
     local characters = workspace:FindFirstChild("Characters")
     if characters then
         table.insert(Connections, characters.ChildRemoved:Connect(function(child)
+            UnregisterCharacter(child)
             RemoveESP(child)
         end))
     end
@@ -1695,7 +1744,7 @@ local function Init()
     SetupConnections()
 
     env.CAT_EMPIRE_CLEANUP = function()
-        Cleanup(true)
+        Cleanup()
     end
 
     Fluent:Notify({
