@@ -635,7 +635,7 @@ local function CreateESPData(char)
 
     data.Name = NewESPLabel("Name_" .. char.Name, gui)
     data.Distance = NewESPLabel("Distance_" .. char.Name, gui)
-    data.Line = NewLine("Line_" .. char.Name, gui, 2)
+    data.Line = NewLine("Line_" .. char.Name, gui, 1)
 
     local maxBoneLines = math.max(#R15_BONES, #R6_BONES)
     for index = 1, maxBoneLines do
@@ -700,12 +700,31 @@ local function GetLocalScreenOrigin()
         return Vector2.new(0, 0)
     end
 
-    -- Stable tracer origin. Using the projected local avatar made all lines
-    -- fan out from the character and look detached/loose on third-person view.
+    -- Reference style: snapline originates at the top-center of the screen.
     return Vector2.new(
         camera.ViewportSize.X * 0.5,
-        camera.ViewportSize.Y - 1
+        2
     )
+end
+
+local function GetESPHeadTopScreen(char)
+    local head = char and char:FindFirstChild("Head")
+    if not head or not head:IsA("BasePart") then
+        return nil
+    end
+
+    local topWorld = head.Position + Vector3.new(
+        0,
+        head.Size.Y * 0.5,
+        0
+    )
+
+    local screenPos, visible = ProjectToScreen(topWorld)
+    if not screenPos or not visible then
+        return nil
+    end
+
+    return Vector2.new(screenPos.X, screenPos.Y)
 end
 
 local function UpdateSkeleton(char, data)
@@ -824,11 +843,15 @@ local function UpdatePlayerESP(char, data, myRoot)
     end
 
     if State.ESP.Lines then
+        local headAnchor =
+            GetESPHeadTopScreen(char)
+            or bounds.TopCenter
+
         SetLine(
             data.Line,
             GetLocalScreenOrigin(),
-            bounds.BottomCenter,
-            2,
+            headAnchor,
+            1,
             ESP_COLORS.Lines
         )
     else
@@ -1107,7 +1130,7 @@ local function CreateUI()
 
     local Tabs = {
         Combat = Window:AddTab({
-            Title = "Aimbot",
+            Title = "Combat",
             Icon = "pc",
             SubTabs = {"Aimbot", "Silent"},
         }),
@@ -1118,10 +1141,10 @@ local function CreateUI()
         }),
         Exploits = Window:AddTab({
             Title = "Misc",
-            Icon = "flask-conical",
+            Icon = "folder",
             SubTabs = {"Player", "Others", "Teleport"},
         }),
-        Cloud = Window:AddTab({Title = "Players", Icon = "cloud"}),
+        Cloud = Window:AddTab({Title = "Players", Icon = "players"}),
         Config = Window:AddTab({Title = "Settings", Icon = "settings"}),
     }
 

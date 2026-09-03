@@ -18,22 +18,22 @@ local Library = {
 }
 
 local C = {
-    Background = Color3.fromRGB(5, 5, 8),
-    Sidebar = Color3.fromRGB(8, 8, 12),
-    Content = Color3.fromRGB(7, 7, 11),
-    Section = Color3.fromRGB(10, 10, 15),
-    SectionCap = Color3.fromRGB(15, 15, 23),
-    Row = Color3.fromRGB(10, 10, 15),
-    RowHover = Color3.fromRGB(17, 17, 26),
-    Border = Color3.fromRGB(24, 24, 36),
-    BorderSoft = Color3.fromRGB(16, 16, 25),
+    Background = Color3.fromRGB(8, 8, 10),
+    Sidebar = Color3.fromRGB(9, 9, 12),
+    Content = Color3.fromRGB(8, 8, 11),
+    Section = Color3.fromRGB(12, 12, 16),
+    SectionCap = Color3.fromRGB(18, 18, 24),
+    Row = Color3.fromRGB(12, 12, 16),
+    RowHover = Color3.fromRGB(20, 20, 28),
+    Border = Color3.fromRGB(31, 31, 42),
+    BorderSoft = Color3.fromRGB(22, 22, 30),
     Accent = Color3.fromRGB(92, 72, 255),
-    AccentDark = Color3.fromRGB(65, 52, 210),
-    AccentSoft = Color3.fromRGB(126, 108, 255),
-    Text = Color3.fromRGB(245, 245, 248),
-    Muted = Color3.fromRGB(158, 158, 174),
-    Muted2 = Color3.fromRGB(92, 92, 112),
-    Knob = Color3.fromRGB(250, 250, 252),
+    AccentDark = Color3.fromRGB(67, 54, 214),
+    AccentSoft = Color3.fromRGB(126, 110, 255),
+    Text = Color3.fromRGB(255, 255, 255),
+    Muted = Color3.fromRGB(218, 218, 228),
+    Muted2 = Color3.fromRGB(158, 158, 176),
+    Knob = Color3.fromRGB(255, 255, 255),
 }
 
 local function create(className, props, parent)
@@ -266,7 +266,12 @@ function Window:_selectTab(tab)
         candidate.Indicator.Visible = false
         candidate.Button.BackgroundColor3 = active and C.Accent or C.Sidebar
         candidate.Button.BackgroundTransparency = active and 0 or 1
-        candidate.IconLabel.TextColor3 = active and C.Text or C.Muted
+        if candidate.IconHolder then
+            SetSidebarIconColor(
+                candidate.IconHolder,
+                active and C.Text or C.Muted
+            )
+        end
 
         if candidate.TitleLabel then
             candidate.TitleLabel.TextColor3 = active and C.Text or C.Muted
@@ -277,13 +282,93 @@ function Window:_selectTab(tab)
 end
 
 local ICONS = {
-    pc = "🖥",
-    eye = "👁",
-    ["flask-conical"] = "◇",
-    cloud = "◎",
-    settings = "⚙",
-    paint = "🪣",
+    pc = "pc",
+    eye = "eye",
+    folder = "folder",
+    players = "players",
+    settings = "settings",
+    paint = "paint",
 }
+
+local function DrawSidebarIcon(parent, iconName)
+    local holder = create("Frame", {
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1),
+    }, parent)
+
+    local function line(pos, size, radius)
+        local f = create("Frame", {
+            BackgroundColor3 = C.Muted,
+            BorderSizePixel = 0,
+            Position = pos,
+            Size = size,
+        }, holder)
+        if radius then corner(f, radius) end
+        return f
+    end
+
+    if iconName == "pc" then
+        local screen = create("Frame", {
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Position = UDim2.fromOffset(4, 6),
+            Size = UDim2.fromOffset(18, 13),
+        }, holder)
+        stroke(screen, C.Muted, 0, 1)
+        corner(screen, 2)
+        line(UDim2.fromOffset(12, 20), UDim2.fromOffset(2, 4), 1)
+        line(UDim2.fromOffset(8, 24), UDim2.fromOffset(10, 2), 1)
+    elseif iconName == "eye" then
+        local eye = create("Frame", {
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Position = UDim2.fromOffset(3, 8),
+            Size = UDim2.fromOffset(20, 11),
+        }, holder)
+        corner(eye, 8)
+        stroke(eye, C.Muted, 0, 1)
+        local pupil = line(UDim2.fromOffset(11, 11), UDim2.fromOffset(5, 5), 3)
+        pupil.BackgroundColor3 = C.Muted
+    elseif iconName == "folder" then
+        local tab = line(UDim2.fromOffset(4, 7), UDim2.fromOffset(9, 4), 2)
+        local body = line(UDim2.fromOffset(3, 10), UDim2.fromOffset(20, 12), 2)
+        tab.BackgroundColor3 = C.Muted
+        body.BackgroundColor3 = C.Muted
+    elseif iconName == "settings" then
+        local gear = text(
+            holder,
+            "⚙",
+            18,
+            C.Muted,
+            Enum.Font.GothamBold,
+            Enum.TextXAlignment.Center
+        )
+        gear.Size = UDim2.fromScale(1, 1)
+    elseif iconName == "players" then
+        local head = line(UDim2.fromOffset(10, 6), UDim2.fromOffset(7, 7), 4)
+        local body = line(UDim2.fromOffset(6, 15), UDim2.fromOffset(15, 8), 6)
+        head.BackgroundColor3 = C.Muted
+        body.BackgroundColor3 = C.Muted
+    else
+        local dot = line(UDim2.fromOffset(11, 11), UDim2.fromOffset(5, 5), 3)
+        dot.BackgroundColor3 = C.Muted
+    end
+
+    return holder
+end
+
+local function SetSidebarIconColor(iconHolder, color)
+    for _, obj in ipairs(iconHolder:GetDescendants()) do
+        if obj:IsA("Frame") and obj.BackgroundTransparency < 1 then
+            obj.BackgroundColor3 = color
+        elseif obj:IsA("UIStroke") then
+            obj.Color = color
+        elseif obj:IsA("TextLabel") then
+            obj.TextColor3 = color
+        end
+    end
+end
 
 -- ============================================================
 -- CONTAINER API
@@ -1130,16 +1215,17 @@ function Window:AddTab(config)
         Size = UDim2.fromOffset(0, 0),
     }, sidebarButton)
 
-    local iconLabel = text(
-        sidebarButton,
-        iconValue,
-        15,
-        C.Muted,
-        Enum.Font.GothamBold,
-        Enum.TextXAlignment.Center
+    local iconFrame = create("Frame", {
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(8, 4),
+        Size = UDim2.fromOffset(26, 28),
+    }, sidebarButton)
+
+    local iconHolder = DrawSidebarIcon(
+        iconFrame,
+        iconValue
     )
-    iconLabel.Position = UDim2.fromOffset(8, 0)
-    iconLabel.Size = UDim2.fromOffset(26, 36)
 
     local titleLabel = text(
         sidebarButton,
@@ -1193,7 +1279,7 @@ function Window:AddTab(config)
 
     tab.Button = sidebarButton
     tab.Indicator = indicator
-    tab.IconLabel = iconLabel
+    tab.IconHolder = iconHolder
     tab.TitleLabel = titleLabel
     tab.Page = page
     tab.Body = body
@@ -1249,6 +1335,52 @@ end
 -- ============================================================
 -- LIBRARY
 -- ============================================================
+
+
+local function ResolveCatEmpireLogo()
+    local assetFn =
+        rawget(getgenv and getgenv() or _G, "getcustomasset")
+        or rawget(getgenv and getgenv() or _G, "getsynasset")
+
+    local writeFn =
+        rawget(getgenv and getgenv() or _G, "writefile")
+
+    local isFileFn =
+        rawget(getgenv and getgenv() or _G, "isfile")
+
+    if type(assetFn) ~= "function"
+        or type(writeFn) ~= "function"
+    then
+        return nil
+    end
+
+    local fileName = "CAT_EMPIRE_sidebar_logo.jpg"
+    local url =
+        "https://raw.githubusercontent.com/" ..
+        "DanoninCat/DanoninScript/main/Assets/" ..
+        "CatEmpireLogo.jpg"
+
+    local ok = pcall(function()
+        local exists =
+            type(isFileFn) == "function"
+            and isFileFn(fileName)
+
+        if not exists then
+            writeFn(fileName, game:HttpGet(url))
+        end
+    end)
+
+    if not ok then
+        return nil
+    end
+
+    local okAsset, asset = pcall(assetFn, fileName)
+    if okAsset then
+        return asset
+    end
+
+    return nil
+end
 
 function Library:CreateWindow(config)
     config = config or {}
@@ -1361,25 +1493,28 @@ function Library:CreateWindow(config)
         Size = UDim2.new(1, -20, 0, 48),
     }, sidebar)
 
-    local logoCat = text(
-        logoWrap,
-        "CAT",
-        24,
-        C.Text,
-        Enum.Font.GothamBold
-    )
-    logoCat.Position = UDim2.fromOffset(0, 0)
-    logoCat.Size = UDim2.fromOffset(52, 28)
+    local logoAsset = ResolveCatEmpireLogo()
 
-    local logoEmpire = text(
-        logoWrap,
-        "EMPIRE",
-        20,
-        C.Accent,
-        Enum.Font.GothamBold
-    )
-    logoEmpire.Position = UDim2.fromOffset(45, 1)
-    logoEmpire.Size = UDim2.fromOffset(92, 28)
+    if logoAsset then
+        local logoImage = create("ImageLabel", {
+            Name = "CAT_EMPIRE_Logo",
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Image = logoAsset,
+            ScaleType = Enum.ScaleType.Fit,
+            Position = UDim2.fromOffset(0, -2),
+            Size = UDim2.new(1, 0, 0, 42),
+        }, logoWrap)
+    else
+        local fallback = text(
+            logoWrap,
+            "CAT EMPIRE",
+            19,
+            C.Text,
+            Enum.Font.GothamBold
+        )
+        fallback.Size = UDim2.new(1, 0, 0, 32)
+    end
 
     local menuLabel = text(
         sidebar,
@@ -1441,7 +1576,7 @@ function Library:CreateWindow(config)
     }, gui)
 
     corner(externalToggle, 8)
-    stroke(externalToggle, Color3.fromRGB(255, 92, 164), 0.15, 1)
+    stroke(externalToggle, C.AccentSoft, 0.15, 1)
 
     local window = setmetatable({
         Gui = gui,
