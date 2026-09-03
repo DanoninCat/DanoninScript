@@ -24,12 +24,17 @@ local CrosshairSettings = require(Shared:WaitForChild("CrosshairSettings"))
 local ShotPath = require(Util:WaitForChild("ShotPath"))
 local RayCast = require(Util:WaitForChild("RayCast"))
 
+local Fluent = loadstring(game:HttpGet(
+    "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Libs/Fluent.lua",
+    true
+))()
+
 -- ============================================================
 -- [STATE - DESACOPLADO POR FUNCIONALIDADE]
 -- ============================================================
 local STATE = {
     ESP = {
-        Enabled = false,
+        Enabled = true,
         Highlight = false,
         Distance = false,
         Tracers = false,
@@ -65,7 +70,6 @@ local STATE = {
         TracerOrigin = "BottomCenter",
     },
     Combat = {
-        AutoShoot = false,
         KnifePrediction = false,
         ShootCooldown = 0,
         LastShot = 0,
@@ -418,33 +422,6 @@ function Aimbot.Loop()
     end
 end
 
--- ============================================================
--- [AUTO SHOOT - INDEPENDENTE]
--- ============================================================
-local AutoShoot = {}
-
-function AutoShoot.Enabled()
-    return STATE.Combat.AutoShoot
-end
-
-function AutoShoot.Loop()
-    while STATE.Combat.AutoShoot and not STATE.UI.Closed do
-        if STATE.Aim.Enabled then
-            local target = STATE.Target.Current
-            if target and target.IsValid then
-                local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
-                if tool then
-                    pcall(function()
-                        tool:Activate()
-                        task.wait(0.05)
-                        tool:Deactivate()
-                    end)
-                end
-            end
-        end
-        task.wait(0.1)
-    end
-end
 
 -- ============================================================
 -- [KNIFE PREDICTION - INDEPENDENTE]
@@ -601,8 +578,9 @@ function ESPLines.Create(char)
     
     local line = Instance.new("Frame")
     line.Name = "Line_" .. char.Name
-    line.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    line.BackgroundTransparency = 0.5
+    line.AnchorPoint = Vector2.new(0.5, 0.5)
+    line.BackgroundColor3 = Color3.fromRGB(92, 72, 255)
+    line.BackgroundTransparency = 0.2
     line.BorderSizePixel = 0
     line.Parent = screenGui
     line.ZIndex = 999
@@ -634,32 +612,37 @@ function ESPLines.Update()
         local onScreen, screenPos = TargetProvider.IsOnScreen(headPos)
         
         if onScreen then
-            local originX, originY
-            if STATE.Visual.TracerOrigin == "BottomCenter" then
-                originX = Camera.ViewportSize.X / 2
-                originY = Camera.ViewportSize.Y - 50
-            elseif STATE.Visual.TracerOrigin == "Center" then
-                originX = Camera.ViewportSize.X / 2
-                originY = Camera.ViewportSize.Y / 2
-            else
-                originX = Camera.ViewportSize.X / 2
-                originY = Camera.ViewportSize.Y / 2
-            end
-            
-            local x1 = originX
-            local y1 = originY
-            local x2 = screenPos.X
-            local y2 = screenPos.Y
-            
-            local dx = x2 - x1
-            local dy = y2 - y1
-            local length = math.sqrt(dx * dx + dy * dy)
-            local angle = math.atan2(dy, dx)
-            
-            line.Size = UDim2.new(0, length, 0, 2)
-            line.Position = UDim2.new(0, x1, 0, y1 - 1)
-            line.Rotation = math.deg(angle)
-            line.Visible = true
+            local camera = workspace.CurrentCamera
+    if not camera then
+        line.Visible = false
+        continue
+    end
+
+    local origin = Vector2.new(
+        camera.ViewportSize.X * 0.5,
+        2
+    )
+    local target = Vector2.new(
+        screenPos.X,
+        screenPos.Y
+    )
+
+    local delta = target - origin
+    local length = delta.Magnitude
+    local midpoint = (origin + target) * 0.5
+
+    line.Position = UDim2.fromOffset(
+        midpoint.X,
+        midpoint.Y
+    )
+    line.Size = UDim2.fromOffset(
+        length,
+        1
+    )
+    line.Rotation = math.deg(
+        math.atan2(delta.Y, delta.X)
+    )
+    line.Visible = true
         else
             line.Visible = false
         end
@@ -711,7 +694,7 @@ function FOVCircle.Create(radius)
     outline.Position = UDim2.new(0, 0, 0, 0)
     outline.BackgroundTransparency = 1
     outline.Image = "rbxassetid://3570695787"
-    outline.ImageColor3 = Color3.fromRGB(0, 255, 255)
+    outline.ImageColor3 = Color3.fromRGB(92, 72, 255)
     outline.ImageTransparency = 0.3
     outline.Parent = frame
     
@@ -734,134 +717,92 @@ function FOVCircle.Update()
 end
 
 -- ============================================================
--- [MAIN LOOP - ÚNICO RENDER STEP]
+-- [MAIN LOOP - ONE HEARTBEAT = ONE UPDATE]
 -- ============================================================
 local function MainLoop()
-    while not STATE.UI.Closed do
-        TargetProvider.GetBestTarget()
-        
-        if STATE.ESP.Enabled then
-            ESP.Update()
-        end
-        
-        if STATE.ESP.Tracers then
-            ESPLines.Update()
-        end
-        
-        if STATE.Aim.Enabled and STATE.Aim.Assist then
-            CameraController.Update()
-        end
-        
-        task.wait()
+    if STATE.UI.Closed then
+        return
+    end
+
+    TargetProvider.GetBestTarget()
+
+    if STATE.ESP.Enabled then
+        ESP.Update()
+    end
+
+    if STATE.ESP.Tracers then
+        ESPLines.Update()
+    end
+
+    if STATE.Aim.Enabled and STATE.Aim.Assist then
+        CameraController.Update()
     end
 end
 
 -- ============================================================
--- [UI SETUP]
+-- [UI SETUP - CAT EMPIRE]
 -- ============================================================
-local FluentLib = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-
 local function SetupUI()
-    if STATE.UI.Closed then return end
+    if STATE.UI.Closed then
+        STATE.UI.Closed = false
+    end
+
     if STATE.UI.WindowRef then
-        pcall(function() STATE.UI.WindowRef:Destroy() end)
+        pcall(function()
+            STATE.UI.WindowRef:Destroy()
+        end)
         STATE.UI.WindowRef = nil
     end
-    
-    STATE.UI.WindowRef = FluentLib:CreateWindow({
-        Title = "MurderDuels",
-        SubTitle = "FPS Exploit v3.0",
-        TabWidth = 160,
-        Size = UDim2.fromOffset(620, 480),
-        Acrylic = true,
-        Theme = "Dark",
-        MinimizeKey = Enum.KeyCode.RightControl,
+
+    local Window = Fluent:CreateWindow({
+        ScreenGuiName = "CAT_EMPIRE",
+        Size = UDim2.fromOffset(760, 460),
+        MinimizeKey = Enum.KeyCode.LeftControl,
     })
-    
+
+    STATE.UI.WindowRef = Window
     STATE.UI.Visible = true
-    
+
     local Tabs = {
-        ESP = STATE.UI.WindowRef:AddTab({ Title = "ESP", Icon = "eye" }),
-        Aim = STATE.UI.WindowRef:AddTab({ Title = "Aim", Icon = "crosshair" }),
-        Visual = STATE.UI.WindowRef:AddTab({ Title = "Visual", Icon = "circle" }),
-        Combat = STATE.UI.WindowRef:AddTab({ Title = "Combat", Icon = "swords" }),
+        Combat = Window:AddTab({
+            Title = "Combat",
+            Icon = "pc",
+            SubTabs = {"Aimbot", "Silent"},
+        }),
+        Visuals = Window:AddTab({
+            Title = "Visuals",
+            Icon = "eye",
+        }),
+        Misc = Window:AddTab({
+            Title = "Misc",
+            Icon = "folder",
+        }),
+        Players = Window:AddTab({
+            Title = "Players",
+            Icon = "players",
+        }),
+        Settings = Window:AddTab({
+            Title = "Settings",
+            Icon = "settings",
+        }),
     }
-    local Options = FluentLib.Options
-    
-    -- ===== ESP TAB =====
-    Tabs.ESP:AddSection("ESP Geral")
-    
-    Tabs.ESP:AddToggle("ESP_Enabled", {
-        Title = "ESP Ativado",
-        Default = false,
+
+    local Options = Fluent.Options
+
+    local combatGrid = Tabs.Combat:AddGroup({Columns = 2, Gap = 10})
+    local combatLeft = combatGrid:AddElement()
+    local combatRight = combatGrid:AddElement()
+
+    combatLeft:AddSection("Aim")
+
+    combatLeft:AddToggle("AimEnabled", {
+        Title = "Aimbot",
+        Default = STATE.Aim.Enabled,
     })
-    Options.ESP_Enabled:OnChanged(function(v)
-        STATE.ESP.Enabled = v
-        if not v then ESP.Clear() end
-    end)
-    
-    Tabs.ESP:AddToggle("ESP_Highlight", {
-        Title = "Highlight",
-        Default = true,
-    })
-    Options.ESP_Highlight:OnChanged(function(v)
-        STATE.ESP.Highlight = v
-        if not v then
-            for char, esp in pairs(ESP_Objects) do
-                if esp.highlight then
-                    pcall(function() esp.highlight:Destroy() end)
-                    esp.highlight = nil
-                end
-            end
-        end
-    end)
-    
-    Tabs.ESP:AddToggle("ESP_Distance", {
-        Title = "Distância",
-        Default = true,
-    })
-    Options.ESP_Distance:OnChanged(function(v)
-        STATE.ESP.Distance = v
-        if not v then
-            for char, esp in pairs(ESP_Objects) do
-                if esp.billboard then
-                    pcall(function() esp.billboard:Destroy() end)
-                    esp.billboard = nil
-                    esp.label = nil
-                end
-            end
-        end
-    end)
-    
-    Tabs.ESP:AddToggle("ESP_Tracers", {
-        Title = "Tracers (Linhas)",
-        Default = false,
-    })
-    Options.ESP_Tracers:OnChanged(function(v)
-        STATE.ESP.Tracers = v
-        if not v then ESPLines.Clear() end
-    end)
-    
-    Tabs.ESP:AddSection("Filtros")
-    
-    Tabs.ESP:AddToggle("ESP_TeamCheck", {
-        Title = "Team Check",
-        Default = true,
-    })
-    Options.ESP_TeamCheck:OnChanged(function(v)
-        STATE.ESP.TeamCheck = v
-    end)
-    
-    -- ===== AIM TAB =====
-    Tabs.Aim:AddSection("Configurações de Mira")
-    
-    Tabs.Aim:AddToggle("Aim_Enabled", {
-        Title = "Aimbot Ativado",
-        Default = false,
-    })
-    Options.Aim_Enabled:OnChanged(function(v)
-        STATE.Aim.Enabled = v
-        if v then
+    Options.AimEnabled:OnChanged(function(value)
+        STATE.Aim.Enabled = value
+
+        if value then
             CameraController.Setup()
             if not STATE.Aim.Silent and not STATE.Aim.Assist then
                 STATE.Aim.Assist = true
@@ -869,212 +810,213 @@ local function SetupUI()
         else
             CameraController.Disable()
             STATE.Target.Current = nil
+            STATE.Target.Position = nil
+            STATE.Target.IsValid = false
         end
     end)
-    
-    Tabs.Aim:AddToggle("Aim_Silent", {
-        Title = "Silent Aim",
-        Default = false,
-    })
-    Options.Aim_Silent:OnChanged(function(v)
-        STATE.Aim.Silent = v
-        if v then
-            STATE.Aim.Assist = false
-        end
-    end)
-    
-    Tabs.Aim:AddToggle("Aim_Assist", {
+
+    combatLeft:AddToggle("AimAssist", {
         Title = "Aim Assist",
-        Default = true,
+        Default = STATE.Aim.Assist,
     })
-    Options.Aim_Assist:OnChanged(function(v)
-        STATE.Aim.Assist = v
-        if v then
+    Options.AimAssist:OnChanged(function(value)
+        STATE.Aim.Assist = value
+        if value then
             STATE.Aim.Silent = false
         end
     end)
-    
-    Tabs.Aim:AddSlider("Aim_Strength", {
-        Title = "Força da Mira",
+
+    combatLeft:AddSlider("AimStrength", {
+        Title = "Aim Strength",
         Min = 0.1,
         Max = 1,
-        Default = 0.5,
+        Default = STATE.Aim.Strength,
         Rounding = 2,
     })
-    Options.Aim_Strength:OnChanged(function(v)
-        STATE.Aim.Strength = v
+    Options.AimStrength:OnChanged(function(value)
+        STATE.Aim.Strength = value
+
         if STATE.Camera.Controller then
-            STATE.Camera.Controller:setMethodStrength(AimAssistEnum.AimAssistMethod.Centering, v)
-            STATE.Camera.Controller:setMethodStrength(AimAssistEnum.AimAssistMethod.Tracking, v * 0.5)
-            STATE.Camera.Controller:setMethodStrength(AimAssistEnum.AimAssistMethod.Friction, v * 0.3)
+            pcall(function()
+                STATE.Camera.Controller:setMethodStrength(
+                    AimAssistEnum.AimAssistMethod.Centering,
+                    value
+                )
+                STATE.Camera.Controller:setMethodStrength(
+                    AimAssistEnum.AimAssistMethod.Tracking,
+                    value * 0.5
+                )
+                STATE.Camera.Controller:setMethodStrength(
+                    AimAssistEnum.AimAssistMethod.Friction,
+                    value * 0.3
+                )
+            end)
         end
     end)
-    
-    Tabs.Aim:AddSlider("Aim_Radius", {
-        Title = "FOV do Aimbot",
+
+    combatRight:AddSection("Aim Modes")
+
+    combatRight:AddToggle("SilentAim", {
+        Title = "Silent Aim",
+        Default = STATE.Aim.Silent,
+    })
+    Options.SilentAim:OnChanged(function(value)
+        STATE.Aim.Silent = value
+        if value then
+            STATE.Aim.Assist = false
+        end
+    end)
+
+    combatRight:AddSlider("AimFOV", {
+        Title = "Aim FOV",
         Min = 50,
         Max = 500,
-        Default = 200,
+        Default = STATE.Aim.Radius,
         Rounding = 0,
     })
-    Options.Aim_Radius:OnChanged(function(v)
-        STATE.Aim.Radius = v
+    Options.AimFOV:OnChanged(function(value)
+        STATE.Aim.Radius = value
+
         if STATE.Camera.Controller then
-            STATE.Camera.Controller:setRange(v)
-            STATE.Camera.Controller:setFieldOfView(v)
+            pcall(function()
+                STATE.Camera.Controller:setRange(value)
+                STATE.Camera.Controller:setFieldOfView(value)
+            end)
         end
     end)
-    
-    -- ===== VISUAL TAB =====
-    Tabs.Visual:AddSection("FOV Circle")
-    
-    Tabs.Visual:AddToggle("Visual_FOVCircle", {
-        Title = "Mostrar Círculo FOV",
-        Default = false,
+
+    local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
+    local visualLeft = visualGrid:AddElement()
+    local visualRight = visualGrid:AddElement()
+
+    visualLeft:AddSection("Players ESP")
+
+    visualLeft:AddToggle("ESPHighlight", {
+        Title = "Highlight",
+        Default = STATE.ESP.Highlight,
     })
-    Options.Visual_FOVCircle:OnChanged(function(v)
-        STATE.Visual.FOVCircle = v
+    Options.ESPHighlight:OnChanged(function(value)
+        STATE.ESP.Highlight = value
+        ESP.Clear()
+    end)
+
+    visualLeft:AddToggle("ESPDistance", {
+        Title = "Distance",
+        Default = STATE.ESP.Distance,
+    })
+    Options.ESPDistance:OnChanged(function(value)
+        STATE.ESP.Distance = value
+        ESP.Clear()
+    end)
+
+    visualLeft:AddToggle("ESPLines", {
+        Title = "Lines",
+        Default = STATE.ESP.Tracers,
+    })
+    Options.ESPLines:OnChanged(function(value)
+        STATE.ESP.Tracers = value
+        if not value then
+            ESPLines.Clear()
+        end
+    end)
+
+    visualLeft:AddToggle("ESPTeamCheck", {
+        Title = "Team Check",
+        Default = STATE.ESP.TeamCheck,
+    })
+    Options.ESPTeamCheck:OnChanged(function(value)
+        STATE.ESP.TeamCheck = value
+        ESP.Clear()
+        ESPLines.Clear()
+    end)
+
+    visualRight:AddSection("FOV")
+
+    visualRight:AddToggle("DrawFOV", {
+        Title = "Draw FOV",
+        Default = STATE.Visual.FOVCircle,
+    })
+    Options.DrawFOV:OnChanged(function(value)
+        STATE.Visual.FOVCircle = value
         FOVCircle.Update()
     end)
-    
-    Tabs.Visual:AddSlider("Visual_FOVRadius", {
-        Title = "Raio do FOV",
+
+    visualRight:AddSlider("FOVRadius", {
+        Title = "FOV Radius",
         Min = 30,
         Max = 500,
-        Default = 200,
+        Default = STATE.Visual.FOVRadius,
         Rounding = 0,
     })
-    Options.Visual_FOVRadius:OnChanged(function(v)
-        STATE.Visual.FOVRadius = v
+    Options.FOVRadius:OnChanged(function(value)
+        STATE.Visual.FOVRadius = value
         FOVCircle.Update()
     end)
-    
-    Tabs.Visual:AddSection("Câmera")
-    
-    Tabs.Visual:AddSlider("Visual_CameraFOV", {
-        Title = "FOV da Câmera",
+
+    visualRight:AddSlider("CameraFOV", {
+        Title = "Camera FOV",
         Min = 40,
         Max = 120,
-        Default = 70,
+        Default = STATE.Visual.CameraFOV,
         Rounding = 0,
     })
-    Options.Visual_CameraFOV:OnChanged(function(v)
-        STATE.Visual.CameraFOV = v
-        FOVController.SetBase(v)
+    Options.CameraFOV:OnChanged(function(value)
+        STATE.Visual.CameraFOV = value
+        pcall(function()
+            FOVController.SetBase(value)
+        end)
     end)
-    
-    Tabs.Visual:AddSection("Tracer Origin")
-    
-    local originOptions = {
-        ["Centro"] = "Center",
-        ["Centro Inferior"] = "BottomCenter",
-    }
-    Tabs.Visual:AddDropdown("Visual_TracerOrigin", {
-        Title = "Origem das Linhas",
-        Values = originOptions,
-        Default = "BottomCenter",
-    })
-    Options.Visual_TracerOrigin:OnChanged(function(v)
-        STATE.Visual.TracerOrigin = v
-    end)
-    
-    -- ===== COMBAT TAB =====
-    Tabs.Combat:AddSection("Combate")
-    
-    Tabs.Combat:AddToggle("Combat_AutoShoot", {
-        Title = "Auto Shoot",
-        Default = false,
-    })
-    Options.Combat_AutoShoot:OnChanged(function(v)
-        STATE.Combat.AutoShoot = v
-        if v then
-            AddConnection(RunService.Heartbeat:Connect(function()
-                if STATE.Combat.AutoShoot and STATE.Aim.Enabled then
-                    local target = STATE.Target.Current
-                    if target and target.IsValid then
-                        local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
-                        if tool then
-                            pcall(function()
-                                tool:Activate()
-                                task.wait(0.05)
-                                tool:Deactivate()
-                            end)
-                        end
-                    end
-                end
-            end))
-        end
-    end)
-    
-    Tabs.Combat:AddToggle("Combat_KnifePrediction", {
-        Title = "Knife Prediction",
-        Default = false,
-    })
-    Options.Combat_KnifePrediction:OnChanged(function(v)
-        STATE.Combat.KnifePrediction = v
-    end)
-    
-    Tabs.Combat:AddSection("Third Person")
-    
-    Tabs.Combat:AddButton({
+
+    Tabs.Misc:AddSection("Camera")
+    Tabs.Misc:AddButton({
         Title = "Toggle Third Person",
         Callback = function()
-            ThirdPerson.Toggle()
-            FluentLib:Notify({
-                Title = "Third Person",
-                Content = "Toggled: " .. tostring(ThirdPerson.IsEnabled()),
-                Duration = 2,
-            })
+            pcall(function()
+                ThirdPerson.Toggle()
+            end)
         end,
     })
-    
-    -- ===== CLOSE BUTTON =====
-    task.spawn(function()
-        task.wait(0.5)
-        if STATE.UI.WindowRef then
-            local success, gui = pcall(function()
-                return STATE.UI.WindowRef.Gui
-            end)
-            if success and gui then
-                local closeBtn = Instance.new("TextButton")
-                closeBtn.Name = "CloseButton"
-                closeBtn.Size = UDim2.new(0, 30, 0, 30)
-                closeBtn.Position = UDim2.new(1, -35, 0, 5)
-                closeBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-                closeBtn.BackgroundTransparency = 0.3
-                closeBtn.Text = "✕"
-                closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-                closeBtn.TextSize = 20
-                closeBtn.Font = Enum.Font.GothamBold
-                closeBtn.BorderSizePixel = 0
-                closeBtn.Parent = gui
-                closeBtn.MouseButton1Click:Connect(function()
-                    CleanupAll()
-                end)
-                closeBtn.MouseEnter:Connect(function()
-                    closeBtn.BackgroundTransparency = 0
-                end)
-                closeBtn.MouseLeave:Connect(function()
-                    closeBtn.BackgroundTransparency = 0.3
-                end)
-            end
-        end
-    end)
-end
 
--- ============================================================
--- [KEYBINDS]
--- ============================================================
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.RightControl then
-        if STATE.UI.WindowRef and STATE.UI.WindowRef.Visible then
-            CleanupUI()
-        else
-            SetupUI()
-        end
-    end
-end)
+    Tabs.Misc:AddParagraph({
+        Title = "MurderDuel",
+        Content = "Newest combat rewrite preserved. CAT EMPIRE restores the custom interface and visual stability.",
+    })
+
+    Tabs.Players:AddSection("Players")
+    Tabs.Players:AddParagraph({
+        Title = "Player ESP",
+        Content = "Use Visuals to control Highlight, Distance, Lines and Team Check independently.",
+    })
+
+    Tabs.Settings:AddSection("Interface")
+
+    local initialScale = math.floor(
+        (Window:GetScale() * 100) + 0.5
+    )
+
+    Tabs.Settings:AddSlider("UISize", {
+        Title = "UI Size",
+        Min = 50,
+        Max = 110,
+        Default = initialScale,
+        Rounding = 0,
+    })
+    Options.UISize:OnChanged(function(value)
+        Window:SetScale(value / 100)
+    end)
+
+    Tabs.Settings:AddParagraph({
+        Title = "Open / Close",
+        Content = "Use the floating CE button. Left Control also minimizes/restores the panel.",
+    })
+
+    Tabs.Settings:AddButton({
+        Title = "Unload CAT EMPIRE",
+        Callback = function()
+            CleanupAll()
+        end,
+    })
+end
 
 -- ============================================================
 -- [CHARACTER ADDED]
@@ -1097,21 +1039,16 @@ FOVController.SetBase(STATE.Visual.CameraFOV)
 
 AddConnection(RunService.Heartbeat:Connect(MainLoop))
 
-FluentLib:Notify({
-    Title = "MurderDuels",
-    Content = "FPS Exploit v3.0 carregado! (Reescrito)",
+Fluent:Notify({
+    Title = "CAT EMPIRE",
+    Content = "MurderDuel loaded with CAT EMPIRE UI.",
     Duration = 4,
 })
 
 print("============================================================")
-print("MURDERDUELS | FPS EXPLOIT v3.0")
-print("============================================================")
-print("[✓] Aimbot desacoplado do Silent Aim")
-print("[✓] Silent Aim independente")
-print("[✓] Aim Assist independente")
-print("[✓] ESP com Highlight/Distance/Tracers separados")
-print("[✓] FOV Circle com linha circular")
-print("[✓] Knife Prediction independente")
-print("[✓] Auto Shoot independente")
-print("[✓] Único loop de renderização")
+print("CAT EMPIRE | MurderDuel")
+print("[UI] CAT EMPIRE interface restored")
+print("[UI] Mobile scaling + CE toggle restored")
+print("[VISUAL] ESP layers remain individually controlled")
+print("[CORE] Latest MurderDuel rewrite preserved")
 print("============================================================")
