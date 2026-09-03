@@ -1,6 +1,5 @@
 -- ============================================================
 -- CAT EMPIRE | FIVEM ESP ADAPTATION
--- ESP 2D ancorado no personagem, inspirado na source PlayerESP.cpp.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -276,7 +275,7 @@ local function GetESPCharacters()
 end
 
 -- ============================================================
--- RESOLVE TEAM (UNIFICADO)
+-- RESOLVE TEAM
 -- ============================================================
 
 local function AreSameTeam(a, b)
@@ -406,7 +405,7 @@ local function IsTargetVisible(origin, targetPos, targetChar)
 end
 
 -- ============================================================
--- TARGET PROVIDER (COM METADATA COMPLETA)
+-- TARGET PROVIDER
 -- ============================================================
 
 local function GetCandidateMetadata(char)
@@ -467,7 +466,7 @@ local function GetClosestTarget()
 end
 
 -- ============================================================
--- CAMERA CONTROLLER (COM PRIORIDADE EXPLÍCITA)
+-- CAMERA CONTROLLER (ÚNICO ESCRITOR)
 -- ============================================================
 
 local CameraController = {
@@ -503,24 +502,47 @@ function CameraController:Update(deltaTime)
     local currentDir = camera.CFrame.LookVector
     local finalDir = currentDir
     
-    local strength = State.Aim.Strength or 0.5
-    local smoothing = State.Aim.Smoothing or 0.35
-    
-    -- PRIORIDADE: Silent > Aimbot > Assist
+    -- ============================================================
+    -- MODO: SILENT AIM (NÃO MOVE CÂMERA, APENAS MANTÉM TARGET)
+    -- ============================================================
     if State.Aim.Silent then
-        -- Silent NÃO escreve na câmera - mantém TargetData apenas
         return
+    
+    -- ============================================================
+    -- MODO: AIMBOT (SNAP DIRETO COM STRENGTH)
+    -- ============================================================
     elseif State.Aim.Enabled then
-        local lerpFactor = 1 - math.exp(-strength * deltaTime * 10)
+        local strength = State.Aim.Strength or 0.5
+        local lerpFactor = 1 - math.exp(-strength * deltaTime * 15)
         finalDir = currentDir:Lerp(direction, lerpFactor)
+    
+    -- ============================================================
+    -- MODO: AIM ASSIST (CORREÇÃO PARCIAL E SUAVE)
+    -- ============================================================
     elseif State.Aim.Assist then
-        local correctionStrength = strength * 0.3
+        local strength = State.Aim.Strength or 0.5
+        local smoothing = State.Aim.Smoothing or 0.35
+        
+        -- Assistência baseada na distância do centro da tela
+        local screenDistance = TargetData.Angle or 999
+        local assistRadius = State.Visual.FOVRadius * 0.3
+        
+        local assistFactor = 1 - math.min(screenDistance / assistRadius, 1)
+        
+        if assistFactor < 0.05 then
+            return
+        end
+        
+        local correctionStrength = strength * assistFactor * 0.35
         local lerpFactor = 1 - math.exp(-correctionStrength * smoothing * deltaTime * 8)
         finalDir = currentDir:Lerp(direction, lerpFactor)
     else
         return
     end
     
+    -- ============================================================
+    -- APLICA A MUDANÇA NA CÂMERA
+    -- ============================================================
     camera.CFrame = CFrame.new(origin, origin + finalDir)
 end
 
@@ -549,7 +571,7 @@ local function ResetTargetData()
 end
 
 -- ============================================================
--- COMBAT LOOP (SEM EXCLUSÃO MÚTUA NOS TOGGLES)
+-- COMBAT LOOP
 -- ============================================================
 
 local function CombatTrackingLoop(deltaTime)
@@ -612,7 +634,7 @@ local function RefreshCombatTracking()
 end
 
 -- ============================================================
--- PLAYER ESP (PRESERVADO INTEGRALMENTE)
+-- PLAYER ESP (PRESERVADO)
 -- ============================================================
 
 local ESP_GUI_NAME = "CAT_EMPIRE_PlayerESP"
@@ -1110,7 +1132,7 @@ local function UpdateESP()
 end
 
 -- ============================================================
--- FOV CIRCLE (VISUAL)
+-- FOV CIRCLE
 -- ============================================================
 
 local FOVGui = nil
@@ -1226,7 +1248,7 @@ local function Cleanup()
 end
 
 -- ============================================================
--- UI (EXATAMENTE IGUAL À VERSÃO COMMITADA - MAIN)
+-- UI
 -- ============================================================
 
 local function CreateUI()
@@ -1252,7 +1274,7 @@ local function CreateUI()
         Config = Window:AddTab({Title = "Settings", Icon = "settings"}),
     }
 
-    -- COMBAT (UI IDÊNTICA À MAIN)
+    -- COMBAT
     local combatGrid = Tabs.Combat:AddGroup({Columns = 2, Gap = 8})
     local combatLeft = combatGrid:AddElement()
     local combatRight = combatGrid:AddElement()
@@ -1270,7 +1292,6 @@ local function CreateUI()
         RefreshCombatTracking()
     end)
 
-    -- Aim FOV Min = 30 (igual à main)
     combatLeft:AddSlider("AimFOV", {Title = "Aim FOV", Min = 30, Max = 500, Default = 200, Rounding = 0})
     Fluent.Options.AimFOV:OnChanged(function(value)
         SetSharedFOV(value)
@@ -1303,7 +1324,7 @@ local function CreateUI()
         end
     end)
 
-    -- VISUALS (PRESERVADO)
+    -- VISUALS
     local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
     local visualLeft = visualGrid:AddElement()
     local visualRight = visualGrid:AddElement()
