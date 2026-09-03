@@ -314,12 +314,107 @@ local ICONS = {
     paint = "paint",
 }
 
+local SIDEBAR_ICON_FILES = {
+    pc = "combat.png",
+    eye = "visuals.png",
+    folder = "misc.png",
+    settings = "settings.png",
+}
+
+local SidebarIconCache = {}
+
+local function ResolveSidebarIcon(iconName)
+    local remoteName = SIDEBAR_ICON_FILES[iconName]
+    if not remoteName then
+        return nil
+    end
+
+    if SidebarIconCache[iconName] ~= nil then
+        return SidebarIconCache[iconName] or nil
+    end
+
+    local env = _G
+    if type(getgenv) == "function" then
+        local ok, resolved = pcall(getgenv)
+        if ok and type(resolved) == "table" then
+            env = resolved
+        end
+    end
+
+    local assetFn =
+        (env and (env.getcustomasset or env.getsynasset))
+        or rawget(_G, "getcustomasset")
+        or rawget(_G, "getsynasset")
+
+    local writeFn =
+        (env and env.writefile)
+        or rawget(_G, "writefile")
+
+    local isFileFn =
+        (env and env.isfile)
+        or rawget(_G, "isfile")
+
+    if type(assetFn) ~= "function"
+        or type(writeFn) ~= "function"
+    then
+        SidebarIconCache[iconName] = false
+        return nil
+    end
+
+    local localName =
+        "CAT_EMPIRE_sidebar_icon_v13_" .. remoteName
+
+    local url =
+        "https://raw.githubusercontent.com/" ..
+        "DanoninCat/DanoninScript/main/Assets/SidebarIcons/" ..
+        remoteName
+
+    local ok = pcall(function()
+        local exists =
+            type(isFileFn) == "function"
+            and isFileFn(localName)
+
+        if not exists then
+            writeFn(localName, game:HttpGet(url))
+        end
+    end)
+
+    if not ok then
+        SidebarIconCache[iconName] = false
+        return nil
+    end
+
+    local okAsset, asset = pcall(assetFn, localName)
+    if okAsset and asset then
+        SidebarIconCache[iconName] = asset
+        return asset
+    end
+
+    SidebarIconCache[iconName] = false
+    return nil
+end
+
 local function DrawSidebarIcon(parent, iconName)
     local holder = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         Size = UDim2.fromScale(1, 1),
     }, parent)
+
+    local exactAsset = ResolveSidebarIcon(iconName)
+    if exactAsset then
+        create("ImageLabel", {
+            Name = "ExactSidebarPNG",
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Image = exactAsset,
+            ImageColor3 = C.Muted,
+            ScaleType = Enum.ScaleType.Fit,
+            Size = UDim2.fromScale(1, 1),
+        }, holder)
+
+        return holder
+    end
 
     local function line(pos, size, radius)
         local f = create("Frame", {
@@ -392,6 +487,10 @@ SetSidebarIconColor = function(iconHolder, color)
             obj.BackgroundColor3 = color
         elseif obj:IsA("UIStroke") then
             obj.Color = color
+        elseif obj:IsA("ImageLabel")
+            or obj:IsA("ImageButton")
+        then
+            obj.ImageColor3 = color
         elseif obj:IsA("TextLabel") then
             obj.TextColor3 = color
         end
