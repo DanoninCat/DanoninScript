@@ -1,0 +1,306 @@
+name: Refactor CAT EMPIRE combat lifecycle
+
+on:
+  push:
+    paths:
+      - '.github/workflows/refactor-combat-lifecycle.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-combat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch combat lifecycle only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(git hash-object Games/MurderDuel.lua)" = "9452235ea35a6a27a2fd94c29cf5d8e2e733e7ac"
+          test "$(git hash-object Libs/Fluent.lua)" = "08e5dfac4ba450a9ef1dd775caa3aaafb05d002f"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('Games/MurderDuel.lua')
+          s = p.read_text(encoding='utf-8')
+
+          old_loop = r'''local AimLoopRunning = false
+
+local function AimLoop()
+    if AimLoopRunning then return end
+    AimLoopRunning = true
+
+    while not UIClosed do
+        RunService.RenderStepped:Wait()
+
+        if not State.Aim.Enabled then
+            TargetData.Current = nil
+            TargetData.Position = nil
+            break
+        end
+
+        local target = GetClosestTarget()
+        local myChar = LocalPlayer.Character
+
+        if target and myChar then
+            local targetPosition = GetHeadPosition(target)
+            local myRoot = GetTargetPart(myChar)
+            local screenPos, onScreen = ProjectToScreen(targetPosition)
+
+            TargetData.Current = target
+            TargetData.Position = targetPosition
+            TargetData.Visible = onScreen
+
+            if myRoot then
+                TargetData.Distance = GetDistance(myRoot.Position, targetPosition)
+            end
+
+            if screenPos then
+                local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+                TargetData.Angle = (
+                    Vector2.new(screenPos.X, screenPos.Y) - mousePos
+                ).Magnitude
+            end
+
+            -- Mantém o comportamento que já existia no script.
+            local camera = GetCamera()
+
+            if State.Aim.Silent and camera then
+                local tool = myChar:FindFirstChildOfClass("Tool")
+                if tool then
+                    local direction = (targetPosition - camera.CFrame.Position).Unit
+                    camera.CFrame = CFrame.new(
+                        camera.CFrame.Position,
+                        camera.CFrame.Position + direction
+                    )
+                end
+            elseif State.Aim.Assist and screenPos and onScreen then
+                local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+                local targetScreen = Vector2.new(screenPos.X, screenPos.Y)
+                local diff = targetScreen - mousePos
+                local strength = State.Aim.Strength * State.Aim.Smoothing
+                local newMousePos = mousePos + diff * strength
+
+                pcall(function()
+                    Mouse.X = newMousePos.X
+                    Mouse.Y = newMousePos.Y
+                end)
+            end
+        else
+            TargetData.Current = nil
+            TargetData.Position = nil
+            TargetData.Visible = false
+        end
+    end
+
+    AimLoopRunning = false
+end'''
+
+          new_loop = r'''local CombatLoopRunning = false
+
+local function IsCombatTrackingEnabled()
+    return State.Aim.Enabled
+        or State.Aim.Silent
+        or State.Aim.Assist
+end
+
+local function ResetTargetData()
+    TargetData.Current = nil
+    TargetData.Position = nil
+    TargetData.Distance = 0
+    TargetData.Angle = 0
+    TargetData.Visible = false
+end
+
+local function CombatTrackingLoop()
+    if CombatLoopRunning then
+        return
+    end
+
+    CombatLoopRunning = true
+
+    while not UIClosed do
+        RunService.RenderStepped:Wait()
+
+        if not IsCombatTrackingEnabled() then
+            ResetTargetData()
+            break
+        end
+
+        local target = GetClosestTarget()
+        local myChar = LocalPlayer.Character
+
+        if target and myChar then
+            local targetPosition = GetHeadPosition(target)
+            local myRoot = GetTargetPart(myChar)
+            local screenPos, onScreen = ProjectToScreen(targetPosition)
+
+            TargetData.Current = target
+            TargetData.Position = targetPosition
+            TargetData.Visible = onScreen
+
+            if myRoot then
+                TargetData.Distance = GetDistance(
+                    myRoot.Position,
+                    targetPosition
+                )
+            else
+                TargetData.Distance = 0
+            end
+
+            if screenPos then
+                local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+                TargetData.Angle = (
+                    Vector2.new(screenPos.X, screenPos.Y)
+                    - mousePos
+                ).Magnitude
+            else
+                TargetData.Angle = 0
+            end
+        else
+            ResetTargetData()
+        end
+    end
+
+    CombatLoopRunning = false
+end
+
+local function RefreshCombatTracking()
+    if IsCombatTrackingEnabled() then
+        if not CombatLoopRunning then
+            task.spawn(CombatTrackingLoop)
+        end
+    else
+        ResetTargetData()
+    end
+end'''
+
+          if s.count(old_loop) != 1:
+              raise SystemExit('Expected exactly one legacy AimLoop block.')
+          s = s.replace(old_loop, new_loop, 1)
+
+          old_aimbot = r'''    Fluent.Options.AimbotEnabled:OnChanged(function(value)
+        State.Aim.Enabled = value
+
+        if value then
+            task.spawn(AimLoop)
+        else
+            TargetData.Current = nil
+            TargetData.Position = nil
+            TargetData.Distance = 0
+            TargetData.Angle = 0
+            TargetData.Visible = false
+        end
+    end)'''
+
+          new_aimbot = r'''    Fluent.Options.AimbotEnabled:OnChanged(function(value)
+        State.Aim.Enabled = value
+        RefreshCombatTracking()
+    end)'''
+
+          if s.count(old_aimbot) != 1:
+              raise SystemExit('Expected exactly one legacy Aimbot callback.')
+          s = s.replace(old_aimbot, new_aimbot, 1)
+
+          old_assist = r'''    Fluent.Options.AimAssist:OnChanged(function(value)
+        State.Aim.Assist = value
+
+        if value and Fluent.Options.SilentAim then
+            State.Aim.Silent = false
+            Fluent.Options.SilentAim:SetValue(false)
+        end
+    end)'''
+
+          new_assist = r'''    Fluent.Options.AimAssist:OnChanged(function(value)
+        State.Aim.Assist = value
+        RefreshCombatTracking()
+    end)'''
+
+          if s.count(old_assist) != 1:
+              raise SystemExit('Expected exactly one legacy Aim Assist callback.')
+          s = s.replace(old_assist, new_assist, 1)
+
+          old_silent = r'''    Fluent.Options.SilentAim:OnChanged(function(value)
+        State.Aim.Silent = value
+
+        if value and Fluent.Options.AimAssist then
+            State.Aim.Assist = false
+            Fluent.Options.AimAssist:SetValue(false)
+        end
+    end)'''
+
+          new_silent = r'''    Fluent.Options.SilentAim:OnChanged(function(value)
+        State.Aim.Silent = value
+        RefreshCombatTracking()
+    end)'''
+
+          if s.count(old_silent) != 1:
+              raise SystemExit('Expected exactly one legacy Silent callback.')
+          s = s.replace(old_silent, new_silent, 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Review pass 1 - independence and lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'local function IsCombatTrackingEnabled()' Games/MurderDuel.lua
+          grep -q 'local function CombatTrackingLoop()' Games/MurderDuel.lua
+          grep -q 'local function RefreshCombatTracking()' Games/MurderDuel.lua
+          test "$(grep -c 'RefreshCombatTracking()' Games/MurderDuel.lua)" -ge 4
+          ! grep -q 'task.spawn(AimLoop)' Games/MurderDuel.lua
+          ! grep -q 'AimLoopRunning' Games/MurderDuel.lua
+          ! grep -q 'Fluent.Options.SilentAim:SetValue(false)' Games/MurderDuel.lua
+          ! grep -q 'Fluent.Options.AimAssist:SetValue(false)' Games/MurderDuel.lua
+          git diff --check
+
+      - name: Review pass 2 - remove broken actuation without touching visuals
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -q 'Mouse.X = newMousePos.X' Games/MurderDuel.lua
+          ! grep -q 'Mouse.Y = newMousePos.Y' Games/MurderDuel.lua
+          ! grep -q 'camera.CFrame = CFrame.new' Games/MurderDuel.lua
+          grep -q 'data.BoxStroke = Instance.new("UIStroke")' Games/MurderDuel.lua
+          grep -q 'local function GetESPHeadTopScreen' Games/MurderDuel.lua
+          grep -q 'visualLeft:AddToggle("ESPBox"' Games/MurderDuel.lua
+          grep -q 'visualLeft:AddToggle("ESPSkeleton"' Games/MurderDuel.lua
+          grep -q 'visualLeft:AddToggle("ESPLines"' Games/MurderDuel.lua
+          grep -q 'visualRight:AddSelect' Games/MurderDuel.lua
+          grep -q 'local FOVStroke = nil' Games/MurderDuel.lua
+          if grep -q 'CAT_EMPIRE_Highlight' Games/MurderDuel.lua; then
+              echo 'Highlight regression detected.'
+              exit 1
+          fi
+
+      - name: Review pass 3 - strict regression guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object Libs/Fluent.lua)" = "08e5dfac4ba450a9ef1dd775caa3aaafb05d002f"
+          test "$(git hash-object Assets/SidebarIcons/combat.png)" = "e7b8f31490055758d3ea97e07767e75928537eba"
+          test "$(git hash-object Assets/SidebarIcons/visuals.png)" = "cd2d9fdc298ce73ad4169bfe6b1d45c799640dc1"
+          test "$(git hash-object Assets/SidebarIcons/misc.png)" = "3a6d26d9a4f7adbbc62f58c7e87d8cd819b8a0e0"
+          test "$(git hash-object Assets/SidebarIcons/settings.png)" = "054bdb80a2d97ac1f375ecc3da168552d8f48d5a"
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "Games/MurderDuel.lua"
+          git diff --check
+
+      - name: Commit only after all three reviews pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/refactor-combat-lifecycle.yml
+          git config user.name "CAT EMPIRE"
+          git config user.email "actions@users.noreply.github.com"
+          git add Games/MurderDuel.lua .github/workflows/refactor-combat-lifecycle.yml
+          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = ".github/workflows/refactor-combat-lifecycle.yml Games/MurderDuel.lua "
+          git commit -m "Refactor CAT EMPIRE combat mode lifecycle"
+          git push origin HEAD:main
