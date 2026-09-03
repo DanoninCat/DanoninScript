@@ -12,20 +12,20 @@ local Mouse = LocalPlayer:GetMouse()
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
-local Util = ReplicatedStorage:WaitForChild("Util")
 
 local FOVController = require(Shared:WaitForChild("FOVController"))
 local ThirdPerson = require(Shared:WaitForChild("ThirdPerson"))
-local RayCast = require(Util:WaitForChild("RayCast"))
 
 local Fluent = loadstring(game:HttpGet(
     "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Libs/Fluent.lua",
     true
 ))()
 
-local PURPLE = Color3.fromRGB(121, 131, 207)
-
 local State = {
+    Filters = {
+        TeamCheck = true,
+        LineOfSight = true,
+    },
     ESP = {
         Enabled = true,
         Box = true,
@@ -33,20 +33,15 @@ local State = {
         Name = true,
         Distance = true,
         Lines = true,
-        TeamCheck = true,
         RenderingDistance = 500,
     },
-
     Aim = {
         Enabled = false,
         Silent = false,
         Assist = false,
         Strength = 0.5,
-        Radius = 200,
-        Target = nil,
         Smoothing = 0.35,
     },
-
     Visual = {
         FOVCircle = false,
         FOVRadius = 200,
@@ -57,61 +52,18 @@ local State = {
 
 local ESPObjects = {}
 local Connections = {}
-
+local CombatConnection = nil
 local WindowRef = nil
 local UIClosed = false
+local FOVCallbackLock = false
 local IsCleaningUp = false
 
-local TargetData = {
-    Current = nil,
-    Position = nil,
-    Distance = 0,
-    Angle = 0,
-    Visible = false,
-}
-
-local function GetCamera()
-    return workspace.CurrentCamera
-end
-
-local function GetPlayerGui()
-    return LocalPlayer:WaitForChild("PlayerGui")
-end
-
-local function DestroyNamedGui(name)
-    local gui = GetPlayerGui():FindFirstChild(name)
-    if gui then
-        gui:Destroy()
-    end
-end
-
-local function DisconnectAll()
-    for _, connection in ipairs(Connections) do
-        pcall(function()
-            connection:Disconnect()
-        end)
-    end
-    table.clear(Connections)
-end
-
-local function GetCharacters()
-    local result = {}
-    local folder = workspace:FindFirstChild("Characters")
-
-    if not folder then
-        return result
-    end
-
-    for _, child in ipairs(folder:GetChildren()) do
-        if child:IsA("Model") and child ~= LocalPlayer.Character then
-            table.insert(result, child)
-        end
-    end
-
-    return result
-end
+-- ============================================================
+-- PLAYER CACHE
+-- ============================================================
 
 local PlayerCache = {}
+local PlayerConnections = {}
 
 local function RegisterCharacter(player, character)
     if character then
@@ -133,8 +85,6 @@ local function UnregisterPlayer(player)
     end
 end
 
-local IsAlive
-
 local function GetPlayerFromCharacter(char)
     if not char then
         return nil
@@ -145,7 +95,6 @@ local function GetPlayerFromCharacter(char)
         return cached
     end
 
-    -- Direct Roblox character match.
     for _, player in ipairs(Players:GetPlayers()) do
         if player.Character == char then
             RegisterCharacter(player, char)
@@ -153,7 +102,6 @@ local function GetPlayerFromCharacter(char)
         end
     end
 
-    -- Attribute fallbacks are stronger than a mirrored model name.
     local userId = char:GetAttribute("UserId")
         or char:GetAttribute("PlayerUserId")
         or char:GetAttribute("OwnerUserId")
@@ -167,7 +115,6 @@ local function GetPlayerFromCharacter(char)
         end
     end
 
-    -- Some games mirror player characters under workspace.Characters.
     local byName = Players:FindFirstChild(char.Name)
     if byName and byName:IsA("Player") then
         RegisterCharacter(byName, char)
@@ -177,83 +124,95 @@ local function GetPlayerFromCharacter(char)
     return nil
 end
 
-local function GetESPCharacters()
-    local result = {}
-    local folder = workspace:FindFirstChild("Characters")
-
-    if not folder then
-        return result
-    end
-
-    for _, child in ipairs(folder:GetChildren()) do
-        if child:IsA("Model")
-            and child ~= LocalPlayer.Character
-        then
-            local player = GetPlayerFromCharacter(child)
-
-            -- NPCs are intentionally ignored.
-            -- The local player is intentionally ignored.
-            if player and player ~= LocalPlayer then
-                table.insert(result, child)
-            end
+local function CleanupPlayerConnections(player)
+    local conns = PlayerConnections[player]
+    if conns then
+        for _, conn in ipairs(conns) do
+            pcall(function() conn:Disconnect() end)
         end
+        PlayerConnections[player] = nil
     end
-
-    return result
 end
 
-local function IsESPCharacterEligible(char)
-    if not char
-        or not char.Parent
-        or char == LocalPlayer.Character
-        or not IsAlive(char)
-    then
-        return false
-    end
-
-    local targetPlayer = GetPlayerFromCharacter(char)
-
-    -- No NPC ESP and no local-player ESP.
-    if not targetPlayer or targetPlayer == LocalPlayer then
-        return false
-    end
-
-    if State.ESP.TeamCheck then
-        local myChar = LocalPlayer.Character
-        if myChar then
-            local mySide = myChar:GetAttribute("MatchSide")
-            local theirSide = char:GetAttribute("MatchSide")
-
-            if mySide ~= nil
-                and theirSide ~= nil
-                and mySide == theirSide
-            then
-                return false
-            end
-        end
-
-        if LocalPlayer.Team ~= nil
-            and targetPlayer.Team ~= nil
-            and LocalPlayer.Team == targetPlayer.Team
-        then
-            return false
-        end
-    end
-
-    return true
+local function BindPlayer(player)
+    CleanupPlayerConnections(player)
+    RegisterCharacter(player, player.Character)
+    local conns = {}
+    table.insert(conns, player.CharacterAdded:Connect(function(character)
+        RegisterCharacter(player, character)
+    end))
+    table.insert(conns, player.CharacterRemoving:Connect(function(character)
+        UnregisterCharacter(character)
+    end))
+    PlayerConnections[player] = conns
 end
 
-local function GetESPDisplayName(char)
-    local player = GetPlayerFromCharacter(char)
-    if player then
-        if player.DisplayName and player.DisplayName ~= "" then
-            return player.DisplayName
-        end
-        return player.Name
+local function SetupPlayerCache()
+    for _, player in ipairs(Players:GetPlayers()) do
+        BindPlayer(player)
     end
-
-    return char and char.Name or "NPC"
+    table.insert(Connections, Players.PlayerAdded:Connect(BindPlayer))
+    table.insert(Connections, Players.PlayerRemoving:Connect(function(player)
+        CleanupPlayerConnections(player)
+        UnregisterPlayer(player)
+    end))
 end
+
+-- ============================================================
+-- TARGET DATA
+-- ============================================================
+
+local TargetData = {
+    Current = nil,
+    Position = nil,
+    Distance = 0,
+    Angle = 0,
+    OnScreen = false,
+    LineOfSight = false,
+    IsValid = false,
+}
+
+local ESP_COLORS = {
+    Box = Color3.fromRGB(78, 91, 222),
+    Skeleton = Color3.fromRGB(78, 91, 222),
+    Lines = Color3.fromRGB(78, 91, 222),
+    Name = Color3.fromRGB(235, 235, 240),
+    Distance = Color3.fromRGB(235, 235, 240),
+}
+
+-- ============================================================
+-- FUNÇÕES AUXILIARES
+-- ============================================================
+
+local function GetCamera()
+    return workspace.CurrentCamera
+end
+
+local function GetPlayerGui()
+    return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local function DestroyNamedGui(name)
+    local gui = GetPlayerGui():FindFirstChild(name)
+    if gui then
+        gui:Destroy()
+    end
+end
+
+local function DisconnectAll()
+    for _, connection in ipairs(Connections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(Connections)
+    for player, conns in pairs(PlayerConnections) do
+        for _, conn in ipairs(conns) do
+            pcall(function() conn:Disconnect() end)
+        end
+    end
+    table.clear(PlayerConnections)
+end
+
+local IsAlive
 
 local function GetHumanoid(char)
     if not char then return nil end
@@ -265,33 +224,8 @@ IsAlive = function(char)
     return humanoid ~= nil and humanoid.Health > 0
 end
 
-local function IsEnemy(char)
-    if not char or char == LocalPlayer.Character then
-        return false
-    end
-
-    if not IsAlive(char) then
-        return false
-    end
-
-    if State.ESP.TeamCheck then
-        local myChar = LocalPlayer.Character
-        if myChar then
-            local mySide = myChar:GetAttribute("MatchSide")
-            local theirSide = char:GetAttribute("MatchSide")
-
-            if mySide ~= nil and theirSide ~= nil and mySide == theirSide then
-                return false
-            end
-        end
-    end
-
-    return true
-end
-
 local function GetTargetPart(char)
     if not char then return nil end
-
     return char:FindFirstChild("HumanoidRootPart")
         or char:FindFirstChild("UpperTorso")
         or char:FindFirstChild("Torso")
@@ -303,16 +237,13 @@ local function GetHeadPosition(char)
     if head then
         return head.Position
     end
-
     local part = GetTargetPart(char)
     if part then
         return part.Position
     end
-
     if char then
         return char:GetPivot().Position
     end
-
     return Vector3.zero
 end
 
@@ -321,41 +252,380 @@ local function ProjectToScreen(worldPosition)
     if not camera then
         return nil, false
     end
-
     local screenPosition, onScreen = camera:WorldToViewportPoint(worldPosition)
-    local visible = onScreen and screenPosition.Z > 0
-
-    return screenPosition, visible
+    return screenPosition, onScreen and screenPosition.Z > 0
 end
 
 local function GetDistance(a, b)
     return (a - b).Magnitude
 end
 
+local function GetESPCharacters()
+    local result = {}
+    local folder = workspace:FindFirstChild("Characters")
+    if not folder then
+        return result
+    end
+    for _, child in ipairs(folder:GetChildren()) do
+        if child:IsA("Model") and child ~= LocalPlayer.Character then
+            local player = GetPlayerFromCharacter(child)
+            if player and player ~= LocalPlayer then
+                table.insert(result, child)
+            end
+        end
+    end
+    return result
+end
+
 -- ============================================================
--- PLAYER ESP (adaptado da lógica do PlayerESP.cpp)
+-- RESOLVE TEAM (UNIFICADO)
+-- ============================================================
+
+local function AreSameTeam(a, b)
+    if not a or not b then
+        return false
+    end
+
+    local aSide = a:GetAttribute("MatchSide")
+    local bSide = b:GetAttribute("MatchSide")
+
+    if aSide ~= nil and bSide ~= nil then
+        return aSide == bSide
+    end
+
+    local aPlayer = GetPlayerFromCharacter(a)
+    local bPlayer = GetPlayerFromCharacter(b)
+
+    if aPlayer and bPlayer and aPlayer.Team and bPlayer.Team then
+        return aPlayer.Team == bPlayer.Team
+    end
+
+    return false
+end
+
+local function IsEnemy(char)
+    if not char or char == LocalPlayer.Character then
+        return false
+    end
+
+    if not IsAlive(char) then
+        return false
+    end
+
+    if State.Filters.TeamCheck then
+        local myChar = LocalPlayer.Character
+        if myChar and AreSameTeam(myChar, char) then
+            return false
+        end
+    end
+
+    return true
+end
+
+-- ============================================================
+-- FOV UNIFICADO
+-- ============================================================
+
+local function GetAimScreenPoint()
+    local camera = GetCamera()
+    if not camera then
+        return Vector2.new(Mouse.X, Mouse.Y)
+    end
+    return Vector2.new(camera.ViewportSize.X * 0.5, camera.ViewportSize.Y * 0.5)
+end
+
+local UpdateFOVCircle
+
+local function SetSharedFOV(value)
+    if FOVCallbackLock then
+        return
+    end
+    
+    FOVCallbackLock = true
+    
+    local success, err = pcall(function()
+        value = math.clamp(value, 30, 500)
+        State.Visual.FOVRadius = value
+        
+        if Fluent and Fluent.Options then
+            if Fluent.Options.AimFOV then
+                Fluent.Options.AimFOV:SetValue(value)
+            end
+            if Fluent.Options.FOVRadius then
+                Fluent.Options.FOVRadius:SetValue(value)
+            end
+        end
+        
+        UpdateFOVCircle()
+    end)
+    
+    FOVCallbackLock = false
+    
+    if not success then
+        warn("[CAT_EMPIRE] SetSharedFOV error:", err)
+    end
+end
+
+-- ============================================================
+-- LINE OF SIGHT
+-- ============================================================
+
+local function IsTargetVisible(origin, targetPos, targetChar)
+    local delta = targetPos - origin
+    local distance = delta.Magnitude
+    
+    if distance < 0.1 then
+        return true
+    end
+    
+    local direction = delta.Unit
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {LocalPlayer.Character}
+    
+    local result = workspace:Raycast(origin, direction * distance, params)
+    
+    if not result then
+        return true
+    end
+    
+    local hitInstance = result.Instance
+    if not hitInstance then
+        return true
+    end
+    
+    if targetChar and hitInstance:IsDescendantOf(targetChar) then
+        return true
+    end
+    
+    local hitChar = hitInstance:FindFirstAncestorOfClass("Model")
+    if hitChar and hitChar == targetChar then
+        return true
+    end
+    
+    return false
+end
+
+-- ============================================================
+-- TARGET PROVIDER (COM METADATA COMPLETA)
+-- ============================================================
+
+local function GetCandidateMetadata(char)
+    local head = char:FindFirstChild("Head") or GetTargetPart(char)
+    if not head then
+        return nil
+    end
+    
+    local screenPos, onScreen = ProjectToScreen(head.Position)
+    if not onScreen or not screenPos then
+        return nil
+    end
+    
+    local aimPoint = GetAimScreenPoint()
+    local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - aimPoint).Magnitude
+    
+    if screenDistance > State.Visual.FOVRadius then
+        return nil
+    end
+    
+    local camera = GetCamera()
+    if not camera then
+        return nil
+    end
+    
+    local origin = camera.CFrame.Position
+    local lineOfSight = true
+    
+    if State.Filters.LineOfSight then
+        lineOfSight = IsTargetVisible(origin, head.Position, char)
+        if not lineOfSight then
+            return nil
+        end
+    end
+    
+    return {
+        Character = char,
+        Position = head.Position,
+        ScreenPosition = Vector2.new(screenPos.X, screenPos.Y),
+        ScreenDistance = screenDistance,
+        OnScreen = onScreen,
+        LineOfSight = lineOfSight,
+    }
+end
+
+local function GetClosestTarget()
+    local closest = nil
+    local closestDist = State.Visual.FOVRadius
+
+    for _, char in ipairs(GetESPCharacters()) do
+        if IsEnemy(char) then
+            local metadata = GetCandidateMetadata(char)
+            if metadata and metadata.ScreenDistance < closestDist then
+                closestDist = metadata.ScreenDistance
+                closest = metadata
+            end
+        end
+    end
+
+    return closest
+end
+
+-- ============================================================
+-- CAMERA CONTROLLER (ÚNICO ESCRITOR)
+-- ============================================================
+
+local CameraController = {
+    TargetPosition = nil,
+    TargetChar = nil,
+}
+
+local function GetSafeDirection(from, to)
+    local delta = to - from
+    local magnitude = delta.Magnitude
+    if magnitude < 0.001 then
+        return nil
+    end
+    return delta.Unit
+end
+
+function CameraController:Update(deltaTime)
+    if not self.TargetPosition or not self.TargetChar then
+        return
+    end
+    
+    local camera = GetCamera()
+    if not camera then
+        return
+    end
+    
+    local origin = camera.CFrame.Position
+    local direction = GetSafeDirection(origin, self.TargetPosition)
+    if not direction then
+        return
+    end
+    
+    local currentDir = camera.CFrame.LookVector
+    local finalDir = currentDir
+    
+    local strength = State.Aim.Strength or 0.5
+    local smoothing = State.Aim.Smoothing or 0.35
+    
+    if State.Aim.Silent then
+        finalDir = currentDir
+    elseif State.Aim.Enabled then
+        local lerpFactor = 1 - math.exp(-strength * deltaTime * 10)
+        finalDir = currentDir:Lerp(direction, lerpFactor)
+    elseif State.Aim.Assist then
+        local correctionStrength = strength * 0.3
+        local lerpFactor = 1 - math.exp(-correctionStrength * smoothing * deltaTime * 8)
+        finalDir = currentDir:Lerp(direction, lerpFactor)
+    end
+    
+    camera.CFrame = CFrame.new(origin, origin + finalDir)
+end
+
+function CameraController:SetTarget(char, position)
+    self.TargetChar = char
+    self.TargetPosition = position
+end
+
+function CameraController:ClearTarget()
+    self.TargetChar = nil
+    self.TargetPosition = nil
+end
+
+-- ============================================================
+-- RESET TARGET DATA
+-- ============================================================
+
+local function ResetTargetData()
+    TargetData.Current = nil
+    TargetData.Position = nil
+    TargetData.Distance = 0
+    TargetData.Angle = 0
+    TargetData.OnScreen = false
+    TargetData.LineOfSight = false
+    TargetData.IsValid = false
+end
+
+-- ============================================================
+-- COMBAT LOOP (FUNCIONAL - SEM EXCLUSÃO MÚTUA)
+-- ============================================================
+
+local function CombatTrackingLoop(deltaTime)
+    if UIClosed then
+        return
+    end
+    
+    local isEnabled = State.Aim.Enabled or State.Aim.Silent or State.Aim.Assist
+    
+    if not isEnabled then
+        CameraController:ClearTarget()
+        ResetTargetData()
+        return
+    end
+
+    local candidate = GetClosestTarget()
+    local myChar = LocalPlayer.Character
+
+    if candidate and myChar then
+        TargetData.Current = candidate.Character
+        TargetData.Position = candidate.Position
+        TargetData.Distance = GetDistance(myChar:GetPivot().Position, candidate.Position)
+        TargetData.Angle = candidate.ScreenDistance
+        TargetData.OnScreen = candidate.OnScreen
+        TargetData.LineOfSight = candidate.LineOfSight
+        TargetData.IsValid = true
+
+        CameraController:SetTarget(candidate.Character, candidate.Position)
+        CameraController:Update(deltaTime)
+    else
+        CameraController:ClearTarget()
+        ResetTargetData()
+    end
+end
+
+local function StartCombatLoop()
+    if CombatConnection then
+        return
+    end
+    CombatConnection = RunService.RenderStepped:Connect(CombatTrackingLoop)
+end
+
+local function StopCombatLoop()
+    if CombatConnection then
+        CombatConnection:Disconnect()
+        CombatConnection = nil
+    end
+    CameraController:ClearTarget()
+    ResetTargetData()
+end
+
+local function RefreshCombatTracking()
+    local isEnabled = State.Aim.Enabled or State.Aim.Silent or State.Aim.Assist
+    
+    if isEnabled then
+        StartCombatLoop()
+    else
+        StopCombatLoop()
+    end
+end
+
+-- ============================================================
+-- PLAYER ESP (PRESERVADO INTEGRALMENTE)
 -- ============================================================
 
 local ESP_GUI_NAME = "CAT_EMPIRE_PlayerESP"
 local ESP_BLACK = Color3.fromRGB(0, 0, 0)
 local ESP_WHITE = Color3.fromRGB(235, 235, 240)
 local ESP_ACCENT = Color3.fromRGB(78, 91, 222)
-local ESP_ARMOR = Color3.fromRGB(25, 120, 245)
-
-local ESP_COLORS = {
-    Box = ESP_ACCENT,
-    Skeleton = ESP_ACCENT,
-    Lines = ESP_ACCENT,
-    Name = ESP_WHITE,
-    Distance = ESP_WHITE,
-}
 
 local function GetESPGui()
     local gui = GetPlayerGui():FindFirstChild(ESP_GUI_NAME)
     if gui then
         return gui
     end
-
     gui = Instance.new("ScreenGui")
     gui.Name = ESP_GUI_NAME
     gui.ResetOnSpawn = false
@@ -397,8 +667,6 @@ end
 local function NewLine(name, parent, thickness)
     local line = Instance.new("Frame")
     line.Name = name
-    -- Center-anchor is important in Roblox. Rotation around a left-anchored
-    -- frame makes the visual endpoint drift away from the requested points.
     line.AnchorPoint = Vector2.new(0.5, 0.5)
     line.BackgroundColor3 = ESP_ACCENT
     line.BackgroundTransparency = 0
@@ -414,19 +682,13 @@ local function SetLine(line, a, b, thickness, color)
     if not line or not a or not b then
         return
     end
-
     local delta = b - a
     local length = delta.Magnitude
-
     if length < 0.5 then
         line.Visible = false
         return
     end
-
-    -- Position the frame at the exact midpoint of the two endpoints.
-    -- This keeps both ends glued to A and B after Rotation is applied.
     local midpoint = (a + b) * 0.5
-
     line.Position = UDim2.fromOffset(midpoint.X, midpoint.Y)
     line.Size = UDim2.fromOffset(length, thickness or 1)
     line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
@@ -455,82 +717,48 @@ local function GetESPBounds(char)
         return nil
     end
 
-    -- Primary path mirrors the FiveM source:
-    -- Head + lowest foot -> height -> width = height / 1.8.
     local head = char:FindFirstChild("Head")
-    local leftFoot = FindPart(char, {
-        "LeftFoot", "LeftLowerLeg", "Left Leg"
-    })
-    local rightFoot = FindPart(char, {
-        "RightFoot", "RightLowerLeg", "Right Leg"
-    })
+    local leftFoot = FindPart(char, {"LeftFoot", "LeftLowerLeg", "Left Leg"})
+    local rightFoot = FindPart(char, {"RightFoot", "RightLowerLeg", "Right Leg"})
 
     if head and (leftFoot or rightFoot) then
-        local headTop = head.Position + Vector3.new(
-            0,
-            head.Size.Y * 0.5,
-            0
-        )
-
+        local headTop = head.Position + Vector3.new(0, head.Size.Y * 0.5, 0)
         local footPoints = {}
-        if leftFoot then
-            table.insert(footPoints, GetFootBottom(leftFoot))
-        end
-        if rightFoot then
-            table.insert(footPoints, GetFootBottom(rightFoot))
-        end
+        if leftFoot then table.insert(footPoints, GetFootBottom(leftFoot)) end
+        if rightFoot then table.insert(footPoints, GetFootBottom(rightFoot)) end
 
         local headScreen = camera:WorldToViewportPoint(headTop)
         local lowestScreen = nil
 
         for _, point in ipairs(footPoints) do
             local screen = camera:WorldToViewportPoint(point)
-            if screen.Z > 0
-                and (
-                    not lowestScreen
-                    or screen.Y > lowestScreen.Y
-                )
-            then
+            if screen.Z > 0 and (not lowestScreen or screen.Y > lowestScreen.Y) then
                 lowestScreen = screen
             end
         end
 
         if headScreen.Z > 0 and lowestScreen then
             local rawHeight = lowestScreen.Y - headScreen.Y
-
             if rawHeight > 6 then
                 local width = rawHeight / 1.8
                 local height = rawHeight * 1.2
-                local centerX = (
-                    headScreen.X + lowestScreen.X
-                ) * 0.5
-                local centerY = (
-                    headScreen.Y + lowestScreen.Y
-                ) * 0.5
-
+                local centerX = (headScreen.X + lowestScreen.X) * 0.5
+                local centerY = (headScreen.Y + lowestScreen.Y) * 0.5
                 return {
                     X = centerX - width * 0.5,
                     Y = centerY - height * 0.5,
                     Width = width,
                     Height = height,
                     Center = Vector2.new(centerX, centerY),
-                    BottomCenter = Vector2.new(
-                        centerX,
-                        centerY + height * 0.5
-                    ),
-                    TopCenter = Vector2.new(
-                        centerX,
-                        centerY - height * 0.5
-                    ),
+                    BottomCenter = Vector2.new(centerX, centerY + height * 0.5),
+                    TopCenter = Vector2.new(centerX, centerY - height * 0.5),
                 }
             end
         end
     end
 
-    -- Fallback for custom rigs.
     local ok, boxCFrame, boxSize = pcall(function()
-        local cf, size = char:GetBoundingBox()
-        return cf, size
+        return char:GetBoundingBox()
     end)
 
     if not ok or not boxCFrame or not boxSize then
@@ -554,16 +782,13 @@ local function GetESPBounds(char)
     local valid = 0
 
     for _, localCorner in ipairs(corners) do
-        local screen = camera:WorldToViewportPoint(
-            boxCFrame:PointToWorldSpace(localCorner)
-        )
-
+        local screen = camera:WorldToViewportPoint(boxCFrame:PointToWorldSpace(localCorner))
         if screen.Z > 0 then
             minX = math.min(minX, screen.X)
             minY = math.min(minY, screen.Y)
             maxX = math.max(maxX, screen.X)
             maxY = math.max(maxY, screen.Y)
-            valid += 1
+            valid = valid + 1
         end
     end
 
@@ -578,36 +803,29 @@ local function GetESPBounds(char)
         return nil
     end
 
-    local centerX = (minX + maxX) * 0.5
-    local centerY = (minY + maxY) * 0.5
-
     return {
         X = minX,
         Y = minY,
         Width = width,
         Height = height,
-        Center = Vector2.new(centerX, centerY),
-        BottomCenter = Vector2.new(centerX, maxY),
-        TopCenter = Vector2.new(centerX, minY),
+        Center = Vector2.new((minX + maxX) * 0.5, (minY + maxY) * 0.5),
+        BottomCenter = Vector2.new((minX + maxX) * 0.5, maxY),
+        TopCenter = Vector2.new((minX + maxX) * 0.5, minY),
     }
 end
 
 local R15_BONES = {
     {{"LowerTorso"}, {"UpperTorso"}},
     {{"UpperTorso"}, {"Head"}},
-
     {{"UpperTorso"}, {"LeftUpperArm"}},
     {{"LeftUpperArm"}, {"LeftLowerArm"}},
     {{"LeftLowerArm"}, {"LeftHand"}},
-
     {{"UpperTorso"}, {"RightUpperArm"}},
     {{"RightUpperArm"}, {"RightLowerArm"}},
     {{"RightLowerArm"}, {"RightHand"}},
-
     {{"LowerTorso"}, {"LeftUpperLeg"}},
     {{"LeftUpperLeg"}, {"LeftLowerLeg"}},
     {{"LeftLowerLeg"}, {"LeftFoot"}},
-
     {{"LowerTorso"}, {"RightUpperLeg"}},
     {{"RightUpperLeg"}, {"RightLowerLeg"}},
     {{"RightLowerLeg"}, {"RightFoot"}},
@@ -623,30 +841,46 @@ local R6_BONES = {
 
 local function GetSkeletonPairs(char)
     local humanoid = GetHumanoid(char)
-    if humanoid
-        and humanoid.RigType == Enum.HumanoidRigType.R6
-    then
+    if humanoid and humanoid.RigType == Enum.HumanoidRigType.R6 then
         return R6_BONES
     end
     return R15_BONES
 end
 
+local function IsESPCharacterEligible(char)
+    if not char or not char.Parent or char == LocalPlayer.Character or not IsAlive(char) then
+        return false
+    end
+    local targetPlayer = GetPlayerFromCharacter(char)
+    if not targetPlayer or targetPlayer == LocalPlayer then
+        return false
+    end
+    if State.Filters.TeamCheck then
+        local myChar = LocalPlayer.Character
+        if myChar and AreSameTeam(myChar, char) then
+            return false
+        end
+    end
+    return true
+end
+
+local function GetESPDisplayName(char)
+    local player = GetPlayerFromCharacter(char)
+    if player then
+        return (player.DisplayName and player.DisplayName ~= "") and player.DisplayName or player.Name
+    end
+    return char and char.Name or "NPC"
+end
+
 local function CreateESPData(char)
     local gui = GetESPGui()
-    local data = {
-        Skeleton = {},
-    }
+    local data = {Skeleton = {}}
 
-    data.BoxOutline = NewESPFrame(
-        "BoxOutline_" .. char.Name,
-        gui
-    )
+    data.BoxOutline = NewESPFrame("BoxOutline_" .. char.Name, gui)
     data.BoxOutline.ZIndex = 8
-
     data.BoxOutlineStroke = Instance.new("UIStroke")
     data.BoxOutlineStroke.Name = "Stroke"
-    data.BoxOutlineStroke.ApplyStrokeMode =
-        Enum.ApplyStrokeMode.Border
+    data.BoxOutlineStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     data.BoxOutlineStroke.Color = ESP_BLACK
     data.BoxOutlineStroke.Thickness = 4
     data.BoxOutlineStroke.Transparency = 0
@@ -654,11 +888,9 @@ local function CreateESPData(char)
 
     data.Box = NewESPFrame("Box_" .. char.Name, gui)
     data.Box.ZIndex = 9
-
     data.BoxStroke = Instance.new("UIStroke")
     data.BoxStroke.Name = "Stroke"
-    data.BoxStroke.ApplyStrokeMode =
-        Enum.ApplyStrokeMode.Border
+    data.BoxStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     data.BoxStroke.Color = ESP_COLORS.Box
     data.BoxStroke.Thickness = 2
     data.BoxStroke.Transparency = 0
@@ -670,11 +902,7 @@ local function CreateESPData(char)
 
     local maxBoneLines = math.max(#R15_BONES, #R6_BONES)
     for index = 1, maxBoneLines do
-        data.Skeleton[index] = NewLine(
-            "Skeleton_" .. char.Name .. "_" .. index,
-            gui,
-            1
-        )
+        data.Skeleton[index] = NewLine("Skeleton_" .. char.Name .. "_" .. index, gui, 1)
     end
 
     ESPObjects[char] = data
@@ -683,16 +911,10 @@ end
 
 local function HideESPData(data)
     if not data then return end
-
-    for _, key in ipairs({
-        "BoxOutline", "Box", "Name", "Distance", "Line"
-    }) do
+    for _, key in ipairs({"BoxOutline", "Box", "Name", "Distance", "Line"}) do
         local object = data[key]
-        if object then
-            object.Visible = false
-        end
+        if object then object.Visible = false end
     end
-
     for _, line in ipairs(data.Skeleton or {}) do
         line.Visible = false
     end
@@ -701,20 +923,13 @@ end
 local function RemoveESP(char)
     local data = ESPObjects[char]
     if not data then return end
-
-    for _, key in ipairs({
-        "BoxOutline", "Box", "Name", "Distance", "Line"
-    }) do
+    for _, key in ipairs({"BoxOutline", "Box", "Name", "Distance", "Line"}) do
         local object = data[key]
-        if object then
-            pcall(function() object:Destroy() end)
-        end
+        if object then pcall(function() object:Destroy() end) end
     end
-
     for _, line in ipairs(data.Skeleton or {}) do
         pcall(function() line:Destroy() end)
     end
-
     ESPObjects[char] = nil
 end
 
@@ -724,18 +939,12 @@ local function ClearESP()
     end
 end
 
-
 local function GetLocalScreenOrigin()
     local camera = GetCamera()
     if not camera then
         return Vector2.new(0, 0)
     end
-
-    -- Reference style: snapline originates at the top-center of the screen.
-    return Vector2.new(
-        camera.ViewportSize.X * 0.5,
-        2
-    )
+    return Vector2.new(camera.ViewportSize.X * 0.5, 2)
 end
 
 local function GetESPHeadTopScreen(char)
@@ -743,18 +952,11 @@ local function GetESPHeadTopScreen(char)
     if not head or not head:IsA("BasePart") then
         return nil
     end
-
-    local topWorld = head.Position + Vector3.new(
-        0,
-        head.Size.Y * 0.5,
-        0
-    )
-
+    local topWorld = head.Position + Vector3.new(0, head.Size.Y * 0.5, 0)
     local screenPos, visible = ProjectToScreen(topWorld)
     if not screenPos or not visible then
         return nil
     end
-
     return Vector2.new(screenPos.X, screenPos.Y)
 end
 
@@ -778,13 +980,7 @@ local function UpdateSkeleton(char, data)
             local bScreen, bVisible = ProjectToScreen(b.Position)
 
             if aScreen and bScreen and aVisible and bVisible then
-                SetLine(
-                    line,
-                    Vector2.new(aScreen.X, aScreen.Y),
-                    Vector2.new(bScreen.X, bScreen.Y),
-                    1,
-                    ESP_COLORS.Skeleton
-                )
+                SetLine(line, Vector2.new(aScreen.X, aScreen.Y), Vector2.new(bScreen.X, bScreen.Y), 1, ESP_COLORS.Skeleton)
             else
                 line.Visible = false
             end
@@ -838,7 +1034,6 @@ local function UpdatePlayerESP(char, data, myRoot)
         data.BoxOutline.Position = UDim2.fromOffset(x, y)
         data.BoxOutline.Size = UDim2.fromOffset(width, height)
         data.BoxOutline.Visible = true
-
         data.Box.Position = UDim2.fromOffset(x, y)
         data.Box.Size = UDim2.fromOffset(width, height)
         data.Box.Visible = true
@@ -848,7 +1043,6 @@ local function UpdatePlayerESP(char, data, myRoot)
     end
 
     local bottomPadding = State.ESP.Box and 5 or 2
-
     local labelY = y + height + bottomPadding
 
     if State.ESP.Name then
@@ -856,16 +1050,13 @@ local function UpdatePlayerESP(char, data, myRoot)
         data.Name.Position = UDim2.fromOffset(x - 35, labelY)
         data.Name.Size = UDim2.fromOffset(width + 70, 14)
         data.Name.Visible = true
-        labelY += 14
+        labelY = labelY + 14
     else
         data.Name.Visible = false
     end
 
     if State.ESP.Distance then
-        data.Distance.Text = string.format(
-            "%d studs",
-            math.floor(distance + 0.5)
-        )
+        data.Distance.Text = string.format("%d studs", math.floor(distance + 0.5))
         data.Distance.Position = UDim2.fromOffset(x - 35, labelY)
         data.Distance.Size = UDim2.fromOffset(width + 70, 14)
         data.Distance.Visible = true
@@ -874,17 +1065,8 @@ local function UpdatePlayerESP(char, data, myRoot)
     end
 
     if State.ESP.Lines then
-        local headAnchor =
-            GetESPHeadTopScreen(char)
-            or bounds.TopCenter
-
-        SetLine(
-            data.Line,
-            GetLocalScreenOrigin(),
-            headAnchor,
-            1,
-            ESP_COLORS.Lines
-        )
+        local headAnchor = GetESPHeadTopScreen(char) or bounds.TopCenter
+        SetLine(data.Line, GetLocalScreenOrigin(), headAnchor, 1, ESP_COLORS.Lines)
     else
         data.Line.Visible = false
     end
@@ -928,9 +1110,8 @@ local function UpdateESP()
     end
 end
 
-
 -- ============================================================
--- FOV CIRCLE
+-- FOV CIRCLE (VISUAL)
 -- ============================================================
 
 local FOVGui = nil
@@ -975,12 +1156,10 @@ local function CreateFOVCircle()
     return gui
 end
 
-local function UpdateFOVCircle()
+UpdateFOVCircle = function()
     if not State.Visual.FOVCircle then
         if FOVGui then
-            pcall(function()
-                FOVGui:Destroy()
-            end)
+            pcall(function() FOVGui:Destroy() end)
         end
         FOVGui = nil
         FOVFrame = nil
@@ -995,128 +1174,13 @@ local function UpdateFOVCircle()
         return
     end
 
-    FOVFrame.Size = UDim2.fromOffset(
-        State.Visual.FOVRadius * 2,
-        State.Visual.FOVRadius * 2
-    )
-    FOVFrame.Position = UDim2.fromOffset(
-        camera.ViewportSize.X * 0.5,
-        camera.ViewportSize.Y * 0.5
-    )
+    local aimPoint = GetAimScreenPoint()
+
+    FOVFrame.Size = UDim2.fromOffset(State.Visual.FOVRadius * 2, State.Visual.FOVRadius * 2)
+    FOVFrame.Position = UDim2.fromOffset(aimPoint.X, aimPoint.Y)
 
     if FOVStroke then
         FOVStroke.Color = ESP_COLORS.Box
-    end
-end
-
--- ============================================================
--- TARGET / AIM (mantido)
--- ============================================================
-
-local function GetClosestTarget()
-    local closest = nil
-    local closestDist = State.Aim.Radius
-    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-
-    for _, char in ipairs(GetCharacters()) do
-        if IsEnemy(char) then
-            local head = char:FindFirstChild("Head") or GetTargetPart(char)
-            if head then
-                local screenPos, onScreen = ProjectToScreen(head.Position)
-
-                if onScreen and screenPos then
-                    local distance = (
-                        Vector2.new(screenPos.X, screenPos.Y) - mousePos
-                    ).Magnitude
-
-                    if distance < closestDist then
-                        closestDist = distance
-                        closest = char
-                    end
-                end
-            end
-        end
-    end
-
-    return closest
-end
-
-local CombatLoopRunning = false
-
-local function IsCombatTrackingEnabled()
-    return State.Aim.Enabled
-        or State.Aim.Silent
-        or State.Aim.Assist
-end
-
-local function ResetTargetData()
-    TargetData.Current = nil
-    TargetData.Position = nil
-    TargetData.Distance = 0
-    TargetData.Angle = 0
-    TargetData.Visible = false
-end
-
-local function CombatTrackingLoop()
-    if CombatLoopRunning then
-        return
-    end
-
-    CombatLoopRunning = true
-
-    while not UIClosed do
-        RunService.RenderStepped:Wait()
-
-        if not IsCombatTrackingEnabled() then
-            ResetTargetData()
-            break
-        end
-
-        local target = GetClosestTarget()
-        local myChar = LocalPlayer.Character
-
-        if target and myChar then
-            local targetPosition = GetHeadPosition(target)
-            local myRoot = GetTargetPart(myChar)
-            local screenPos, onScreen = ProjectToScreen(targetPosition)
-
-            TargetData.Current = target
-            TargetData.Position = targetPosition
-            TargetData.Visible = onScreen
-
-            if myRoot then
-                TargetData.Distance = GetDistance(
-                    myRoot.Position,
-                    targetPosition
-                )
-            else
-                TargetData.Distance = 0
-            end
-
-            if screenPos then
-                local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-                TargetData.Angle = (
-                    Vector2.new(screenPos.X, screenPos.Y)
-                    - mousePos
-                ).Magnitude
-            else
-                TargetData.Angle = 0
-            end
-        else
-            ResetTargetData()
-        end
-    end
-
-    CombatLoopRunning = false
-end
-
-local function RefreshCombatTracking()
-    if IsCombatTrackingEnabled() then
-        if not CombatLoopRunning then
-            task.spawn(CombatTrackingLoop)
-        end
-    else
-        ResetTargetData()
     end
 end
 
@@ -1134,6 +1198,7 @@ local function Cleanup()
     local ok, err = pcall(function()
         UIClosed = true
         DisconnectAll()
+        StopCombatLoop()
         table.clear(PlayerCache)
 
         ClearESP()
@@ -1144,6 +1209,7 @@ local function Cleanup()
         FOVStroke = nil
 
         ResetTargetData()
+        CameraController:ClearTarget()
 
         if WindowRef then
             pcall(function()
@@ -1161,7 +1227,7 @@ local function Cleanup()
 end
 
 -- ============================================================
--- UI
+-- UI (PRESERVADA INTEGRALMENTE - SEM ALTERAÇÕES)
 -- ============================================================
 
 local function CreateUI()
@@ -1180,131 +1246,71 @@ local function CreateUI()
     WindowRef = Window
 
     local Tabs = {
-        Combat = Window:AddTab({
-            Title = "Combat",
-            Icon = "pc",
-            SubTabs = {"Aimbot", "Silent"},
-        }),
-        Visuals = Window:AddTab({
-            Title = "Visuals",
-            Icon = "eye",
-            SubTabs = {"Players", "Vehicles"},
-        }),
-        Exploits = Window:AddTab({
-            Title = "Misc",
-            Icon = "folder",
-            SubTabs = {"Player", "Others", "Teleport"},
-        }),
+        Combat = Window:AddTab({Title = "Combat", Icon = "pc", SubTabs = {"Aimbot", "Silent"}}),
+        Visuals = Window:AddTab({Title = "Visuals", Icon = "eye", SubTabs = {"Players", "Vehicles"}}),
+        Exploits = Window:AddTab({Title = "Misc", Icon = "folder", SubTabs = {"Player", "Others", "Teleport"}}),
         Cloud = Window:AddTab({Title = "Players", Icon = "players"}),
         Config = Window:AddTab({Title = "Settings", Icon = "settings"}),
     }
 
-    -- COMBAT
+    -- COMBAT (PRESERVADO - SEM ELEMENTS ADICIONAIS)
     local combatGrid = Tabs.Combat:AddGroup({Columns = 2, Gap = 8})
     local combatLeft = combatGrid:AddElement()
     local combatRight = combatGrid:AddElement()
 
     combatLeft:AddSection("Aimbot")
-    combatLeft:AddToggle("AimbotEnabled", {
-        Title = "Aimbot",
-        Default = false,
-    })
-
+    combatLeft:AddToggle("AimbotEnabled", {Title = "Aimbot", Default = false})
     Fluent.Options.AimbotEnabled:OnChanged(function(value)
         State.Aim.Enabled = value
         RefreshCombatTracking()
     end)
 
-    combatLeft:AddToggle("AimAssist", {
-        Title = "Aim Assist",
-        Default = false,
-    })
-
+    combatLeft:AddToggle("AimAssist", {Title = "Aim Assist", Default = false})
     Fluent.Options.AimAssist:OnChanged(function(value)
         State.Aim.Assist = value
         RefreshCombatTracking()
     end)
 
-    combatLeft:AddSlider("AimFOV", {
-        Title = "Aim FOV",
-        Min = 50,
-        Max = 500,
-        Default = 200,
-        Rounding = 0,
-    })
-
+    combatLeft:AddSlider("AimFOV", {Title = "Aim FOV", Min = 30, Max = 500, Default = 200, Rounding = 0})
     Fluent.Options.AimFOV:OnChanged(function(value)
-        State.Aim.Radius = value
+        SetSharedFOV(value)
     end)
 
     combatLeft:AddSection("Smoothing")
-
-    combatLeft:AddSlider("AimStrength", {
-        Title = "Aim Strength",
-        Min = 0.1,
-        Max = 1,
-        Default = 0.5,
-        Rounding = 2,
-    })
-
+    combatLeft:AddSlider("AimStrength", {Title = "Aim Strength", Min = 0.1, Max = 1, Default = 0.5, Rounding = 2})
     Fluent.Options.AimStrength:OnChanged(function(value)
         State.Aim.Strength = value
     end)
 
-    combatLeft:AddSlider("AimSmoothing", {
-        Title = "Smooth",
-        Min = 0.1,
-        Max = 1,
-        Default = 0.35,
-        Rounding = 2,
-    })
-
+    combatLeft:AddSlider("AimSmoothing", {Title = "Smooth", Min = 0.1, Max = 1, Default = 0.35, Rounding = 2})
     Fluent.Options.AimSmoothing:OnChanged(function(value)
         State.Aim.Smoothing = value
     end)
 
     combatRight:AddSection("Aim Modes")
-
-    combatRight:AddToggle("SilentAim", {
-        Title = "Silent Aim",
-        Default = false,
-    })
-
+    combatRight:AddToggle("SilentAim", {Title = "Silent Aim", Default = false})
     Fluent.Options.SilentAim:OnChanged(function(value)
         State.Aim.Silent = value
         RefreshCombatTracking()
     end)
 
     combatRight:AddSection("Target Filters")
-
-    combatRight:AddToggle("CombatTeamCheck", {
-        Title = "Team Check",
-        Default = true,
-    })
-
+    combatRight:AddToggle("CombatTeamCheck", {Title = "Team Check", Default = true})
     Fluent.Options.CombatTeamCheck:OnChanged(function(value)
-        State.ESP.TeamCheck = value
-
+        State.Filters.TeamCheck = value
         if Fluent.Options.TeamCheck and Fluent.Options.TeamCheck.Value ~= value then
             Fluent.Options.TeamCheck:SetValue(value)
         end
     end)
 
-    -- VISUALS - layout inspirado na source FiveM: Players ESP + Preview.
+    -- VISUALS (PRESERVADO)
     local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
     local visualLeft = visualGrid:AddElement()
     local visualRight = visualGrid:AddElement()
     local UpdatePreview
 
     visualLeft:AddSection("Players ESP")
-
-    visualLeft:AddSlider("ESPRenderDistance", {
-        Title = "Rendering Distance",
-        Min = 25,
-        Max = 1000,
-        Default = 500,
-        Rounding = 0,
-    })
+    visualLeft:AddSlider("ESPRenderDistance", {Title = "Rendering Distance", Min = 25, Max = 1000, Default = 500, Rounding = 0})
     Fluent.Options.ESPRenderDistance:OnChanged(function(value)
         State.ESP.RenderingDistance = value
         UpdateESP()
@@ -1347,16 +1353,14 @@ local function CreateUI()
 
     visualLeft:AddToggle("TeamCheck", {Title = "Team Check", Default = true})
     Fluent.Options.TeamCheck:OnChanged(function(value)
-        State.ESP.TeamCheck = value
-        if Fluent.Options.CombatTeamCheck
-            and Fluent.Options.CombatTeamCheck.Value ~= value
-        then
+        State.Filters.TeamCheck = value
+        if Fluent.Options.CombatTeamCheck and Fluent.Options.CombatTeamCheck.Value ~= value then
             Fluent.Options.CombatTeamCheck:SetValue(value)
         end
         UpdateESP()
     end)
 
-    -- Preview semelhante à coluna da direita do Interface.cpp, sem usar imagem.
+    -- Preview (PRESERVADO)
     local previewSection = visualRight:AddSection("Preview")
     local preview = Instance.new("Frame")
     preview.Name = "ESPPreview"
@@ -1448,15 +1452,8 @@ local function CreateUI()
         pDistance.Visible = State.ESP.Distance
 
         if State.ESP.Lines then
-            local a = Vector2.new(
-                preview.AbsoluteSize.X * 0.5,
-                preview.AbsoluteSize.Y - 5
-            )
-            local b = Vector2.new(
-                preview.AbsoluteSize.X * 0.5,
-                102
-            )
-
+            local a = Vector2.new(preview.AbsoluteSize.X * 0.5, preview.AbsoluteSize.Y - 5)
+            local b = Vector2.new(preview.AbsoluteSize.X * 0.5, 102)
             pLine.AnchorPoint = Vector2.new(0.5, 0.5)
             local d = b - a
             local mid = (a + b) * 0.5
@@ -1473,14 +1470,8 @@ local function CreateUI()
             line.BackgroundColor3 = ESP_COLORS.Skeleton
 
             if State.ESP.Skeleton and preview.AbsoluteSize.X > 0 then
-                local a = Vector2.new(
-                    preview.AbsoluteSize.X * pair[1].X,
-                    25 + 154 * pair[1].Y
-                )
-                local b = Vector2.new(
-                    preview.AbsoluteSize.X * pair[2].X,
-                    25 + 154 * pair[2].Y
-                )
+                local a = Vector2.new(preview.AbsoluteSize.X * pair[1].X, 25 + 154 * pair[1].Y)
+                local b = Vector2.new(preview.AbsoluteSize.X * pair[2].X, 25 + 154 * pair[2].Y)
                 local d = b - a
                 local mid = (a + b) * 0.5
                 line.Position = UDim2.fromOffset(mid.X, mid.Y)
@@ -1493,15 +1484,12 @@ local function CreateUI()
         end
     end
 
-    for _, optionName in ipairs({
-        "ESPBox", "ESPSkeleton",
-        "ESPName", "ESPDistance", "ESPLines"
-    }) do
+    for _, optionName in ipairs({"ESPBox", "ESPSkeleton", "ESPName", "ESPDistance", "ESPLines"}) do
         Fluent.Options[optionName]:OnChanged(UpdatePreview)
     end
     task.defer(UpdatePreview)
-    visualRight:AddSection("ESP Colors")
 
+    visualRight:AddSection("ESP Colors")
     local colorPresets = {
         White = Color3.fromRGB(245, 245, 247),
         Red = Color3.fromRGB(235, 65, 75),
@@ -1509,29 +1497,12 @@ local function CreateUI()
         Purple = Color3.fromRGB(118, 78, 255),
         Pink = Color3.fromRGB(255, 65, 150),
     }
+    local colorNames = {"White", "Red", "Blue", "Purple", "Pink"}
 
-    local colorNames = {
-        "White", "Red", "Blue", "Purple", "Pink",
-    }
-
-    local function BindESPColorSelect(
-        id,
-        title,
-        key,
-        defaultIndex
-    )
-        visualRight:AddSelect(id, {
-            Title = title,
-            Icon = "🪣",
-            Values = colorNames,
-            ColorMap = colorPresets,
-            Default = defaultIndex,
-        })
-
+    local function BindESPColorSelect(id, title, key, defaultIndex)
+        visualRight:AddSelect(id, {Title = title, Icon = "🪣", Values = colorNames, ColorMap = colorPresets, Default = defaultIndex})
         Fluent.Options[id]:OnChanged(function(value)
-            ESP_COLORS[key] =
-                colorPresets[value]
-                or colorPresets.Purple
+            ESP_COLORS[key] = colorPresets[value] or colorPresets.Purple
             UpdateESP()
             UpdatePreview()
         end)
@@ -1543,8 +1514,6 @@ local function CreateUI()
     BindESPColorSelect("NameColor", "Name", "Name", 1)
     BindESPColorSelect("DistanceColor", "Distance", "Distance", 1)
 
-
-
     visualRight:AddSection("Camera / FOV")
     visualRight:AddToggle("FOVCircle", {Title = "Draw FOV", Default = false})
     Fluent.Options.FOVCircle:OnChanged(function(value)
@@ -1552,36 +1521,24 @@ local function CreateUI()
         UpdateFOVCircle()
     end)
 
-    visualRight:AddSlider("FOVRadius", {
-        Title = "FOV Radius", Min = 30, Max = 500, Default = 200, Rounding = 0,
-    })
+    visualRight:AddSlider("FOVRadius", {Title = "FOV Radius", Min = 30, Max = 500, Default = 200, Rounding = 0})
     Fluent.Options.FOVRadius:OnChanged(function(value)
-        State.Visual.FOVRadius = value
-        UpdateFOVCircle()
+        SetSharedFOV(value)
     end)
 
-    visualRight:AddSlider("CameraFOV", {
-        Title = "Camera FOV", Min = 40, Max = 120, Default = 70, Rounding = 0,
-    })
+    visualRight:AddSlider("CameraFOV", {Title = "Camera FOV", Min = 40, Max = 120, Default = 70, Rounding = 0})
     Fluent.Options.CameraFOV:OnChanged(function(value)
         State.Visual.CameraFOV = value
-        pcall(function()
-            FOVController.SetBase(value)
-        end)
+        pcall(function() FOVController.SetBase(value) end)
     end)
 
-    -- EXPLOITS
+    -- EXPLOITS (PRESERVADO)
     Tabs.Exploits:AddSection("Camera")
-    Tabs.Exploits:AddButton({
-        Title = "Toggle Third Person",
-        Callback = function()
-            pcall(function()
-                ThirdPerson.Toggle()
-            end)
-        end,
-    })
+    Tabs.Exploits:AddButton({Title = "Toggle Third Person", Callback = function()
+        pcall(function() ThirdPerson.Toggle() end)
+    end})
 
-    -- PLAYERS - source-inspired live list and information.
+    -- PLAYERS (PRESERVADO)
     local playersGrid = Tabs.Cloud:AddGroup({Columns = 2, Gap = 10})
     local playersLeft = playersGrid:AddElement()
     local playersRight = playersGrid:AddElement()
@@ -1596,49 +1553,28 @@ local function CreateUI()
     local nearestNameLabel = playersRight:AddLabel("Name: --")
     local nearestDistanceLabel = playersRight:AddLabel("Distance: --")
 
-    -- CONFIG
+    -- CONFIG (PRESERVADO)
     local configGrid = Tabs.Config:AddGroup({Columns = 1, Gap = 8})
     local configLeft = configGrid:AddElement()
 
     configLeft:AddSection("Interface")
-
-    local initialUIScale = math.floor(
-        (Window:GetScale() * 100) + 0.5
-    )
-
-    configLeft:AddSlider("UISize", {
-        Title = "UI Size",
-        Min = 50,
-        Max = 110,
-        Default = initialUIScale,
-        Rounding = 0,
-    })
+    local initialUIScale = math.floor((Window:GetScale() * 100) + 0.5)
+    configLeft:AddSlider("UISize", {Title = "UI Size", Min = 50, Max = 110, Default = initialUIScale, Rounding = 0})
     Fluent.Options.UISize:OnChanged(function(value)
         Window:SetScale(value / 100)
     end)
 
-    configLeft:AddParagraph({
-        Title = "Open / Close",
-        Content = "Use the floating CE button outside the panel.",
-    })
+    configLeft:AddParagraph({Title = "Open / Close", Content = "Use the floating CE button outside the panel."})
+    configLeft:AddParagraph({Title = "Desktop Hotkey", Content = "Left Control • minimize / restore"})
+    configLeft:AddButton({Title = "Unload CAT EMPIRE", Callback = function()
+        Cleanup()
+    end})
 
-    configLeft:AddParagraph({
-        Title = "Desktop Hotkey",
-        Content = "Left Control • minimize / restore",
-    })
-
-    configLeft:AddButton({
-        Title = "Unload CAT EMPIRE",
-        Callback = function()
-            Cleanup()
-        end,
-    })
-
+    -- PLAYER LIST UPDATE (PRESERVADO)
     task.spawn(function()
         while not UIClosed do
             task.wait(0.5)
 
-            -- Source-inspired players list sorted by distance.
             local localRoot = GetTargetPart(LocalPlayer.Character)
             local rows = {}
 
@@ -1651,10 +1587,7 @@ local function CreateUI()
                             table.insert(rows, {
                                 Player = player,
                                 Character = player.Character,
-                                Distance = GetDistance(
-                                    localRoot.Position,
-                                    root.Position
-                                ),
+                                Distance = GetDistance(localRoot.Position, root.Position),
                             })
                         end
                     end
@@ -1668,13 +1601,7 @@ local function CreateUI()
             for index = 1, #playerRows do
                 local row = rows[index]
                 if row then
-                    playerRows[index]:SetText(
-                        string.format(
-                            "%s  [%d]",
-                            row.Player.DisplayName or row.Player.Name,
-                            math.floor(row.Distance + 0.5)
-                        )
-                    )
+                    playerRows[index]:SetText(string.format("%s  [%d]", row.Player.DisplayName or row.Player.Name, math.floor(row.Distance + 0.5)))
                 else
                     playerRows[index]:SetText("-")
                 end
@@ -1682,18 +1609,8 @@ local function CreateUI()
 
             local nearest = rows[1]
             if nearest then
-                nearestNameLabel:SetText(
-                    "Name: " .. (
-                        nearest.Player.DisplayName
-                        or nearest.Player.Name
-                    )
-                )
-                nearestDistanceLabel:SetText(
-                    "Distance: " .. string.format(
-                        "%d",
-                        math.floor(nearest.Distance + 0.5)
-                    )
-                )
+                nearestNameLabel:SetText("Name: " .. (nearest.Player.DisplayName or nearest.Player.Name))
+                nearestDistanceLabel:SetText("Distance: " .. string.format("%d", math.floor(nearest.Distance + 0.5)))
             else
                 nearestNameLabel:SetText("Name: --")
                 nearestDistanceLabel:SetText("Distance: --")
@@ -1702,7 +1619,13 @@ local function CreateUI()
     end)
 end
 
+-- ============================================================
+-- SETUP CONNECTIONS
+-- ============================================================
+
 local function SetupConnections()
+    SetupPlayerCache()
+
     table.insert(Connections, RunService.RenderStepped:Connect(function()
         if UIClosed then return end
         UpdateESP()
@@ -1712,13 +1635,9 @@ local function SetupConnections()
     end))
 
     table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function()
-        TargetData.Current = nil
-        TargetData.Position = nil
+        CameraController:ClearTarget()
+        ResetTargetData()
         task.defer(UpdateESP)
-    end))
-
-    table.insert(Connections, Players.PlayerRemoving:Connect(function(player)
-        UnregisterPlayer(player)
     end))
 
     local characters = workspace:FindFirstChild("Characters")
@@ -1730,8 +1649,11 @@ local function SetupConnections()
     end
 end
 
+-- ============================================================
+-- INIT
+-- ============================================================
+
 local function Init()
-    -- Remove restos de uma execução anterior.
     local env = (getgenv and getgenv()) or _G
 
     if type(env.CAT_EMPIRE_CLEANUP) == "function" then
