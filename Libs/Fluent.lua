@@ -191,6 +191,11 @@ end
 local Window = {}
 Window.__index = Window
 
+-- Forward declaration: _selectTab is defined before the icon helpers below.
+-- Without this, Luau resolves SetSidebarIconColor as a global (nil) and
+-- SetupUI stops while creating/selecting the first tab.
+local SetSidebarIconColor
+
 function Window:_connect(signal, callback)
     local connection = signal:Connect(callback)
     table.insert(self._connections, connection)
@@ -232,12 +237,21 @@ function Window:Destroy()
         return
     end
 
-    local env = (getgenv and getgenv()) or _G
+    -- Mark first: a cleanup callback may indirectly call Window:Destroy()
+    -- again. Setting the flag before the callback prevents recursion.
+    self.Destroyed = true
+
+    local env = _G
+    if type(getgenv) == "function" then
+        local ok, resolved = pcall(getgenv)
+        if ok and type(resolved) == "table" then
+            env = resolved
+        end
+    end
+
     if env and type(env.CAT_EMPIRE_CLEANUP) == "function" then
         pcall(env.CAT_EMPIRE_CLEANUP)
     end
-
-    self.Destroyed = true
 
     for _, connection in ipairs(self._connections) do
         pcall(function()
@@ -262,10 +276,20 @@ function Window:_selectTab(tab)
     for _, candidate in ipairs(self.Tabs) do
         local active = candidate == tab
 
-        candidate.Page.Visible = active
-        candidate.Indicator.Visible = false
-        candidate.Button.BackgroundColor3 = active and C.Accent or C.Sidebar
-        candidate.Button.BackgroundTransparency = active and 0 or 1
+        if candidate.Page then
+            candidate.Page.Visible = active
+        end
+
+        if candidate.Indicator then
+            candidate.Indicator.Visible = false
+        end
+
+        if candidate.Button then
+            candidate.Button.BackgroundColor3 =
+                active and C.Accent or C.Sidebar
+            candidate.Button.BackgroundTransparency =
+                active and 0 or 1
+        end
         if candidate.IconHolder then
             SetSidebarIconColor(
                 candidate.IconHolder,
@@ -358,7 +382,11 @@ local function DrawSidebarIcon(parent, iconName)
     return holder
 end
 
-local function SetSidebarIconColor(iconHolder, color)
+SetSidebarIconColor = function(iconHolder, color)
+    if not iconHolder then
+        return
+    end
+
     for _, obj in ipairs(iconHolder:GetDescendants()) do
         if obj:IsA("Frame") and obj.BackgroundTransparency < 1 then
             obj.BackgroundColor3 = color
@@ -1338,15 +1366,24 @@ end
 
 
 local function ResolveCatEmpireLogo()
+    local env = _G
+
+    if type(getgenv) == "function" then
+        local ok, resolved = pcall(getgenv)
+        if ok and type(resolved) == "table" then
+            env = resolved
+        end
+    end
+
     local assetFn =
-        rawget(getgenv and getgenv() or _G, "getcustomasset")
-        or rawget(getgenv and getgenv() or _G, "getsynasset")
+        rawget(env, "getcustomasset")
+        or rawget(env, "getsynasset")
 
     local writeFn =
-        rawget(getgenv and getgenv() or _G, "writefile")
+        rawget(env, "writefile")
 
     local isFileFn =
-        rawget(getgenv and getgenv() or _G, "isfile")
+        rawget(env, "isfile")
 
     if type(assetFn) ~= "function"
         or type(writeFn) ~= "function"
@@ -1493,6 +1530,18 @@ function Library:CreateWindow(config)
         Size = UDim2.new(1, -20, 0, 48),
     }, sidebar)
 
+    -- Always create a readable fallback. Some mobile environments return
+    -- a custom-asset string but still fail to render the image. In that case
+    -- the text remains visible instead of leaving the logo area empty.
+    local fallback = text(
+        logoWrap,
+        "CAT EMPIRE",
+        19,
+        C.Text,
+        Enum.Font.GothamBold
+    )
+    fallback.Size = UDim2.new(1, 0, 0, 32)
+
     local logoAsset = ResolveCatEmpireLogo()
 
     if logoAsset then
@@ -1504,16 +1553,8 @@ function Library:CreateWindow(config)
             ScaleType = Enum.ScaleType.Fit,
             Position = UDim2.fromOffset(0, -2),
             Size = UDim2.new(1, 0, 0, 42),
+            ZIndex = fallback.ZIndex + 1,
         }, logoWrap)
-    else
-        local fallback = text(
-            logoWrap,
-            "CAT EMPIRE",
-            19,
-            C.Text,
-            Enum.Font.GothamBold
-        )
-        fallback.Size = UDim2.new(1, 0, 0, 32)
     end
 
     local menuLabel = text(
