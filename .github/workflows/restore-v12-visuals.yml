@@ -1,0 +1,171 @@
+name: Restore CAT EMPIRE V12 Visuals
+
+on:
+  push:
+    paths:
+      - '.github/workflows/restore-v12-visuals.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore last known-good pre-overwrite MurderDuel
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show 067b91e1b57b96c5e248506631630b83f9265820:Games/MurderDuel.lua > Games/MurderDuel.lua
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('Games/MurderDuel.lua')
+          s = p.read_text(encoding='utf-8')
+
+          # Fix a forward-reference issue found during the new review.
+          anchor = '''    local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
+              local visualLeft = visualGrid:AddElement()
+              local visualRight = visualGrid:AddElement()
+
+              visualLeft:AddSection("Players ESP")
+          '''
+          replacement = '''    local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
+              local visualLeft = visualGrid:AddElement()
+              local visualRight = visualGrid:AddElement()
+              local UpdatePreview
+
+              visualLeft:AddSection("Players ESP")
+          '''
+          if anchor not in s:
+              raise SystemExit('Visual grid anchor missing; refusing partial restore.')
+          s = s.replace(anchor, replacement, 1)
+
+          old = '''    local function UpdatePreview()
+              pBox.BorderColor3 = ESP_COLORS.Box
+          '''
+          new = '''    UpdatePreview = function()
+              pBox.BorderColor3 = ESP_COLORS.Box
+          '''
+          if old not in s:
+              raise SystemExit('UpdatePreview block missing; refusing partial restore.')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Review pass 1 - requested visual systems
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('Games/MurderDuel.lua').read_text(encoding='utf-8')
+
+          checks = {
+              'Box ESP': 'Box = true' in s and 'ESPBox' in s,
+              'Skeleton ESP': 'Skeleton = true' in s and 'ESPSkeleton' in s,
+              'Name ESP': 'Name = true' in s and 'ESPName' in s,
+              'Distance ESP': 'Distance = true' in s and 'ESPDistance' in s,
+              'Lines ESP': 'Lines = true' in s and 'ESPLines' in s,
+              'No Highlight replacement': 'ESP_Highlight' not in s and 'Highlight = ' not in s,
+              'Top-screen line origin': 'GetLocalScreenOrigin' in s and 'camera.ViewportSize.X * 0.5' in s,
+              'Head-top line anchor': 'GetESPHeadTopScreen' in s and 'head.Size.Y * 0.5' in s,
+              'Thin ESP line': 'data.Line = NewLine("Line_" .. char.Name, gui, 1)' in s,
+              'Thin FOV': 'outline.Thickness = 1' in s,
+              'No legacy image FOV': 'rbxassetid://3570695787' not in s,
+              'ESP color selects': 'BindESPColorSelect' in s and '"White", "Red", "Blue", "Purple", "Pink"' in s,
+              'ESP preview': 'ESPPreview' in s,
+              'Mobile UI size': 'UISize' in s,
+          }
+
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              raise SystemExit('Review pass 1 failed: ' + ', '.join(failed))
+          print('Review pass 1: OK')
+          PY
+
+      - name: Review pass 2 - compare against known-good V11
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show 067b91e1b57b96c5e248506631630b83f9265820:Games/MurderDuel.lua > /tmp/v11.lua
+          python3 - <<'PY'
+          from pathlib import Path
+          import difflib
+
+          old = Path('/tmp/v11.lua').read_text(encoding='utf-8').splitlines()
+          new = Path('Games/MurderDuel.lua').read_text(encoding='utf-8').splitlines()
+          diff = list(difflib.unified_diff(old, new, lineterm=''))
+
+          # Only the intentional UpdatePreview forward-declaration fix may differ
+          # from the known-good pre-overwrite visual build.
+          added = [line[1:] for line in diff if line.startswith('+') and not line.startswith('+++')]
+          removed = [line[1:] for line in diff if line.startswith('-') and not line.startswith('---')]
+
+          expected_added = {
+              '    local UpdatePreview',
+              '    UpdatePreview = function()',
+          }
+          expected_removed = {
+              '    local function UpdatePreview()',
+          }
+
+          if set(added) != expected_added or set(removed) != expected_removed:
+              print('\n'.join(diff[:200]))
+              raise SystemExit('Review pass 2 failed: unexpected drift from V11.')
+          print('Review pass 2: OK')
+          PY
+
+      - name: Review pass 3 - UI compatibility and regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          m = Path('Games/MurderDuel.lua').read_text(encoding='utf-8')
+          f = Path('Libs/Fluent.lua').read_text(encoding='utf-8')
+
+          # Previous UI crash must stay fixed.
+          assert f.count('local SetSidebarIconColor') == 1
+          assert f.count('SetSidebarIconColor = function') == 1
+          assert f.index('local SetSidebarIconColor') < f.index('function Window:_selectTab')
+          assert f.index('SetSidebarIconColor = function') > f.index('function Window:_selectTab')
+
+          # API used by restored UI must exist in Fluent.
+          for api in [
+              'function Tab:AddGroup',
+              'function Tab:AddToggle',
+              'function Tab:AddSlider',
+              'function Tab:AddSelect',
+              'function Tab:AddButton',
+              'function Window:SetScale',
+              'function Window:GetScale',
+          ]:
+              assert api in f, api
+
+          # Catch the same forward-reference class in preview callbacks.
+          assert m.index('local UpdatePreview') < m.index('Fluent.Options.ESPBox:OnChanged')
+          assert m.index('UpdatePreview = function') > m.index('Fluent.Options.ESPBox:OnChanged')
+
+          print('Review pass 3: OK')
+          PY
+
+          git diff --check
+          git diff --stat
+
+      - name: Commit only after all three reviews pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'CAT EMPIRE'
+          git config user.email 'actions@users.noreply.github.com'
+          git add Games/MurderDuel.lua
+          git commit -m 'Restore CAT EMPIRE V12 visual systems'
+          git push
