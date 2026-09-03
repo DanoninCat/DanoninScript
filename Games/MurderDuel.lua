@@ -479,11 +479,11 @@ local function GetClosestTarget()
 end
 
 -- ============================================================
--- SISTEMA DE MIRA (REFATORADO)
+-- SISTEMA DE MIRA (APENAS CORREÇÕES DE SILENT E ASSIST)
 -- ============================================================
 
 -- ============================================================
--- 1. AIMBOT: SNAP DIRETO (NÃO LERP)
+-- 1. AIMBOT: SNAP DIRETO (INTOCADO - FUNCIONANDO)
 -- ============================================================
 
 local function ApplyAimbot(camera, targetPosition)
@@ -494,36 +494,62 @@ local function ApplyAimbot(camera, targetPosition)
 end
 
 -- ============================================================
--- 2. AIM ASSIST: CORREÇÃO VISÍVEL E GRADUAL
+-- 2. AIM ASSIST: CORRIGIDO - USANDO MOUSE (NÃO CAMERA.CFRAME)
 -- ============================================================
 
 local function ApplyAimAssist(camera, targetPosition, deltaTime)
-    local origin = camera.CFrame.Position
-    local currentDir = camera.CFrame.LookVector
-    local targetDir = (targetPosition - origin).Unit
+    -- Calcula a posição do alvo na tela
+    local screenPos, onScreen = camera:WorldToViewportPoint(targetPosition)
+    if not onScreen then
+        return false
+    end
+    
+    local screenPos2 = Vector2.new(screenPos.X, screenPos.Y)
+    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+    local distance = (screenPos2 - mousePos).Magnitude
+    
+    -- Quanto mais próximo do centro, mais assistência
+    local maxDist = State.Visual.FOVRadius * 0.5
+    if distance > maxDist then
+        return false
+    end
     
     local strength = State.Aim.Strength or 0.5
     local smoothing = State.Aim.Smoothing or 0.35
     
-    -- Intensidade base: mais forte que antes
-    local baseStrength = strength * 0.6
+    -- Fator de assistência baseado na distância
+    local assistFactor = 1 - (distance / maxDist)
+    local moveStrength = strength * assistFactor * 0.4
     
-    -- Suavização com deltaTime
-    local lerpFactor = 1 - math.exp(-baseStrength * smoothing * deltaTime * 12)
+    -- Move o mouse (NÃO a câmera) para simular assistência
+    local newX = mousePos.X + (screenPos2.X - mousePos.X) * moveStrength * smoothing * deltaTime * 60
+    local newY = mousePos.Y + (screenPos2.Y - mousePos.Y) * moveStrength * smoothing * deltaTime * 60
     
-    local newDir = currentDir:Lerp(targetDir, lerpFactor)
-    camera.CFrame = CFrame.new(origin, origin + newDir)
+    -- Tenta mover o mouse
+    local success, err = pcall(function()
+        Mouse.X = newX
+        Mouse.Y = newY
+    end)
+    
+    if not success then
+        warn("[CAT_EMPIRE] Aim Assist mouse move failed:", err)
+        return false
+    end
+    
     return true
 end
 
 -- ============================================================
--- 3. SILENT AIM: NÃO MOVE CÂMERA, APENAS MANTÉM TARGET
+-- 3. SILENT AIM: CORRIGIDO - EXPÕE TARGET PARA USO EXTERNO
 -- ============================================================
 
+-- Silent Aim NÃO move câmera nem mouse
+-- Apenas mantém TargetData preenchido para ser consumido
+-- por um sistema externo (ex: WeaponController)
 local function ApplySilentAim()
-    -- Silent Aim NÃO move a câmera
-    -- Apenas mantém TargetData preenchido para uso externo
-    return false
+    -- Apenas mantém TargetData.IsValid = true
+    -- O loop já preencheu TargetData com o alvo
+    return true
 end
 
 -- ============================================================
@@ -562,6 +588,8 @@ local function UpdateCamera(deltaTime)
     if mode == "Aimbot" then
         applied = ApplyAimbot(camera, TargetData.Position)
     elseif mode == "Assist" then
+        -- Aim Assist NÃO escreve Camera.CFrame
+        -- Ele move o mouse via ApplyAimAssist
         applied = ApplyAimAssist(camera, TargetData.Position, deltaTime)
     elseif mode == "Silent" then
         applied = ApplySilentAim()
@@ -669,7 +697,7 @@ local function RefreshCombatTracking()
 end
 
 -- ============================================================
--- PLAYER ESP (PRESERVADO)
+-- PLAYER ESP (PRESERVADO - INTOCADO)
 -- ============================================================
 
 local ESP_GUI_NAME = "CAT_EMPIRE_PlayerESP"
@@ -1633,7 +1661,7 @@ local function CreateUI()
         Cleanup()
     end})
 
-    -- ATUALIZA DIAGNÓSTICO
+    -- ATUALIZA DIAGNÓSTICO E PLAYER LIST
     task.spawn(function()
         while not UIClosed do
             task.wait(0.3)
