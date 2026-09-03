@@ -16,49 +16,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Patch only the sidebar logo loader
+      - name: Patch only the sidebar logo cache
         shell: bash
         run: |
           set -euo pipefail
           test "$(git hash-object Games/MurderDuel.lua)" = "9452235ea35a6a27a2fd94c29cf5d8e2e733e7ac"
-          test "$(wc -c < Assets/CatEmpireLogo.png)" -gt 5000
+          test "$(wc -c < Assets/CatEmpireLogo.jpg)" -gt 1500
 
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path('Libs/Fluent.lua')
           s = p.read_text(encoding='utf-8')
-
-          replacements = [
-              (
-                  'local fileName = "CAT_EMPIRE_sidebar_logo.jpg"',
-                  'local fileName = "CAT_EMPIRE_sidebar_logo_v12.png"',
-              ),
-              (
-                  '"CatEmpireLogo.jpg"',
-                  '"CatEmpireLogo.png"',
-              ),
-          ]
-
-          for old, new in replacements:
-              if s.count(old) != 1:
-                  raise SystemExit(f'Expected exactly one occurrence: {old!r}')
-              s = s.replace(old, new, 1)
-
+          old = 'local fileName = "CAT_EMPIRE_sidebar_logo.jpg"'
+          new = 'local fileName = "CAT_EMPIRE_sidebar_logo_v12.jpg"'
+          if s.count(old) != 1:
+              raise SystemExit('Expected exactly one legacy logo-cache declaration.')
+          s = s.replace(old, new, 1)
           p.write_text(s, encoding='utf-8')
           PY
 
-      - name: Review pass 1 - scope and asset
+      - name: Review pass 1 - scope and logo asset
         shell: bash
         run: |
           set -euo pipefail
           test "$(git hash-object Games/MurderDuel.lua)" = "9452235ea35a6a27a2fd94c29cf5d8e2e733e7ac"
-          test "$(wc -c < Assets/CatEmpireLogo.png)" -gt 5000
+          test "$(wc -c < Assets/CatEmpireLogo.jpg)" -gt 1500
           test "$(git diff --name-only)" = "Libs/Fluent.lua"
-          grep -Fq 'CAT_EMPIRE_sidebar_logo_v12.png' Libs/Fluent.lua
-          grep -Fq 'CatEmpireLogo.png' Libs/Fluent.lua
-          ! grep -Fq 'CAT_EMPIRE_sidebar_logo.jpg' Libs/Fluent.lua
-          ! grep -Fq 'CatEmpireLogo.jpg' Libs/Fluent.lua
+          grep -Fq 'CAT_EMPIRE_sidebar_logo_v12.jpg' Libs/Fluent.lua
+          grep -Fq 'CatEmpireLogo.jpg' Libs/Fluent.lua
+          ! grep -Fq 'local fileName = "CAT_EMPIRE_sidebar_logo.jpg"' Libs/Fluent.lua
           echo 'Review pass 1: OK'
 
       - name: Review pass 2 - UI regression guard
@@ -68,7 +54,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s = Path('Libs/Fluent.lua').read_text(encoding='utf-8')
-
           assert s.count('local SetSidebarIconColor') == 1
           assert s.count('SetSidebarIconColor = function') == 1
           assert s.index('local SetSidebarIconColor') < s.index('function Window:_selectTab')
@@ -89,7 +74,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           m = Path('Games/MurderDuel.lua').read_text(encoding='utf-8')
-
           required = [
               'Box = true',
               'Skeleton = true',
@@ -107,7 +91,6 @@ jobs:
           missing = [token for token in required if token not in m]
           if missing:
               raise SystemExit('V12 regression: ' + ', '.join(missing))
-
           assert 'ESP_Highlight' not in m
           print('Review pass 3: OK')
           PY
