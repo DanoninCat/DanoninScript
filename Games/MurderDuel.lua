@@ -167,6 +167,7 @@ local TargetData = {
     OnScreen = false,
     LineOfSight = false,
     IsValid = false,
+    Mode = "None",
 }
 
 local ESP_COLORS = {
@@ -175,6 +176,18 @@ local ESP_COLORS = {
     Lines = Color3.fromRGB(78, 91, 222),
     Name = Color3.fromRGB(235, 235, 240),
     Distance = Color3.fromRGB(235, 235, 240),
+}
+
+-- ============================================================
+-- DIAGNÓSTICO
+-- ============================================================
+
+local Diagnostics = {
+    LastCFrameBefore = nil,
+    LastCFrameAfter = nil,
+    LastCFrameFinal = nil,
+    CameraOwner = "Unknown",
+    ConflictDetected = false,
 }
 
 -- ============================================================
@@ -466,108 +479,109 @@ local function GetClosestTarget()
 end
 
 -- ============================================================
--- CAMERA CONTROLLER (ÚNICO ESCRITOR)
+-- SISTEMA DE MIRA (REFATORADO)
 -- ============================================================
 
-local CameraController = {
-    TargetPosition = nil,
-    TargetChar = nil,
-}
+-- ============================================================
+-- 1. AIMBOT: SNAP DIRETO (NÃO LERP)
+-- ============================================================
 
-local function GetSafeDirection(from, to)
-    local delta = to - from
-    local magnitude = delta.Magnitude
-    if magnitude < 0.001 then
-        return nil
-    end
-    return delta.Unit
+local function ApplyAimbot(camera, targetPosition)
+    local origin = camera.CFrame.Position
+    local direction = (targetPosition - origin).Unit
+    camera.CFrame = CFrame.new(origin, origin + direction)
+    return true
 end
 
-function CameraController:Update(deltaTime)
-    if not self.TargetPosition or not self.TargetChar then
-        return
-    end
+-- ============================================================
+-- 2. AIM ASSIST: CORREÇÃO VISÍVEL E GRADUAL
+-- ============================================================
+
+local function ApplyAimAssist(camera, targetPosition, deltaTime)
+    local origin = camera.CFrame.Position
+    local currentDir = camera.CFrame.LookVector
+    local targetDir = (targetPosition - origin).Unit
     
+    local strength = State.Aim.Strength or 0.5
+    local smoothing = State.Aim.Smoothing or 0.35
+    
+    -- Intensidade base: mais forte que antes
+    local baseStrength = strength * 0.6
+    
+    -- Suavização com deltaTime
+    local lerpFactor = 1 - math.exp(-baseStrength * smoothing * deltaTime * 12)
+    
+    local newDir = currentDir:Lerp(targetDir, lerpFactor)
+    camera.CFrame = CFrame.new(origin, origin + newDir)
+    return true
+end
+
+-- ============================================================
+-- 3. SILENT AIM: NÃO MOVE CÂMERA, APENAS MANTÉM TARGET
+-- ============================================================
+
+local function ApplySilentAim()
+    -- Silent Aim NÃO move a câmera
+    -- Apenas mantém TargetData preenchido para uso externo
+    return false
+end
+
+-- ============================================================
+-- CAMERA CONTROLLER (COM DIAGNÓSTICO)
+-- ============================================================
+
+local function UpdateCamera(deltaTime)
     local camera = GetCamera()
     if not camera then
         return
     end
     
-    local origin = camera.CFrame.Position
-    local direction = GetSafeDirection(origin, self.TargetPosition)
-    if not direction then
-        return
-    end
-    
-    local currentDir = camera.CFrame.LookVector
-    local finalDir = currentDir
-    
-    -- ============================================================
-    -- MODO: SILENT AIM (NÃO MOVE CÂMERA, APENAS MANTÉM TARGET)
-    -- ============================================================
+    local mode = "None"
     if State.Aim.Silent then
-        return
-    
-    -- ============================================================
-    -- MODO: AIMBOT (SNAP DIRETO COM STRENGTH)
-    -- ============================================================
+        mode = "Silent"
     elseif State.Aim.Enabled then
-        local strength = State.Aim.Strength or 0.5
-        local lerpFactor = 1 - math.exp(-strength * deltaTime * 15)
-        finalDir = currentDir:Lerp(direction, lerpFactor)
-    
-    -- ============================================================
-    -- MODO: AIM ASSIST (CORREÇÃO PARCIAL E SUAVE)
-    -- ============================================================
+        mode = "Aimbot"
     elseif State.Aim.Assist then
-        local strength = State.Aim.Strength or 0.5
-        local smoothing = State.Aim.Smoothing or 0.35
-        
-        -- Assistência baseada na distância do centro da tela
-        local screenDistance = TargetData.Angle or 999
-        local assistRadius = State.Visual.FOVRadius * 0.3
-        
-        local assistFactor = 1 - math.min(screenDistance / assistRadius, 1)
-        
-        if assistFactor < 0.05 then
-            return
-        end
-        
-        local correctionStrength = strength * assistFactor * 0.35
-        local lerpFactor = 1 - math.exp(-correctionStrength * smoothing * deltaTime * 8)
-        finalDir = currentDir:Lerp(direction, lerpFactor)
-    else
+        mode = "Assist"
+    end
+    
+    if mode == "None" then
         return
     end
     
-    -- ============================================================
-    -- APLICA A MUDANÇA NA CÂMERA
-    -- ============================================================
-    camera.CFrame = CFrame.new(origin, origin + finalDir)
-end
-
-function CameraController:SetTarget(char, position)
-    self.TargetChar = char
-    self.TargetPosition = position
-end
-
-function CameraController:ClearTarget()
-    self.TargetChar = nil
-    self.TargetPosition = nil
-end
-
--- ============================================================
--- RESET TARGET DATA
--- ============================================================
-
-local function ResetTargetData()
-    TargetData.Current = nil
-    TargetData.Position = nil
-    TargetData.Distance = 0
-    TargetData.Angle = 0
-    TargetData.OnScreen = false
-    TargetData.LineOfSight = false
-    TargetData.IsValid = false
+    if not TargetData.IsValid or not TargetData.Position then
+        return
+    end
+    
+    -- DIAGNÓSTICO: captura estado antes
+    Diagnostics.LastCFrameBefore = camera.CFrame
+    Diagnostics.CameraOwner = "CAT_EMPIRE"
+    
+    local applied = false
+    
+    if mode == "Aimbot" then
+        applied = ApplyAimbot(camera, TargetData.Position)
+    elseif mode == "Assist" then
+        applied = ApplyAimAssist(camera, TargetData.Position, deltaTime)
+    elseif mode == "Silent" then
+        applied = ApplySilentAim()
+    end
+    
+    -- DIAGNÓSTICO: captura estado depois
+    Diagnostics.LastCFrameAfter = camera.CFrame
+    
+    -- Verifica conflito (se outro sistema modificou depois)
+    task.defer(function()
+        local current = GetCamera()
+        if current then
+            Diagnostics.LastCFrameFinal = current.CFrame
+            if Diagnostics.LastCFrameAfter and Diagnostics.LastCFrameFinal then
+                local diff = (Diagnostics.LastCFrameAfter.Position - Diagnostics.LastCFrameFinal.Position).Magnitude
+                local angleDiff = math.abs(Diagnostics.LastCFrameAfter.LookVector:Dot(Diagnostics.LastCFrameFinal.LookVector))
+                Diagnostics.ConflictDetected = diff > 0.1 or angleDiff < 0.99
+            end
+        end
+    end)
 end
 
 -- ============================================================
@@ -582,8 +596,14 @@ local function CombatTrackingLoop(deltaTime)
     local isEnabled = State.Aim.Enabled or State.Aim.Silent or State.Aim.Assist
     
     if not isEnabled then
-        CameraController:ClearTarget()
-        ResetTargetData()
+        TargetData.Current = nil
+        TargetData.Position = nil
+        TargetData.Distance = 0
+        TargetData.Angle = 0
+        TargetData.OnScreen = false
+        TargetData.LineOfSight = false
+        TargetData.IsValid = false
+        TargetData.Mode = "None"
         return
     end
 
@@ -598,12 +618,25 @@ local function CombatTrackingLoop(deltaTime)
         TargetData.OnScreen = candidate.OnScreen
         TargetData.LineOfSight = candidate.LineOfSight
         TargetData.IsValid = true
+        
+        if State.Aim.Silent then
+            TargetData.Mode = "Silent"
+        elseif State.Aim.Enabled then
+            TargetData.Mode = "Aimbot"
+        elseif State.Aim.Assist then
+            TargetData.Mode = "Assist"
+        end
 
-        CameraController:SetTarget(candidate.Character, candidate.Position)
-        CameraController:Update(deltaTime)
+        UpdateCamera(deltaTime)
     else
-        CameraController:ClearTarget()
-        ResetTargetData()
+        TargetData.Current = nil
+        TargetData.Position = nil
+        TargetData.Distance = 0
+        TargetData.Angle = 0
+        TargetData.OnScreen = false
+        TargetData.LineOfSight = false
+        TargetData.IsValid = false
+        TargetData.Mode = "None"
     end
 end
 
@@ -619,8 +652,10 @@ local function StopCombatLoop()
         CombatConnection:Disconnect()
         CombatConnection = nil
     end
-    CameraController:ClearTarget()
-    ResetTargetData()
+    TargetData.Current = nil
+    TargetData.Position = nil
+    TargetData.IsValid = false
+    TargetData.Mode = "None"
 end
 
 local function RefreshCombatTracking()
@@ -1229,8 +1264,10 @@ local function Cleanup()
         FOVFrame = nil
         FOVStroke = nil
 
-        ResetTargetData()
-        CameraController:ClearTarget()
+        TargetData.Current = nil
+        TargetData.Position = nil
+        TargetData.IsValid = false
+        TargetData.Mode = "None"
 
         if WindowRef then
             pcall(function()
@@ -1278,6 +1315,7 @@ local function CreateUI()
     local combatGrid = Tabs.Combat:AddGroup({Columns = 2, Gap = 8})
     local combatLeft = combatGrid:AddElement()
     local combatRight = combatGrid:AddElement()
+    local diagLabel = nil
 
     combatLeft:AddSection("Aimbot")
     combatLeft:AddToggle("AimbotEnabled", {Title = "Aimbot", Default = false})
@@ -1323,6 +1361,10 @@ local function CreateUI()
             Fluent.Options.TeamCheck:SetValue(value)
         end
     end)
+
+    -- DIAGNÓSTICO
+    combatRight:AddSection("Diagnóstico")
+    diagLabel = combatRight:AddLabel("Target: None | Mode: None | Conflict: No")
 
     -- VISUALS
     local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
@@ -1591,10 +1633,17 @@ local function CreateUI()
         Cleanup()
     end})
 
-    -- PLAYER LIST UPDATE
+    -- ATUALIZA DIAGNÓSTICO
     task.spawn(function()
         while not UIClosed do
-            task.wait(0.5)
+            task.wait(0.3)
+
+            if diagLabel then
+                local mode = TargetData.Mode or "None"
+                local hasTarget = TargetData.IsValid and "Yes" or "No"
+                local conflict = Diagnostics.ConflictDetected and "Yes" or "No"
+                diagLabel:SetText(string.format("Target: %s | Mode: %s | Conflict: %s", hasTarget, mode, conflict))
+            end
 
             local localRoot = GetTargetPart(LocalPlayer.Character)
             local rows = {}
@@ -1656,8 +1705,10 @@ local function SetupConnections()
     end))
 
     table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function()
-        CameraController:ClearTarget()
-        ResetTargetData()
+        TargetData.Current = nil
+        TargetData.Position = nil
+        TargetData.IsValid = false
+        TargetData.Mode = "None"
         task.defer(UpdateESP)
     end))
 
