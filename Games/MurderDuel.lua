@@ -29,15 +29,13 @@ local State = {
     ESP = {
         Enabled = false,
         Box = true,
-        Skeleton = false,
+        Skeleton = true,
         Name = true,
         HealthBar = true,
-        WeaponName = false,
+        WeaponName = true,
         Distance = true,
-        Lines = false,
+        Lines = true,
         TeamCheck = true,
-        AllowLocalPlayer = false,
-        AllowNPC = false,
         RenderingDistance = 500,
     },
 
@@ -117,57 +115,81 @@ end
 local IsAlive
 
 local function GetPlayerFromCharacter(char)
+    if not char then
+        return nil
+    end
+
+    -- Direct Roblox character match.
     for _, player in ipairs(Players:GetPlayers()) do
         if player.Character == char then
             return player
         end
     end
+
+    -- Some games mirror player characters under workspace.Characters.
+    local byName = Players:FindFirstChild(char.Name)
+    if byName and byName:IsA("Player") then
+        return byName
+    end
+
+    -- Attribute fallbacks for mirrored/custom character models.
+    local userId = char:GetAttribute("UserId")
+        or char:GetAttribute("PlayerUserId")
+        or char:GetAttribute("OwnerUserId")
+
+    if userId ~= nil then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player.UserId == tonumber(userId) then
+                return player
+            end
+        end
+    end
+
     return nil
 end
 
 local function GetESPCharacters()
     local result = {}
-    local seen = {}
-
     local folder = workspace:FindFirstChild("Characters")
-    if folder then
-        for _, child in ipairs(folder:GetChildren()) do
-            if child:IsA("Model") and not seen[child] then
-                seen[child] = true
+
+    if not folder then
+        return result
+    end
+
+    for _, child in ipairs(folder:GetChildren()) do
+        if child:IsA("Model")
+            and child ~= LocalPlayer.Character
+        then
+            local player = GetPlayerFromCharacter(child)
+
+            -- NPCs are intentionally ignored.
+            -- The local player is intentionally ignored.
+            if player and player ~= LocalPlayer then
                 table.insert(result, child)
             end
         end
-    end
-
-    -- Some games keep the local character outside workspace.Characters.
-    if State.ESP.AllowLocalPlayer
-        and LocalPlayer.Character
-        and not seen[LocalPlayer.Character]
-    then
-        table.insert(result, LocalPlayer.Character)
     end
 
     return result
 end
 
 local function IsESPCharacterEligible(char)
-    if not char or not char.Parent or not IsAlive(char) then
+    if not char
+        or not char.Parent
+        or char == LocalPlayer.Character
+        or not IsAlive(char)
+    then
         return false
     end
 
-    local player = GetPlayerFromCharacter(char)
-    local isLocal = char == LocalPlayer.Character
-    local isNPC = player == nil
+    local targetPlayer = GetPlayerFromCharacter(char)
 
-    if isLocal and not State.ESP.AllowLocalPlayer then
+    -- No NPC ESP and no local-player ESP.
+    if not targetPlayer or targetPlayer == LocalPlayer then
         return false
     end
 
-    if isNPC and not State.ESP.AllowNPC then
-        return false
-    end
-
-    if State.ESP.TeamCheck and not isLocal then
+    if State.ESP.TeamCheck then
         local myChar = LocalPlayer.Character
         if myChar then
             local mySide = myChar:GetAttribute("MatchSide")
@@ -181,9 +203,7 @@ local function IsESPCharacterEligible(char)
             end
         end
 
-        local targetPlayer = GetPlayerFromCharacter(char)
-        if targetPlayer
-            and LocalPlayer.Team ~= nil
+        if LocalPlayer.Team ~= nil
             and targetPlayer.Team ~= nil
             and LocalPlayer.Team == targetPlayer.Team
         then
@@ -1326,10 +1346,38 @@ local function CreateUI()
     })
     Fluent.Options.ESPEnabled:OnChanged(function(value)
         State.ESP.Enabled = value
-        if not value then
-            for _, data in pairs(ESPObjects) do HideESPData(data) end
-        else
+
+        if value then
+            -- Restore the old one-click behavior:
+            -- enabling the master toggle enables every player ESP layer.
+            local allOptions = {
+                {"ESPBox", "Box"},
+                {"ESPSkeleton", "Skeleton"},
+                {"ESPHealth", "HealthBar"},
+                {"ESPName", "Name"},
+                {"ESPWeapon", "WeaponName"},
+                {"ESPDistance", "Distance"},
+                {"ESPLines", "Lines"},
+            }
+
+            for _, entry in ipairs(allOptions) do
+                local optionId = entry[1]
+                local stateKey = entry[2]
+
+                State.ESP[stateKey] = true
+
+                local option = Fluent.Options[optionId]
+                if option and option.Value ~= true then
+                    option:SetValue(true)
+                end
+            end
+
             UpdateESP()
+            UpdatePreview()
+        else
+            for _, data in pairs(ESPObjects) do
+                HideESPData(data)
+            end
         end
     end)
 
@@ -1345,24 +1393,6 @@ local function CreateUI()
         UpdateESP()
     end)
 
-    visualLeft:AddToggle("ESPAllowNPC", {
-        Title = "Allow NPC",
-        Default = false,
-    })
-    Fluent.Options.ESPAllowNPC:OnChanged(function(value)
-        State.ESP.AllowNPC = value
-        UpdateESP()
-    end)
-
-    visualLeft:AddToggle("ESPAllowLocal", {
-        Title = "Allow Local Player",
-        Default = false,
-    })
-    Fluent.Options.ESPAllowLocal:OnChanged(function(value)
-        State.ESP.AllowLocalPlayer = value
-        UpdateESP()
-    end)
-
     visualLeft:AddToggle("ESPBox", {Title = "Box", Default = true})
     Fluent.Options.ESPBox:OnChanged(function(value)
         State.ESP.Box = value
@@ -1370,7 +1400,7 @@ local function CreateUI()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("ESPSkeleton", {Title = "Skeleton", Default = false})
+    visualLeft:AddToggle("ESPSkeleton", {Title = "Skeleton", Default = true})
     Fluent.Options.ESPSkeleton:OnChanged(function(value)
         State.ESP.Skeleton = value
         UpdateESP()
@@ -1391,7 +1421,7 @@ local function CreateUI()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("ESPWeapon", {Title = "Weapon Name", Default = false})
+    visualLeft:AddToggle("ESPWeapon", {Title = "Weapon Name", Default = true})
     Fluent.Options.ESPWeapon:OnChanged(function(value)
         State.ESP.WeaponName = value
         UpdateESP()
@@ -1405,7 +1435,7 @@ local function CreateUI()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("ESPLines", {Title = "Lines", Default = false})
+    visualLeft:AddToggle("ESPLines", {Title = "Lines", Default = true})
     Fluent.Options.ESPLines:OnChanged(function(value)
         State.ESP.Lines = value
         UpdateESP()
