@@ -1,0 +1,249 @@
+name: CAT EMPIRE UI Hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cat-empire-ui-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch and validate Fluent UI
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('Libs/Fluent.lua')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = []
+
+          replacements.append((
+          '''local Window = {}
+          Window.__index = Window
+          ''',
+          '''local Window = {}
+          Window.__index = Window
+
+          -- Forward declaration: _selectTab is defined before the icon helpers below.
+          -- Without this, Luau resolves SetSidebarIconColor as a global (nil) and
+          -- SetupUI stops while creating/selecting the first tab.
+          local SetSidebarIconColor
+          '''))
+
+          replacements.append((
+          '''function Window:Destroy()
+              if self.Destroyed then
+                  return
+              end
+
+              local env = (getgenv and getgenv()) or _G
+              if env and type(env.CAT_EMPIRE_CLEANUP) == "function" then
+                  pcall(env.CAT_EMPIRE_CLEANUP)
+              end
+
+              self.Destroyed = true
+          ''',
+          '''function Window:Destroy()
+              if self.Destroyed then
+                  return
+              end
+
+              -- Mark first: a cleanup callback may indirectly call Window:Destroy()
+              -- again. Setting the flag before the callback prevents recursion.
+              self.Destroyed = true
+
+              local env = _G
+              if type(getgenv) == "function" then
+                  local ok, resolved = pcall(getgenv)
+                  if ok and type(resolved) == "table" then
+                      env = resolved
+                  end
+              end
+
+              if env and type(env.CAT_EMPIRE_CLEANUP) == "function" then
+                  pcall(env.CAT_EMPIRE_CLEANUP)
+              end
+          '''))
+
+          replacements.append((
+          '''        candidate.Page.Visible = active
+                  candidate.Indicator.Visible = false
+                  candidate.Button.BackgroundColor3 = active and C.Accent or C.Sidebar
+                  candidate.Button.BackgroundTransparency = active and 0 or 1
+          ''',
+          '''        if candidate.Page then
+                      candidate.Page.Visible = active
+                  end
+
+                  if candidate.Indicator then
+                      candidate.Indicator.Visible = false
+                  end
+
+                  if candidate.Button then
+                      candidate.Button.BackgroundColor3 =
+                          active and C.Accent or C.Sidebar
+                      candidate.Button.BackgroundTransparency =
+                          active and 0 or 1
+                  end
+          '''))
+
+          replacements.append((
+          '''local function SetSidebarIconColor(iconHolder, color)
+              for _, obj in ipairs(iconHolder:GetDescendants()) do
+                  if obj:IsA("Frame") and obj.BackgroundTransparency < 1 then
+                      obj.BackgroundColor3 = color
+                  elseif obj:IsA("UIStroke") then
+                      obj.Color = color
+                  elseif obj:IsA("TextLabel") then
+                      obj.TextColor3 = color
+                  end
+              end
+          end
+          ''',
+          '''SetSidebarIconColor = function(iconHolder, color)
+              if not iconHolder then
+                  return
+              end
+
+              for _, obj in ipairs(iconHolder:GetDescendants()) do
+                  if obj:IsA("Frame") and obj.BackgroundTransparency < 1 then
+                      obj.BackgroundColor3 = color
+                  elseif obj:IsA("UIStroke") then
+                      obj.Color = color
+                  elseif obj:IsA("TextLabel") then
+                      obj.TextColor3 = color
+                  end
+              end
+          end
+          '''))
+
+          replacements.append((
+          '''local function ResolveCatEmpireLogo()
+              local assetFn =
+                  rawget(getgenv and getgenv() or _G, "getcustomasset")
+                  or rawget(getgenv and getgenv() or _G, "getsynasset")
+
+              local writeFn =
+                  rawget(getgenv and getgenv() or _G, "writefile")
+
+              local isFileFn =
+                  rawget(getgenv and getgenv() or _G, "isfile")
+          ''',
+          '''local function ResolveCatEmpireLogo()
+              local env = _G
+
+              if type(getgenv) == "function" then
+                  local ok, resolved = pcall(getgenv)
+                  if ok and type(resolved) == "table" then
+                      env = resolved
+                  end
+              end
+
+              local assetFn =
+                  rawget(env, "getcustomasset")
+                  or rawget(env, "getsynasset")
+
+              local writeFn =
+                  rawget(env, "writefile")
+
+              local isFileFn =
+                  rawget(env, "isfile")
+          '''))
+
+          replacements.append((
+          '''    local logoAsset = ResolveCatEmpireLogo()
+
+              if logoAsset then
+                  local logoImage = create("ImageLabel", {
+                      Name = "CAT_EMPIRE_Logo",
+                      BackgroundTransparency = 1,
+                      BorderSizePixel = 0,
+                      Image = logoAsset,
+                      ScaleType = Enum.ScaleType.Fit,
+                      Position = UDim2.fromOffset(0, -2),
+                      Size = UDim2.new(1, 0, 0, 42),
+                  }, logoWrap)
+              else
+                  local fallback = text(
+                      logoWrap,
+                      "CAT EMPIRE",
+                      19,
+                      C.Text,
+                      Enum.Font.GothamBold
+                  )
+                  fallback.Size = UDim2.new(1, 0, 0, 32)
+              end
+          ''',
+          '''    -- Always create a readable fallback. Some mobile environments return
+              -- a custom-asset string but still fail to render the image. In that case
+              -- the text remains visible instead of leaving the logo area empty.
+              local fallback = text(
+                  logoWrap,
+                  "CAT EMPIRE",
+                  19,
+                  C.Text,
+                  Enum.Font.GothamBold
+              )
+              fallback.Size = UDim2.new(1, 0, 0, 32)
+
+              local logoAsset = ResolveCatEmpireLogo()
+
+              if logoAsset then
+                  local logoImage = create("ImageLabel", {
+                      Name = "CAT_EMPIRE_Logo",
+                      BackgroundTransparency = 1,
+                      BorderSizePixel = 0,
+                      Image = logoAsset,
+                      ScaleType = Enum.ScaleType.Fit,
+                      Position = UDim2.fromOffset(0, -2),
+                      Size = UDim2.new(1, 0, 0, 42),
+                      ZIndex = fallback.ZIndex + 1,
+                  }, logoWrap)
+              end
+          '''))
+
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit('Expected UI block not found; refusing partial patch.')
+              text = text.replace(old, new, 1)
+
+          # Static regression checks for the exact crash seen on mobile.
+          assert text.count('local SetSidebarIconColor') == 1
+          assert text.count('SetSidebarIconColor = function') == 1
+          assert 'local function SetSidebarIconColor' not in text
+          assert text.index('local SetSidebarIconColor') < text.index('function Window:_selectTab')
+          assert text.index('SetSidebarIconColor = function') > text.index('function Window:_selectTab')
+          assert 'local fallback = text(' in text
+          assert 'self.Destroyed = true' in text
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Review resulting diff
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- Libs/Fluent.lua
+
+      - name: Commit UI fix
+        shell: bash
+        run: |
+          git config user.name "CAT EMPIRE Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Libs/Fluent.lua
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Fix CAT EMPIRE UI initialization"
+          git push
