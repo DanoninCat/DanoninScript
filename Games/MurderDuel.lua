@@ -1189,7 +1189,7 @@ local function CreateUI()
         Title = "CAT EMPIRE",
         SubTitle = "",
         TabWidth = 112,
-        Size = UDim2.fromOffset(980, 610),
+        Size = UDim2.fromOffset(760, 460),
         Acrylic = false,
         Animated = false,
         Theme = "CAT EMPIRE",
@@ -1754,8 +1754,29 @@ local function CreateUI()
     local configRight = configGrid:AddElement()
 
     configLeft:AddSection("Interface")
+
+    local initialUIScale = math.floor(
+        (Window:GetScale() * 100) + 0.5
+    )
+
+    configLeft:AddSlider("UISize", {
+        Title = "UI Size",
+        Min = 50,
+        Max = 110,
+        Default = initialUIScale,
+        Rounding = 0,
+    })
+    Fluent.Options.UISize:OnChanged(function(value)
+        Window:SetScale(value / 100)
+    end)
+
     configLeft:AddParagraph({
-        Title = "Hotkey",
+        Title = "Open / Close",
+        Content = "Use the floating CE button outside the panel.",
+    })
+
+    configLeft:AddParagraph({
+        Title = "Desktop Hotkey",
         Content = "Left Control • minimize / restore",
     })
 

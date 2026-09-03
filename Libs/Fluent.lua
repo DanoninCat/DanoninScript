@@ -18,22 +18,22 @@ local Library = {
 }
 
 local C = {
-    Background = Color3.fromRGB(7, 7, 9),
-    Sidebar = Color3.fromRGB(7, 7, 9),
+    Background = Color3.fromRGB(5, 5, 7),
+    Sidebar = Color3.fromRGB(8, 8, 10),
     Content = Color3.fromRGB(7, 7, 9),
-    Section = Color3.fromRGB(12, 12, 14),
-    SectionCap = Color3.fromRGB(15, 15, 17),
-    Row = Color3.fromRGB(12, 12, 14),
-    RowHover = Color3.fromRGB(18, 19, 23),
-    Border = Color3.fromRGB(22, 23, 26),
-    BorderSoft = Color3.fromRGB(18, 19, 22),
-    Accent = Color3.fromRGB(78, 91, 222),
-    AccentDark = Color3.fromRGB(60, 70, 180),
-    AccentSoft = Color3.fromRGB(121, 131, 207),
-    Text = Color3.fromRGB(250, 250, 250),
-    Muted = Color3.fromRGB(92, 96, 112),
-    Muted2 = Color3.fromRGB(68, 71, 85),
-    Knob = Color3.fromRGB(245, 245, 247),
+    Section = Color3.fromRGB(10, 10, 12),
+    SectionCap = Color3.fromRGB(15, 15, 18),
+    Row = Color3.fromRGB(10, 10, 12),
+    RowHover = Color3.fromRGB(16, 16, 20),
+    Border = Color3.fromRGB(20, 20, 24),
+    BorderSoft = Color3.fromRGB(14, 14, 18),
+    Accent = Color3.fromRGB(255, 24, 116),
+    AccentDark = Color3.fromRGB(184, 18, 84),
+    AccentSoft = Color3.fromRGB(255, 62, 146),
+    Text = Color3.fromRGB(245, 245, 245),
+    Muted = Color3.fromRGB(155, 155, 165),
+    Muted2 = Color3.fromRGB(90, 90, 102),
+    Knob = Color3.fromRGB(250, 250, 250),
 }
 
 local function create(className, props, parent)
@@ -210,6 +210,23 @@ function Window:ToggleMinimize()
     self:_setMinimized(not self.Minimized)
 end
 
+function Window:SetScale(value)
+    if self.Destroyed then
+        return
+    end
+
+    value = math.clamp(tonumber(value) or 1, 0.50, 1.10)
+    self.ScaleValue = value
+
+    if self.UIScale then
+        self.UIScale.Scale = value
+    end
+end
+
+function Window:GetScale()
+    return self.ScaleValue or 1
+end
+
 function Window:Destroy()
     if self.Destroyed then
         return
@@ -247,12 +264,10 @@ function Window:_selectTab(tab)
 
         candidate.Page.Visible = active
         candidate.Indicator.Visible = false
-        candidate.Button.BackgroundColor3 = active
-            and Color3.fromRGB(18, 19, 31)
-            or C.Sidebar
+        candidate.Button.BackgroundColor3 = active and C.Accent or C.Sidebar
         candidate.Button.BackgroundTransparency = active and 0 or 1
-        candidate.Button.TextColor3 = active and C.Accent or C.Muted
-        candidate.IconLabel.TextColor3 = active and C.Accent or C.Muted
+        candidate.Button.TextColor3 = active and C.Text or C.Muted
+        candidate.IconLabel.TextColor3 = active and C.Text or C.Muted
     end
 
     self.ActiveTab = tab
@@ -286,7 +301,7 @@ end
 function Container:AddSection(titleValue)
     local section = create("Frame", {
         Name = "Section",
-        BackgroundColor3 = C.Section,
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
         Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
@@ -295,20 +310,19 @@ function Container:AddSection(titleValue)
 
     self._nextOrder += 1
 
-    corner(section, 5)
-    stroke(section, C.Border, 0, 1)
-    padding(section, 16, 16, 11, 15)
-    list(section, 5, false)
+    padding(section, 8, 8, 4, 8)
+    list(section, 3, false)
 
     if titleValue and titleValue ~= "" then
         local titleLabel = text(
             section,
             titleValue,
-            12,
-            C.Muted,
-            Enum.Font.GothamMedium
+            13,
+            C.Text,
+            Enum.Font.GothamBold
         )
 
+        titleLabel.TextTransparency = 0.08
         titleLabel.Size = UDim2.new(1, 0, 0, 24)
         titleLabel.LayoutOrder = 0
     end
@@ -322,7 +336,7 @@ function Container:AddSection(titleValue)
         LayoutOrder = 1,
     }, section)
 
-    list(holder, 2, false)
+    list(holder, 1, false)
 
     self._currentSection = holder
     return section
@@ -344,33 +358,33 @@ end
 function Container:AddToggle(id, config)
     config = config or {}
 
-    local row = makeRow(self, 42)
+    local row = makeRow(self, 30)
 
     local titleLabel = text(
         row,
         config.Title or id,
-        14,
+        13,
         C.Text,
         Enum.Font.Gotham
     )
 
-    titleLabel.Position = UDim2.fromOffset(4, 0)
-    titleLabel.Size = UDim2.new(1, -40, 1, 0)
+    titleLabel.Position = UDim2.fromOffset(2, 0)
+    titleLabel.Size = UDim2.new(1, -38, 1, 0)
 
     local box = create("Frame", {
-        BackgroundColor3 = Color3.fromRGB(5, 5, 7),
+        BackgroundColor3 = Color3.fromRGB(7, 7, 9),
         BorderSizePixel = 0,
-        Size = UDim2.fromOffset(22, 22),
-        Position = UDim2.new(1, -27, 0.5, -11),
+        Size = UDim2.fromOffset(16, 16),
+        Position = UDim2.new(1, -20, 0.5, -8),
     }, row)
 
-    corner(box, 1)
-    stroke(box, C.Border, 0.05, 1)
+    corner(box, 2)
+    stroke(box, C.Border, 0, 1)
 
     local mark = text(
         box,
         "✓",
-        16,
+        12,
         C.Text,
         Enum.Font.GothamBold,
         Enum.TextXAlignment.Center
@@ -386,7 +400,7 @@ function Container:AddToggle(id, config)
 
     option._render = function(value)
         local enabled = value == true
-        box.BackgroundColor3 = enabled and C.Accent or Color3.fromRGB(5, 5, 7)
+        box.BackgroundColor3 = enabled and C.Accent or Color3.fromRGB(7, 7, 9)
         mark.Visible = enabled
     end
 
@@ -416,7 +430,7 @@ function Container:AddSlider(id, config)
     local rounding = tonumber(config.Rounding) or 0
     local defaultValue = tonumber(config.Default) or minValue
 
-    local row = makeRow(self, 72)
+    local row = makeRow(self, 54)
 
     local titleLabel = text(
         row,
@@ -426,8 +440,8 @@ function Container:AddSlider(id, config)
         Enum.Font.Gotham
     )
 
-    titleLabel.Position = UDim2.fromOffset(4, 4)
-    titleLabel.Size = UDim2.new(1, -72, 0, 20)
+    titleLabel.Position = UDim2.fromOffset(2, 2)
+    titleLabel.Size = UDim2.new(1, -72, 0, 18)
 
     local valueLabel = text(
         row,
@@ -438,14 +452,14 @@ function Container:AddSlider(id, config)
         Enum.TextXAlignment.Right
     )
 
-    valueLabel.Position = UDim2.new(1, -72, 0, 4)
+    valueLabel.Position = UDim2.new(1, -66, 0, 2)
     valueLabel.Size = UDim2.fromOffset(58, 18)
 
     local track = create("Frame", {
         BackgroundColor3 = Color3.fromRGB(4, 4, 6),
         BorderSizePixel = 0,
-        Position = UDim2.new(0, 4, 1, -18),
-        Size = UDim2.new(1, -8, 0, 5),
+        Position = UDim2.new(0, 2, 1, -12),
+        Size = UDim2.new(1, -4, 0, 5),
     }, row)
 
     corner(track, 2)
@@ -466,11 +480,11 @@ function Container:AddSlider(id, config)
         Size = UDim2.fromOffset(14, 14),
     }, track)
 
-    corner(knob, 5)
+    corner(knob, 7)
 
     local sliderHit = buttonBase(row)
-    sliderHit.Position = UDim2.new(0, 4, 1, -28)
-    sliderHit.Size = UDim2.new(1, -8, 0, 24)
+    sliderHit.Position = UDim2.new(0, 2, 1, -21)
+    sliderHit.Size = UDim2.new(1, -4, 0, 18)
     sliderHit.ZIndex = 5
 
     local function roundValue(value)
@@ -929,36 +943,33 @@ function Window:AddTab(config)
         BorderSizePixel = 0,
         Text = "      " .. titleValue,
         TextColor3 = C.Muted,
-        TextSize = 15,
+        TextSize = 14,
         Font = Enum.Font.GothamMedium,
         TextXAlignment = Enum.TextXAlignment.Left,
         AutoButtonColor = false,
-        Size = UDim2.new(1, 0, 0, 58),
+        Size = UDim2.new(1, -10, 0, 36),
     }, self.SidebarList)
 
-    corner(sidebarButton, 0)
+    corner(sidebarButton, 4)
 
     local indicator = create("Frame", {
-        BackgroundColor3 = C.Accent,
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.new(0, 0, 0.5, -8),
-        Size = UDim2.fromOffset(2, 16),
         Visible = false,
+        Size = UDim2.fromOffset(0, 0),
     }, sidebarButton)
-
-    corner(indicator, 1)
 
     local iconLabel = text(
         sidebarButton,
         iconValue,
-        16,
+        15,
         C.Muted,
-        Enum.Font.Gotham,
+        Enum.Font.GothamBold,
         Enum.TextXAlignment.Center
     )
 
-    iconLabel.Position = UDim2.fromOffset(12, 0)
-    iconLabel.Size = UDim2.fromOffset(34, 58)
+    iconLabel.Position = UDim2.fromOffset(10, 0)
+    iconLabel.Size = UDim2.fromOffset(22, 36)
 
     local page = create("Frame", {
         BackgroundTransparency = 1,
@@ -971,67 +982,33 @@ function Window:AddTab(config)
     local pageHeader = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 74),
+        Size = UDim2.new(1, 0, 0, 42),
     }, page)
 
-    create("Frame", {
-        BackgroundColor3 = C.Border,
-        BackgroundTransparency = 0.25,
+    local pageTag = create("Frame", {
+        BackgroundColor3 = C.Accent,
         BorderSizePixel = 0,
-        Position = UDim2.new(0, 0, 1, -1),
-        Size = UDim2.new(1, 0, 0, 1),
+        AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.new(0.5, 0, 0, 1),
+        Size = UDim2.fromOffset(math.max(72, #titleValue * 8 + 26), 28),
     }, pageHeader)
+    corner(pageTag, 4)
 
-    local subTabs = config.SubTabs or {titleValue}
-
-    local tabsHolder = create("Frame", {
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        AnchorPoint = Vector2.new(1, 0),
-        Position = UDim2.new(1, -22, 0, 11),
-        Size = UDim2.fromOffset(
-            math.max(280, #subTabs * 120),
-            44
-        ),
-    }, pageHeader)
-
-    local tabLayout = list(tabsHolder, 8, true)
-    tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
-    tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-
-    for index, subName in ipairs(subTabs) do
-        local activeSub = index == 1
-
-        local pill = create("Frame", {
-            BackgroundColor3 = activeSub
-                and Color3.fromRGB(35, 40, 88)
-                or C.Content,
-            BackgroundTransparency = activeSub and 0.12 or 1,
-            BorderSizePixel = 0,
-            Size = UDim2.fromOffset(
-                math.max(88, #subName * 10 + 34),
-                38
-            ),
-        }, tabsHolder)
-
-        corner(pill, 5)
-
-        local subLabel = text(
-            pill,
-            subName,
-            15,
-            activeSub and C.Accent or C.Muted,
-            Enum.Font.GothamMedium,
-            Enum.TextXAlignment.Center
-        )
-        subLabel.Size = UDim2.fromScale(1, 1)
-    end
+    local pageLabel = text(
+        pageTag,
+        titleValue,
+        13,
+        C.Text,
+        Enum.Font.GothamBold,
+        Enum.TextXAlignment.Center
+    )
+    pageLabel.Size = UDim2.fromScale(1, 1)
 
     local body = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(0, 74),
-        Size = UDim2.new(1, 0, 1, -74),
+        Position = UDim2.fromOffset(0, 42),
+        Size = UDim2.new(1, 0, 1, -42),
     }, page)
 
     tab.Button = sidebarButton
@@ -1057,7 +1034,7 @@ function Window:AddTab(config)
                     sidebarButton,
                     {
                         BackgroundColor3 = C.SectionCap,
-                        BackgroundTransparency = 0.35,
+                        BackgroundTransparency = 0,
                     },
                     0.08
                 )
@@ -1117,7 +1094,7 @@ function Library:CreateWindow(config)
             and config.Size.X
             and config.Size.X.Offset
         )
-        or 590
+        or 760
 
     local height =
         (
@@ -1125,10 +1102,11 @@ function Library:CreateWindow(config)
             and config.Size.Y
             and config.Size.Y.Offset
         )
-        or 390
+        or 460
 
-    width = math.max(width, 900)
-    height = math.max(height, 560)
+    -- Reference-like compact base size.
+    width = math.max(width, 760)
+    height = math.max(height, 460)
 
     local gui = create("ScreenGui", {
         Name = screenName,
@@ -1150,62 +1128,146 @@ function Library:CreateWindow(config)
         Active = true,
     }, gui)
 
-    corner(root, 6)
+    corner(root, 5)
     stroke(root, C.Border, 0, 1)
+
+    local uiScale = create("UIScale", {
+        Scale = 1,
+    }, root)
+
+    local viewport = Vector2.new(1280, 720)
+    pcall(function()
+        local camera = workspace.CurrentCamera
+        if camera then
+            viewport = camera.ViewportSize
+        end
+    end)
+
+    local defaultScale = 1
+    if UserInputService.TouchEnabled then
+        local fitX = math.max(0.5, (viewport.X - 30) / width)
+        local fitY = math.max(0.5, (viewport.Y - 30) / height)
+
+        defaultScale = math.clamp(
+            math.min(fitX, fitY, 0.78),
+            0.55,
+            0.78
+        )
+    end
+
+    uiScale.Scale = defaultScale
 
     local sidebar = create("Frame", {
         Name = "Sidebar",
         BackgroundColor3 = C.Sidebar,
         BorderSizePixel = 0,
         Position = UDim2.fromOffset(0, 0),
-        Size = UDim2.new(0, 200, 1, 0),
+        Size = UDim2.new(0, 156, 1, 0),
     }, root)
 
     create("Frame", {
         BackgroundColor3 = C.Border,
-        BackgroundTransparency = 0.35,
+        BackgroundTransparency = 0,
         BorderSizePixel = 0,
-        Position = UDim2.new(1, -1, 0, 80),
-        Size = UDim2.new(0, 1, 1, -80),
+        Position = UDim2.new(1, -1, 0, 0),
+        Size = UDim2.new(0, 1, 1, 0),
     }, sidebar)
+
+    local logoWrap = create("Frame", {
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(14, 14),
+        Size = UDim2.new(1, -20, 0, 48),
+    }, sidebar)
+
+    local logoCat = text(
+        logoWrap,
+        "CAT",
+        24,
+        C.Text,
+        Enum.Font.GothamBold
+    )
+    logoCat.Position = UDim2.fromOffset(0, 0)
+    logoCat.Size = UDim2.fromOffset(52, 28)
+
+    local logoEmpire = text(
+        logoWrap,
+        "EMPIRE",
+        20,
+        C.Accent,
+        Enum.Font.GothamBold
+    )
+    logoEmpire.Position = UDim2.fromOffset(45, 1)
+    logoEmpire.Size = UDim2.fromOffset(92, 28)
+
+    local menuLabel = text(
+        sidebar,
+        "MENU",
+        9,
+        C.Muted2,
+        Enum.Font.GothamBold
+    )
+    menuLabel.Position = UDim2.fromOffset(15, 64)
+    menuLabel.Size = UDim2.fromOffset(80, 14)
 
     local sidebarList = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(0, 92),
-        Size = UDim2.new(1, 0, 1, -108),
+        Position = UDim2.fromOffset(8, 82),
+        Size = UDim2.new(1, -8, 1, -94),
     }, sidebar)
 
-    list(sidebarList, 4, false)
+    list(sidebarList, 7, false)
 
     local content = create("Frame", {
         Name = "Content",
         BackgroundColor3 = C.Content,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(200, 0),
-        Size = UDim2.new(1, -200, 1, 0),
+        Position = UDim2.fromOffset(156, 0),
+        Size = UDim2.new(1, -156, 1, 0),
     }, root)
 
     local pages = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(16, 0),
-        Size = UDim2.new(1, -32, 1, -12),
+        Position = UDim2.fromOffset(14, 10),
+        Size = UDim2.new(1, -28, 1, -18),
     }, content)
 
-    -- Invisible drag strip: reference has no visible titlebar.
     local dragZone = create("Frame", {
         Name = "DragZone",
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 34),
+        Size = UDim2.new(1, 0, 0, 28),
         Active = true,
         ZIndex = 40,
     }, root)
 
+    -- External open/close button. It is outside Root so it stays visible.
+    local externalToggle = create("TextButton", {
+        Name = "CAT_EMPIRE_Toggle",
+        BackgroundColor3 = C.Accent,
+        BorderSizePixel = 0,
+        Text = "CE",
+        TextColor3 = C.Text,
+        TextSize = 13,
+        Font = Enum.Font.GothamBold,
+        AutoButtonColor = false,
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 12, 0.5, 0),
+        Size = UDim2.fromOffset(42, 42),
+        ZIndex = 3000,
+    }, gui)
+
+    corner(externalToggle, 8)
+    stroke(externalToggle, Color3.fromRGB(255, 92, 164), 0.15, 1)
+
     local window = setmetatable({
         Gui = gui,
         Root = root,
+        UIScale = uiScale,
+        ScaleValue = defaultScale,
+        ExternalToggle = externalToggle,
         Titlebar = dragZone,
         Sidebar = sidebar,
         SidebarList = sidebarList,
@@ -1225,6 +1287,36 @@ function Library:CreateWindow(config)
         MaxButton = nil,
         MinButton = nil,
     }
+
+    window:_connect(
+        externalToggle.MouseButton1Click,
+        function()
+            window:ToggleMinimize()
+        end
+    )
+
+    -- Slight visual feedback for the floating toggle.
+    window:_connect(
+        externalToggle.MouseEnter,
+        function()
+            tween(
+                externalToggle,
+                {BackgroundColor3 = C.AccentSoft},
+                0.08
+            )
+        end
+    )
+
+    window:_connect(
+        externalToggle.MouseLeave,
+        function()
+            tween(
+                externalToggle,
+                {BackgroundColor3 = C.Accent},
+                0.08
+            )
+        end
+    )
 
     local dragging = false
     local dragStart = nil
