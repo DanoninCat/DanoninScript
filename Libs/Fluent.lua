@@ -1391,7 +1391,7 @@ local function ResolveCatEmpireLogo()
         return nil
     end
 
-    local fileName = "CAT_EMPIRE_sidebar_logo.jpg"
+    local fileName = "CAT_EMPIRE_sidebar_logo_v12.jpg"
     local url =
         "https://raw.githubusercontent.com/" ..
         "DanoninCat/DanoninScript/main/Assets/" ..
