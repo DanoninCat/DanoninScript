@@ -5,7 +5,6 @@
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
@@ -24,7 +23,6 @@ local Fluent = loadstring(game:HttpGet(
 local State = {
     Filters = {
         TeamCheck = true,
-        LineOfSight = true,
     },
     ESP = {
         Enabled = true,
@@ -435,13 +433,10 @@ local function GetCandidateMetadata(char)
     end
     
     local origin = camera.CFrame.Position
-    local lineOfSight = true
+    local lineOfSight = IsTargetVisible(origin, head.Position, char)
     
-    if State.Filters.LineOfSight then
-        lineOfSight = IsTargetVisible(origin, head.Position, char)
-        if not lineOfSight then
-            return nil
-        end
+    if not lineOfSight then
+        return nil
     end
     
     return {
@@ -472,7 +467,7 @@ local function GetClosestTarget()
 end
 
 -- ============================================================
--- CAMERA CONTROLLER (ÚNICO ESCRITOR)
+-- CAMERA CONTROLLER (COM PRIORIDADE EXPLÍCITA)
 -- ============================================================
 
 local CameraController = {
@@ -511,8 +506,10 @@ function CameraController:Update(deltaTime)
     local strength = State.Aim.Strength or 0.5
     local smoothing = State.Aim.Smoothing or 0.35
     
+    -- PRIORIDADE: Silent > Aimbot > Assist
     if State.Aim.Silent then
-        finalDir = currentDir
+        -- Silent NÃO escreve na câmera - mantém TargetData apenas
+        return
     elseif State.Aim.Enabled then
         local lerpFactor = 1 - math.exp(-strength * deltaTime * 10)
         finalDir = currentDir:Lerp(direction, lerpFactor)
@@ -520,6 +517,8 @@ function CameraController:Update(deltaTime)
         local correctionStrength = strength * 0.3
         local lerpFactor = 1 - math.exp(-correctionStrength * smoothing * deltaTime * 8)
         finalDir = currentDir:Lerp(direction, lerpFactor)
+    else
+        return
     end
     
     camera.CFrame = CFrame.new(origin, origin + finalDir)
@@ -550,7 +549,7 @@ local function ResetTargetData()
 end
 
 -- ============================================================
--- COMBAT LOOP (FUNCIONAL - SEM EXCLUSÃO MÚTUA)
+-- COMBAT LOOP (SEM EXCLUSÃO MÚTUA NOS TOGGLES)
 -- ============================================================
 
 local function CombatTrackingLoop(deltaTime)
@@ -1227,7 +1226,7 @@ local function Cleanup()
 end
 
 -- ============================================================
--- UI (PRESERVADA INTEGRALMENTE - SEM ALTERAÇÕES)
+-- UI (EXATAMENTE IGUAL À VERSÃO COMMITADA - MAIN)
 -- ============================================================
 
 local function CreateUI()
@@ -1253,7 +1252,7 @@ local function CreateUI()
         Config = Window:AddTab({Title = "Settings", Icon = "settings"}),
     }
 
-    -- COMBAT (PRESERVADO - SEM ELEMENTS ADICIONAIS)
+    -- COMBAT (UI IDÊNTICA À MAIN)
     local combatGrid = Tabs.Combat:AddGroup({Columns = 2, Gap = 8})
     local combatLeft = combatGrid:AddElement()
     local combatRight = combatGrid:AddElement()
@@ -1271,6 +1270,7 @@ local function CreateUI()
         RefreshCombatTracking()
     end)
 
+    -- Aim FOV Min = 30 (igual à main)
     combatLeft:AddSlider("AimFOV", {Title = "Aim FOV", Min = 30, Max = 500, Default = 200, Rounding = 0})
     Fluent.Options.AimFOV:OnChanged(function(value)
         SetSharedFOV(value)
@@ -1360,7 +1360,7 @@ local function CreateUI()
         UpdateESP()
     end)
 
-    -- Preview (PRESERVADO)
+    -- Preview
     local previewSection = visualRight:AddSection("Preview")
     local preview = Instance.new("Frame")
     preview.Name = "ESPPreview"
@@ -1532,13 +1532,13 @@ local function CreateUI()
         pcall(function() FOVController.SetBase(value) end)
     end)
 
-    -- EXPLOITS (PRESERVADO)
+    -- EXPLOITS
     Tabs.Exploits:AddSection("Camera")
     Tabs.Exploits:AddButton({Title = "Toggle Third Person", Callback = function()
         pcall(function() ThirdPerson.Toggle() end)
     end})
 
-    -- PLAYERS (PRESERVADO)
+    -- PLAYERS
     local playersGrid = Tabs.Cloud:AddGroup({Columns = 2, Gap = 10})
     local playersLeft = playersGrid:AddElement()
     local playersRight = playersGrid:AddElement()
@@ -1553,7 +1553,7 @@ local function CreateUI()
     local nearestNameLabel = playersRight:AddLabel("Name: --")
     local nearestDistanceLabel = playersRight:AddLabel("Distance: --")
 
-    -- CONFIG (PRESERVADO)
+    -- CONFIG
     local configGrid = Tabs.Config:AddGroup({Columns = 1, Gap = 8})
     local configLeft = configGrid:AddElement()
 
@@ -1570,7 +1570,7 @@ local function CreateUI()
         Cleanup()
     end})
 
-    -- PLAYER LIST UPDATE (PRESERVADO)
+    -- PLAYER LIST UPDATE
     task.spawn(function()
         while not UIClosed do
             task.wait(0.5)
