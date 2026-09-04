@@ -56,25 +56,16 @@ local IsCleaningUp = false
 
 local Diagnostics = {
     Silent = {
-        Hooked = false,
         Available = false,
-        BuildCalls = 0,
-        CallsWhileActive = 0,
-        LastCallTime = nil,
-        LastTargetValid = false,
-        LastTargetPosition = nil,
-        LastOrigin = nil,
-        LastDirection = nil,
+        TargetValid = false,
     },
     Assist = {
         Called = false,
         LastCallTime = nil,
         TargetValid = false,
-        CameraBefore = nil,
-        CameraAfter = nil,
-        CameraFinal = nil,
         ConflictDetected = false,
         ConflictCount = 0,
+        CameraWrites = 0,
     },
     Target = {
         Found = false,
@@ -87,122 +78,38 @@ local Diagnostics = {
 }
 
 -- ============================================================
--- SILENT AIM: HOOK NO SHOTPATH COM DIAGNÓSTICO COMPLETO
+-- SILENT AIM: APENAS TARGET TRACKING (SEM HOOK)
 -- ============================================================
 
 local SilentAim = {
     Active = false,
     Target = nil,
     TargetPosition = nil,
-    OriginalBuild = nil,
-    Module = nil,
-    Hooked = false,
     Available = false,
 }
 
-local function HookShotPath()
-    if SilentAim.Hooked then
-        return true
-    end
-
-    local success, module = pcall(function()
-        local util = ReplicatedStorage:FindFirstChild("Util")
-        if not util then
-            return nil
-        end
-        return require(util:FindFirstChild("ShotPath"))
-    end)
-
-    if not success or not module then
-        warn("[CAT_EMPIRE] ShotPath module not found")
-        Diagnostics.Silent.Available = false
-        return false
-    end
-
-    if type(module.Build) ~= "function" then
-        warn("[CAT_EMPIRE] ShotPath.Build is not a function")
-        Diagnostics.Silent.Available = false
-        return false
-    end
-
-    local originalBuild = module.Build
-    local wrapped = function(origin, direction, rayFunc, params)
-        Diagnostics.Silent.BuildCalls = Diagnostics.Silent.BuildCalls + 1
-        Diagnostics.Silent.LastCallTime = os.clock()
-        Diagnostics.Silent.LastOrigin = origin
-        Diagnostics.Silent.LastDirection = direction
-        Diagnostics.Silent.LastTargetValid = SilentAim.Active and SilentAim.TargetPosition ~= nil
-        Diagnostics.Silent.LastTargetPosition = SilentAim.TargetPosition
-
-        if SilentAim.Active and SilentAim.TargetPosition then
-            Diagnostics.Silent.CallsWhileActive = Diagnostics.Silent.CallsWhileActive + 1
-            local newDirection = (SilentAim.TargetPosition - origin).Unit
-            return originalBuild(origin, newDirection, rayFunc, params)
-        end
-        return originalBuild(origin, direction, rayFunc, params)
-    end
-
-    local setSuccess, setErr = pcall(function()
-        module.Build = wrapped
-    end)
-
-    if not setSuccess then
-        warn("[CAT_EMPIRE] Failed to set ShotPath.Build:", setErr)
-        Diagnostics.Silent.Available = false
-        return false
-    end
-
-    SilentAim.Module = module
-    SilentAim.OriginalBuild = originalBuild
-    SilentAim.Hooked = true
-    SilentAim.Available = true
-
-    Diagnostics.Silent.Hooked = true
-    Diagnostics.Silent.Available = true
-    Diagnostics.Silent.BuildCalls = 0
-    Diagnostics.Silent.CallsWhileActive = 0
-
-    return true
-end
-
-local function UnhookShotPath()
-    if SilentAim.Hooked and SilentAim.Module and SilentAim.OriginalBuild then
-        local currentBuild = SilentAim.Module.Build
-        if currentBuild == SilentAim.Module._wrapped or currentBuild == SilentAim.Module.Build then
-            SilentAim.Module.Build = SilentAim.OriginalBuild
-        end
-        SilentAim.Hooked = false
-    end
-    SilentAim.Module = nil
-    SilentAim.OriginalBuild = nil
-    SilentAim.Available = false
-
-    Diagnostics.Silent.Hooked = false
-    Diagnostics.Silent.Available = false
-end
-
 local function ApplySilentAim()
-    if not SilentAim.Available then
-        return false
-    end
-
     if not SilentAim.Target or not SilentAim.TargetPosition then
         return false
     end
 
     SilentAim.Active = true
+    Diagnostics.Silent.TargetValid = true
     return true
 end
 
 -- ============================================================
--- AIM ASSIST COM DIAGNÓSTICO
+-- AIM ASSIST COM DIAGNÓSTICO MELHORADO
 -- ============================================================
+
+local AssistHistory = {}
+local ASSIST_HISTORY_SIZE = 10
 
 local function ApplyAimAssist(camera, targetPosition, deltaTime)
     Diagnostics.Assist.Called = true
     Diagnostics.Assist.LastCallTime = os.clock()
     Diagnostics.Assist.TargetValid = targetPosition ~= nil
-    Diagnostics.Assist.CameraBefore = camera.CFrame
+    Diagnostics.Assist.CameraWrites = Diagnostics.Assist.CameraWrites + 1
 
     local origin = camera.CFrame.Position
     local currentDir = camera.CFrame.LookVector
@@ -215,24 +122,21 @@ local function ApplyAimAssist(camera, targetPosition, deltaTime)
     local lerpFactor = 1 - math.exp(-assistFactor * smoothing * deltaTime * 10)
 
     local newDir = currentDir:Lerp(targetDir, lerpFactor)
+    local before = camera.CFrame
     camera.CFrame = CFrame.new(origin, origin + newDir)
+    local after = camera.CFrame
 
-    Diagnostics.Assist.CameraAfter = camera.CFrame
+    -- Armazena histórico para detectar conflito
+    table.insert(AssistHistory, {
+        time = os.clock(),
+        before = before,
+        after = after,
+        targetPos = targetPosition,
+    })
 
-    task.defer(function()
-        local current = GetCamera()
-        if current then
-            Diagnostics.Assist.CameraFinal = current.CFrame
-            if Diagnostics.Assist.CameraAfter and Diagnostics.Assist.CameraFinal then
-                local diff = (Diagnostics.Assist.CameraAfter.Position - Diagnostics.Assist.CameraFinal.Position).Magnitude
-                local angleDiff = math.abs(Diagnostics.Assist.CameraAfter.LookVector:Dot(Diagnostics.Assist.CameraFinal.LookVector))
-                if diff > 0.1 or angleDiff < 0.99 then
-                    Diagnostics.Assist.ConflictDetected = true
-                    Diagnostics.Assist.ConflictCount = Diagnostics.Assist.ConflictCount + 1
-                end
-            end
-        end
-    end)
+    if #AssistHistory > ASSIST_HISTORY_SIZE then
+        table.remove(AssistHistory, 1)
+    end
 
     return true
 end
@@ -637,6 +541,7 @@ end
 
 local CombatRenderStepName = "CAT_EMPIRE_Combat"
 local CombatBound = false
+local ConflictCheckConnection = nil
 
 local function UpdateCamera(deltaTime)
     local camera = GetCamera()
@@ -669,6 +574,42 @@ local function UpdateCamera(deltaTime)
         SilentAim.Target = TargetData.Current
         SilentAim.TargetPosition = TargetData.Position
         ApplySilentAim()
+    end
+end
+
+local function CheckForCameraConflict()
+    local camera = GetCamera()
+    if not camera then
+        return
+    end
+
+    if #AssistHistory < 2 then
+        return
+    end
+
+    local latest = AssistHistory[#AssistHistory]
+    local previous = AssistHistory[#AssistHistory - 1]
+
+    if not latest or not previous then
+        return
+    end
+
+    local current = camera.CFrame
+
+    -- Verifica se a câmera atual difere do que o Assist escreveu
+    local diff = (current.Position - latest.after.Position).Magnitude
+    local angleDiff = math.abs(current.LookVector:Dot(latest.after.LookVector))
+
+    if diff > 0.05 or angleDiff < 0.995 then
+        Diagnostics.Assist.ConflictDetected = true
+        Diagnostics.Assist.ConflictCount = Diagnostics.Assist.ConflictCount + 1
+    end
+end
+
+local function ConflictCheckLoop()
+    while not UIClosed do
+        task.wait(0.1)
+        CheckForCameraConflict()
     end
 end
 
@@ -719,6 +660,7 @@ local function CombatTrackingLoop(deltaTime)
             TargetData.Mode = "Silent"
             SilentAim.Target = candidate.Character
             SilentAim.TargetPosition = candidate.Position
+            Diagnostics.Silent.Available = true
         elseif State.Aim.Enabled then
             TargetData.Mode = "Aimbot"
         elseif State.Aim.Assist then
@@ -740,6 +682,7 @@ local function CombatTrackingLoop(deltaTime)
         SilentAim.TargetPosition = nil
 
         Diagnostics.Target.Found = false
+        Diagnostics.Silent.Available = false
     end
 end
 
@@ -757,6 +700,10 @@ local function ResetCombatState()
     SilentAim.TargetPosition = nil
 
     Diagnostics.Target.Found = false
+    Diagnostics.Silent.Available = false
+    Diagnostics.Assist.Called = false
+    Diagnostics.Assist.ConflictDetected = false
+    Diagnostics.Assist.ConflictCount = 0
 end
 
 local function StartCombatLoop()
@@ -774,6 +721,10 @@ local function StartCombatLoop()
 
     if success then
         CombatBound = true
+        if not ConflictCheckConnection then
+            ConflictCheckConnection = RunService.Heartbeat:Connect(ConflictCheckLoop)
+            table.insert(Connections, ConflictCheckConnection)
+        end
     else
         warn("[CAT_EMPIRE] Failed to bind CombatTrackingLoop:", err)
     end
@@ -788,6 +739,11 @@ local function StopCombatLoop()
             warn("[CAT_EMPIRE] Failed to unbind CombatTrackingLoop:", err)
         end
         CombatBound = false
+    end
+
+    if ConflictCheckConnection then
+        ConflictCheckConnection:Disconnect()
+        ConflictCheckConnection = nil
     end
 
     ResetCombatState()
@@ -1390,7 +1346,6 @@ local function Cleanup()
     safeStep("DisconnectAll", DisconnectAll)
     safeStep("StopCombatLoop", StopCombatLoop)
     safeStep("ClearPlayerCache", function() table.clear(PlayerCache) end)
-    safeStep("UnhookShotPath", UnhookShotPath)
     safeStep("ClearESP", ClearESP)
     safeStep("DestroyESPGui", function() DestroyNamedGui(ESP_GUI_NAME) end)
     safeStep("DestroyFOVGui", function() DestroyNamedGui("FOVCircle") end)
@@ -1412,7 +1367,7 @@ local function Cleanup()
 end
 
 -- ============================================================
--- UI (COM PAINEL DE DIAGNÓSTICO COMPLETO)
+-- UI (COM DIAGNÓSTICO REFLETINDO REALIDADE)
 -- ============================================================
 
 local function CreateUI()
@@ -1473,7 +1428,7 @@ local function CreateUI()
     end)
 
     combatRight:AddSection("Aim Modes")
-    combatRight:AddToggle("SilentAim", {Title = "Silent Aim", Default = false})
+    combatRight:AddToggle("SilentAim", {Title = "Silent Aim (Target Tracking)", Default = false})
     Fluent.Options.SilentAim:OnChanged(function(value)
         State.Aim.Silent = value
         RefreshCombatTracking()
@@ -1488,10 +1443,10 @@ local function CreateUI()
         end
     end)
 
-    -- DIAGNÓSTICO COMPLETO
+    -- DIAGNÓSTICO
     combatRight:AddSection("Diagnóstico")
 
-    local diagLabel1 = combatRight:AddLabel("Silent: Hook=No | Avail=No | Calls=0 | Active=0")
+    local diagLabel1 = combatRight:AddLabel("Silent: Target Tracking Only (no hit redirect)")
     local diagLabel2 = combatRight:AddLabel("Assist: Called=No | Conflict=No | Count=0")
     local diagLabel3 = combatRight:AddLabel("Target: Found=No | LoS=No | Dist=0 | Angle=0")
 
@@ -1763,15 +1718,6 @@ local function CreateUI()
         while not UIClosed do
             task.wait(0.5)
 
-            local silent = Diagnostics.Silent
-            diagLabel1:SetText(string.format(
-                "Silent: Hook=%s | Avail=%s | Calls=%d | Active=%d",
-                silent.Hooked and "Yes" or "No",
-                silent.Available and "Yes" or "No",
-                silent.BuildCalls or 0,
-                silent.CallsWhileActive or 0
-            ))
-
             local assist = Diagnostics.Assist
             diagLabel2:SetText(string.format(
                 "Assist: Called=%s | Conflict=%s | Count=%d",
@@ -1835,8 +1781,6 @@ end
 
 local function SetupConnections()
     SetupPlayerCache()
-
-    SilentAim.Available = HookShotPath()
 
     table.insert(Connections, RunService.RenderStepped:Connect(function()
         if UIClosed then return end
