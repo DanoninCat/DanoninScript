@@ -1,7 +1,3 @@
--- ============================================================
--- CAT EMPIRE | FIVEM ESP ADAPTATION
--- ============================================================
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
@@ -49,15 +45,98 @@ local State = {
 
 local ESPObjects = {}
 local Connections = {}
-local CombatConnection = nil
 local WindowRef = nil
 local UIClosed = false
 local FOVCallbackLock = false
 local IsCleaningUp = false
 
--- ============================================================
--- PLAYER CACHE
--- ============================================================
+local SilentAim = {
+    Active = false,
+    Target = nil,
+    TargetPosition = nil,
+    OriginalBuild = nil,
+    Module = nil,
+    Hooked = false,
+    Available = false,
+}
+
+local function HookShotPath()
+    if SilentAim.Hooked then
+        return true
+    end
+
+    local success, module = pcall(function()
+        local util = ReplicatedStorage:FindFirstChild("Util")
+        if not util then
+            return nil
+        end
+        return require(util:FindFirstChild("ShotPath"))
+    end)
+
+    if not success or not module then
+        warn("[CAT_EMPIRE] ShotPath module not found")
+        return false
+    end
+
+    if type(module.Build) ~= "function" then
+        warn("[CAT_EMPIRE] ShotPath.Build is not a function")
+        return false
+    end
+
+    local originalBuild = module.Build
+    local wrapped = function(origin, direction, rayFunc, params)
+        if SilentAim.Active and SilentAim.TargetPosition then
+            local newDirection = (SilentAim.TargetPosition - origin).Unit
+            return originalBuild(origin, newDirection, rayFunc, params)
+        end
+        return originalBuild(origin, direction, rayFunc, params)
+    end
+
+    local setSuccess, setErr = pcall(function()
+        module.Build = wrapped
+    end)
+
+    if not setSuccess then
+        warn("[CAT_EMPIRE] Failed to set ShotPath.Build:", setErr)
+        return false
+    end
+
+    SilentAim.Module = module
+    SilentAim.OriginalBuild = originalBuild
+    SilentAim.Hooked = true
+    SilentAim.Available = true
+
+    return true
+end
+
+local function UnhookShotPath()
+    if SilentAim.Hooked and SilentAim.Module and SilentAim.OriginalBuild then
+        local currentBuild = SilentAim.Module.Build
+        if currentBuild == SilentAim.Module._wrapped or currentBuild == SilentAim.Module.Build then
+            SilentAim.Module.Build = SilentAim.OriginalBuild
+        end
+        SilentAim.Hooked = false
+    end
+    SilentAim.Module = nil
+    SilentAim.OriginalBuild = nil
+    SilentAim.Available = false
+end
+
+local function ApplyAimAssist(camera, targetPosition, deltaTime)
+    local origin = camera.CFrame.Position
+    local currentDir = camera.CFrame.LookVector
+    local targetDir = (targetPosition - origin).Unit
+
+    local strength = State.Aim.Strength or 0.5
+    local smoothing = State.Aim.Smoothing or 0.35
+
+    local assistFactor = strength * 0.4
+    local lerpFactor = 1 - math.exp(-assistFactor * smoothing * deltaTime * 10)
+
+    local newDir = currentDir:Lerp(targetDir, lerpFactor)
+    camera.CFrame = CFrame.new(origin, origin + newDir)
+    return true
+end
 
 local PlayerCache = {}
 local PlayerConnections = {}
@@ -155,10 +234,6 @@ local function SetupPlayerCache()
     end))
 end
 
--- ============================================================
--- TARGET DATA
--- ============================================================
-
 local TargetData = {
     Current = nil,
     Position = nil,
@@ -177,22 +252,6 @@ local ESP_COLORS = {
     Name = Color3.fromRGB(235, 235, 240),
     Distance = Color3.fromRGB(235, 235, 240),
 }
-
--- ============================================================
--- DIAGNÓSTICO
--- ============================================================
-
-local Diagnostics = {
-    LastCFrameBefore = nil,
-    LastCFrameAfter = nil,
-    LastCFrameFinal = nil,
-    CameraOwner = "Unknown",
-    ConflictDetected = false,
-}
-
--- ============================================================
--- FUNÇÕES AUXILIARES
--- ============================================================
 
 local function GetCamera()
     return workspace.CurrentCamera
@@ -287,10 +346,6 @@ local function GetESPCharacters()
     return result
 end
 
--- ============================================================
--- RESOLVE TEAM
--- ============================================================
-
 local function AreSameTeam(a, b)
     if not a or not b then
         return false
@@ -332,10 +387,6 @@ local function IsEnemy(char)
     return true
 end
 
--- ============================================================
--- FOV UNIFICADO
--- ============================================================
-
 local function GetAimScreenPoint()
     local camera = GetCamera()
     if not camera then
@@ -350,13 +401,13 @@ local function SetSharedFOV(value)
     if FOVCallbackLock then
         return
     end
-    
+
     FOVCallbackLock = true
-    
+
     local success, err = pcall(function()
         value = math.clamp(value, 30, 500)
         State.Visual.FOVRadius = value
-        
+
         if Fluent and Fluent.Options then
             if Fluent.Options.AimFOV then
                 Fluent.Options.AimFOV:SetValue(value)
@@ -365,92 +416,84 @@ local function SetSharedFOV(value)
                 Fluent.Options.FOVRadius:SetValue(value)
             end
         end
-        
+
         UpdateFOVCircle()
     end)
-    
+
     FOVCallbackLock = false
-    
+
     if not success then
         warn("[CAT_EMPIRE] SetSharedFOV error:", err)
     end
 end
 
--- ============================================================
--- LINE OF SIGHT
--- ============================================================
-
 local function IsTargetVisible(origin, targetPos, targetChar)
     local delta = targetPos - origin
     local distance = delta.Magnitude
-    
+
     if distance < 0.1 then
         return true
     end
-    
+
     local direction = delta.Unit
-    
+
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = {LocalPlayer.Character}
-    
+
     local result = workspace:Raycast(origin, direction * distance, params)
-    
+
     if not result then
         return true
     end
-    
+
     local hitInstance = result.Instance
     if not hitInstance then
         return true
     end
-    
+
     if targetChar and hitInstance:IsDescendantOf(targetChar) then
         return true
     end
-    
+
     local hitChar = hitInstance:FindFirstAncestorOfClass("Model")
     if hitChar and hitChar == targetChar then
         return true
     end
-    
+
     return false
 end
-
--- ============================================================
--- TARGET PROVIDER
--- ============================================================
 
 local function GetCandidateMetadata(char)
     local head = char:FindFirstChild("Head") or GetTargetPart(char)
     if not head then
         return nil
     end
-    
+
     local screenPos, onScreen = ProjectToScreen(head.Position)
     if not onScreen or not screenPos then
         return nil
     end
-    
+
     local aimPoint = GetAimScreenPoint()
     local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - aimPoint).Magnitude
-    
+
     if screenDistance > State.Visual.FOVRadius then
         return nil
     end
-    
+
     local camera = GetCamera()
     if not camera then
         return nil
     end
-    
+
     local origin = camera.CFrame.Position
     local lineOfSight = IsTargetVisible(origin, head.Position, char)
-    
+
     if not lineOfSight then
         return nil
     end
-    
+
     return {
         Character = char,
         Position = head.Position,
@@ -478,14 +521,6 @@ local function GetClosestTarget()
     return closest
 end
 
--- ============================================================
--- SISTEMA DE MIRA (APENAS CORREÇÕES DE SILENT E ASSIST)
--- ============================================================
-
--- ============================================================
--- 1. AIMBOT: SNAP DIRETO (INTOCADO - FUNCIONANDO)
--- ============================================================
-
 local function ApplyAimbot(camera, targetPosition)
     local origin = camera.CFrame.Position
     local direction = (targetPosition - origin).Unit
@@ -493,75 +528,28 @@ local function ApplyAimbot(camera, targetPosition)
     return true
 end
 
--- ============================================================
--- 2. AIM ASSIST: CORRIGIDO - USANDO MOUSE (NÃO CAMERA.CFRAME)
--- ============================================================
-
-local function ApplyAimAssist(camera, targetPosition, deltaTime)
-    -- Calcula a posição do alvo na tela
-    local screenPos, onScreen = camera:WorldToViewportPoint(targetPosition)
-    if not onScreen then
-        return false
-    end
-    
-    local screenPos2 = Vector2.new(screenPos.X, screenPos.Y)
-    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-    local distance = (screenPos2 - mousePos).Magnitude
-    
-    -- Quanto mais próximo do centro, mais assistência
-    local maxDist = State.Visual.FOVRadius * 0.5
-    if distance > maxDist then
-        return false
-    end
-    
-    local strength = State.Aim.Strength or 0.5
-    local smoothing = State.Aim.Smoothing or 0.35
-    
-    -- Fator de assistência baseado na distância
-    local assistFactor = 1 - (distance / maxDist)
-    local moveStrength = strength * assistFactor * 0.4
-    
-    -- Move o mouse (NÃO a câmera) para simular assistência
-    local newX = mousePos.X + (screenPos2.X - mousePos.X) * moveStrength * smoothing * deltaTime * 60
-    local newY = mousePos.Y + (screenPos2.Y - mousePos.Y) * moveStrength * smoothing * deltaTime * 60
-    
-    -- Tenta mover o mouse
-    local success, err = pcall(function()
-        Mouse.X = newX
-        Mouse.Y = newY
-    end)
-    
-    if not success then
-        warn("[CAT_EMPIRE] Aim Assist mouse move failed:", err)
-        return false
-    end
-    
-    return true
-end
-
--- ============================================================
--- 3. SILENT AIM: CORRIGIDO - EXPÕE TARGET PARA USO EXTERNO
--- ============================================================
-
--- Silent Aim NÃO move câmera nem mouse
--- Apenas mantém TargetData preenchido para ser consumido
--- por um sistema externo (ex: WeaponController)
 local function ApplySilentAim()
-    -- Apenas mantém TargetData.IsValid = true
-    -- O loop já preencheu TargetData com o alvo
+    if not SilentAim.Available then
+        return false
+    end
+
+    if not SilentAim.Target or not SilentAim.TargetPosition then
+        return false
+    end
+
+    SilentAim.Active = true
     return true
 end
 
--- ============================================================
--- CAMERA CONTROLLER (COM DIAGNÓSTICO)
--- ============================================================
+local CombatRenderStepName = "CAT_EMPIRE_Combat"
+local CombatBound = false
 
 local function UpdateCamera(deltaTime)
     local camera = GetCamera()
     if not camera then
         return
     end
-    
+
     local mode = "None"
     if State.Aim.Silent then
         mode = "Silent"
@@ -570,59 +558,33 @@ local function UpdateCamera(deltaTime)
     elseif State.Aim.Assist then
         mode = "Assist"
     end
-    
+
     if mode == "None" then
         return
     end
-    
+
     if not TargetData.IsValid or not TargetData.Position then
         return
     end
-    
-    -- DIAGNÓSTICO: captura estado antes
-    Diagnostics.LastCFrameBefore = camera.CFrame
-    Diagnostics.CameraOwner = "CAT_EMPIRE"
-    
-    local applied = false
-    
-    if mode == "Aimbot" then
-        applied = ApplyAimbot(camera, TargetData.Position)
-    elseif mode == "Assist" then
-        -- Aim Assist NÃO escreve Camera.CFrame
-        -- Ele move o mouse via ApplyAimAssist
-        applied = ApplyAimAssist(camera, TargetData.Position, deltaTime)
-    elseif mode == "Silent" then
-        applied = ApplySilentAim()
-    end
-    
-    -- DIAGNÓSTICO: captura estado depois
-    Diagnostics.LastCFrameAfter = camera.CFrame
-    
-    -- Verifica conflito (se outro sistema modificou depois)
-    task.defer(function()
-        local current = GetCamera()
-        if current then
-            Diagnostics.LastCFrameFinal = current.CFrame
-            if Diagnostics.LastCFrameAfter and Diagnostics.LastCFrameFinal then
-                local diff = (Diagnostics.LastCFrameAfter.Position - Diagnostics.LastCFrameFinal.Position).Magnitude
-                local angleDiff = math.abs(Diagnostics.LastCFrameAfter.LookVector:Dot(Diagnostics.LastCFrameFinal.LookVector))
-                Diagnostics.ConflictDetected = diff > 0.1 or angleDiff < 0.99
-            end
-        end
-    end)
-end
 
--- ============================================================
--- COMBAT LOOP
--- ============================================================
+    if mode == "Aimbot" then
+        ApplyAimbot(camera, TargetData.Position)
+    elseif mode == "Assist" then
+        ApplyAimAssist(camera, TargetData.Position, deltaTime)
+    elseif mode == "Silent" then
+        SilentAim.Target = TargetData.Current
+        SilentAim.TargetPosition = TargetData.Position
+        ApplySilentAim()
+    end
+end
 
 local function CombatTrackingLoop(deltaTime)
     if UIClosed then
         return
     end
-    
+
     local isEnabled = State.Aim.Enabled or State.Aim.Silent or State.Aim.Assist
-    
+
     if not isEnabled then
         TargetData.Current = nil
         TargetData.Position = nil
@@ -632,6 +594,9 @@ local function CombatTrackingLoop(deltaTime)
         TargetData.LineOfSight = false
         TargetData.IsValid = false
         TargetData.Mode = "None"
+        SilentAim.Active = false
+        SilentAim.Target = nil
+        SilentAim.TargetPosition = nil
         return
     end
 
@@ -646,9 +611,11 @@ local function CombatTrackingLoop(deltaTime)
         TargetData.OnScreen = candidate.OnScreen
         TargetData.LineOfSight = candidate.LineOfSight
         TargetData.IsValid = true
-        
+
         if State.Aim.Silent then
             TargetData.Mode = "Silent"
+            SilentAim.Target = candidate.Character
+            SilentAim.TargetPosition = candidate.Position
         elseif State.Aim.Enabled then
             TargetData.Mode = "Aimbot"
         elseif State.Aim.Assist then
@@ -665,40 +632,69 @@ local function CombatTrackingLoop(deltaTime)
         TargetData.LineOfSight = false
         TargetData.IsValid = false
         TargetData.Mode = "None"
+        SilentAim.Active = false
+        SilentAim.Target = nil
+        SilentAim.TargetPosition = nil
     end
+end
+
+local function ResetCombatState()
+    TargetData.Current = nil
+    TargetData.Position = nil
+    TargetData.Distance = 0
+    TargetData.Angle = 0
+    TargetData.OnScreen = false
+    TargetData.LineOfSight = false
+    TargetData.IsValid = false
+    TargetData.Mode = "None"
+    SilentAim.Active = false
+    SilentAim.Target = nil
+    SilentAim.TargetPosition = nil
 end
 
 local function StartCombatLoop()
-    if CombatConnection then
+    if CombatBound then
         return
     end
-    CombatConnection = RunService.RenderStepped:Connect(CombatTrackingLoop)
+
+    local success, err = pcall(function()
+        RunService:BindToRenderStep(
+            CombatRenderStepName,
+            Enum.RenderPriority.Camera.Value + 5,
+            CombatTrackingLoop
+        )
+    end)
+
+    if success then
+        CombatBound = true
+    else
+        warn("[CAT_EMPIRE] Failed to bind CombatTrackingLoop:", err)
+    end
 end
 
 local function StopCombatLoop()
-    if CombatConnection then
-        CombatConnection:Disconnect()
-        CombatConnection = nil
+    if CombatBound then
+        local success, err = pcall(function()
+            RunService:UnbindFromRenderStep(CombatRenderStepName)
+        end)
+        if not success then
+            warn("[CAT_EMPIRE] Failed to unbind CombatTrackingLoop:", err)
+        end
+        CombatBound = false
     end
-    TargetData.Current = nil
-    TargetData.Position = nil
-    TargetData.IsValid = false
-    TargetData.Mode = "None"
+
+    ResetCombatState()
 end
 
 local function RefreshCombatTracking()
     local isEnabled = State.Aim.Enabled or State.Aim.Silent or State.Aim.Assist
-    
+
     if isEnabled then
         StartCombatLoop()
     else
         StopCombatLoop()
     end
 end
-
--- ============================================================
--- PLAYER ESP (PRESERVADO - INTOCADO)
--- ============================================================
 
 local ESP_GUI_NAME = "CAT_EMPIRE_PlayerESP"
 local ESP_BLACK = Color3.fromRGB(0, 0, 0)
@@ -1194,10 +1190,6 @@ local function UpdateESP()
     end
 end
 
--- ============================================================
--- FOV CIRCLE
--- ============================================================
-
 local FOVGui = nil
 local FOVFrame = nil
 local FOVStroke = nil
@@ -1268,9 +1260,13 @@ UpdateFOVCircle = function()
     end
 end
 
--- ============================================================
--- CLEANUP
--- ============================================================
+local function safeStep(stepName, fn)
+    local ok, err = pcall(fn)
+    if not ok then
+        warn("[CAT_EMPIRE] Cleanup step '" .. stepName .. "' failed:", err)
+    end
+    return ok
+end
 
 local function Cleanup()
     if IsCleaningUp then
@@ -1278,43 +1274,31 @@ local function Cleanup()
     end
 
     IsCleaningUp = true
+    UIClosed = true
 
-    local ok, err = pcall(function()
-        UIClosed = true
-        DisconnectAll()
-        StopCombatLoop()
-        table.clear(PlayerCache)
-
-        ClearESP()
-        DestroyNamedGui(ESP_GUI_NAME)
-        DestroyNamedGui("FOVCircle")
+    safeStep("DisconnectAll", DisconnectAll)
+    safeStep("StopCombatLoop", StopCombatLoop)
+    safeStep("ClearPlayerCache", function() table.clear(PlayerCache) end)
+    safeStep("UnhookShotPath", UnhookShotPath)
+    safeStep("ClearESP", ClearESP)
+    safeStep("DestroyESPGui", function() DestroyNamedGui(ESP_GUI_NAME) end)
+    safeStep("DestroyFOVGui", function() DestroyNamedGui("FOVCircle") end)
+    safeStep("ResetFOVGui", function()
         FOVGui = nil
         FOVFrame = nil
         FOVStroke = nil
-
-        TargetData.Current = nil
-        TargetData.Position = nil
-        TargetData.IsValid = false
-        TargetData.Mode = "None"
-
-        if WindowRef then
-            pcall(function()
-                WindowRef:Destroy()
-            end)
-            WindowRef = nil
-        end
     end)
+    safeStep("ResetTargetData", ResetCombatState)
+
+    if WindowRef then
+        safeStep("DestroyWindow", function()
+            pcall(function() WindowRef:Destroy() end)
+            WindowRef = nil
+        end)
+    end
 
     IsCleaningUp = false
-
-    if not ok then
-        warn("[CAT_EMPIRE] Cleanup error:", err)
-    end
 end
-
--- ============================================================
--- UI
--- ============================================================
 
 local function CreateUI()
     local Window = Fluent:CreateWindow({
@@ -1339,11 +1323,9 @@ local function CreateUI()
         Config = Window:AddTab({Title = "Settings", Icon = "settings"}),
     }
 
-    -- COMBAT
     local combatGrid = Tabs.Combat:AddGroup({Columns = 2, Gap = 8})
     local combatLeft = combatGrid:AddElement()
     local combatRight = combatGrid:AddElement()
-    local diagLabel = nil
 
     combatLeft:AddSection("Aimbot")
     combatLeft:AddToggle("AimbotEnabled", {Title = "Aimbot", Default = false})
@@ -1390,11 +1372,6 @@ local function CreateUI()
         end
     end)
 
-    -- DIAGNÓSTICO
-    combatRight:AddSection("Diagnóstico")
-    diagLabel = combatRight:AddLabel("Target: None | Mode: None | Conflict: No")
-
-    -- VISUALS
     local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
     local visualLeft = visualGrid:AddElement()
     local visualRight = visualGrid:AddElement()
@@ -1451,7 +1428,6 @@ local function CreateUI()
         UpdateESP()
     end)
 
-    -- Preview
     local previewSection = visualRight:AddSection("Preview")
     local preview = Instance.new("Frame")
     preview.Name = "ESPPreview"
@@ -1623,13 +1599,11 @@ local function CreateUI()
         pcall(function() FOVController.SetBase(value) end)
     end)
 
-    -- EXPLOITS
     Tabs.Exploits:AddSection("Camera")
     Tabs.Exploits:AddButton({Title = "Toggle Third Person", Callback = function()
         pcall(function() ThirdPerson.Toggle() end)
     end})
 
-    -- PLAYERS
     local playersGrid = Tabs.Cloud:AddGroup({Columns = 2, Gap = 10})
     local playersLeft = playersGrid:AddElement()
     local playersRight = playersGrid:AddElement()
@@ -1644,7 +1618,6 @@ local function CreateUI()
     local nearestNameLabel = playersRight:AddLabel("Name: --")
     local nearestDistanceLabel = playersRight:AddLabel("Distance: --")
 
-    -- CONFIG
     local configGrid = Tabs.Config:AddGroup({Columns = 1, Gap = 8})
     local configLeft = configGrid:AddElement()
 
@@ -1661,17 +1634,9 @@ local function CreateUI()
         Cleanup()
     end})
 
-    -- ATUALIZA DIAGNÓSTICO E PLAYER LIST
     task.spawn(function()
         while not UIClosed do
-            task.wait(0.3)
-
-            if diagLabel then
-                local mode = TargetData.Mode or "None"
-                local hasTarget = TargetData.IsValid and "Yes" or "No"
-                local conflict = Diagnostics.ConflictDetected and "Yes" or "No"
-                diagLabel:SetText(string.format("Target: %s | Mode: %s | Conflict: %s", hasTarget, mode, conflict))
-            end
+            task.wait(0.5)
 
             local localRoot = GetTargetPart(LocalPlayer.Character)
             local rows = {}
@@ -1717,12 +1682,10 @@ local function CreateUI()
     end)
 end
 
--- ============================================================
--- SETUP CONNECTIONS
--- ============================================================
-
 local function SetupConnections()
     SetupPlayerCache()
+
+    SilentAim.Available = HookShotPath()
 
     table.insert(Connections, RunService.RenderStepped:Connect(function()
         if UIClosed then return end
@@ -1733,10 +1696,7 @@ local function SetupConnections()
     end))
 
     table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function()
-        TargetData.Current = nil
-        TargetData.Position = nil
-        TargetData.IsValid = false
-        TargetData.Mode = "None"
+        ResetCombatState()
         task.defer(UpdateESP)
     end))
 
@@ -1749,10 +1709,6 @@ local function SetupConnections()
     end
 end
 
--- ============================================================
--- INIT
--- ============================================================
-
 local function Init()
     local env = (getgenv and getgenv()) or _G
 
@@ -1761,13 +1717,14 @@ local function Init()
     end
 
     UIClosed = false
-
-    CreateUI()
-    SetupConnections()
+    CombatBound = false
 
     env.CAT_EMPIRE_CLEANUP = function()
         Cleanup()
     end
+
+    CreateUI()
+    SetupConnections()
 
     Fluent:Notify({
         Title = "CAT EMPIRE",
