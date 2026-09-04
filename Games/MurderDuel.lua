@@ -63,6 +63,8 @@ local Diagnostics = {
         LastCallTime = nil,
         LastTargetValid = false,
         LastTargetPosition = nil,
+        LastOrigin = nil,
+        LastDirection = nil,
     },
     Assist = {
         Called = false,
@@ -72,11 +74,20 @@ local Diagnostics = {
         CameraAfter = nil,
         CameraFinal = nil,
         ConflictDetected = false,
+        ConflictCount = 0,
+    },
+    Target = {
+        Found = false,
+        LastPosition = nil,
+        LastDistance = 0,
+        LastAngle = 0,
+        LoSPassed = false,
+        OnScreen = false,
     },
 }
 
 -- ============================================================
--- SILENT AIM: HOOK NO SHOTPATH COM DIAGNÓSTICO
+-- SILENT AIM: HOOK NO SHOTPATH COM DIAGNÓSTICO COMPLETO
 -- ============================================================
 
 local SilentAim = {
@@ -118,6 +129,8 @@ local function HookShotPath()
     local wrapped = function(origin, direction, rayFunc, params)
         Diagnostics.Silent.BuildCalls = Diagnostics.Silent.BuildCalls + 1
         Diagnostics.Silent.LastCallTime = os.clock()
+        Diagnostics.Silent.LastOrigin = origin
+        Diagnostics.Silent.LastDirection = direction
         Diagnostics.Silent.LastTargetValid = SilentAim.Active and SilentAim.TargetPosition ~= nil
         Diagnostics.Silent.LastTargetPosition = SilentAim.TargetPosition
 
@@ -213,7 +226,10 @@ local function ApplyAimAssist(camera, targetPosition, deltaTime)
             if Diagnostics.Assist.CameraAfter and Diagnostics.Assist.CameraFinal then
                 local diff = (Diagnostics.Assist.CameraAfter.Position - Diagnostics.Assist.CameraFinal.Position).Magnitude
                 local angleDiff = math.abs(Diagnostics.Assist.CameraAfter.LookVector:Dot(Diagnostics.Assist.CameraFinal.LookVector))
-                Diagnostics.Assist.ConflictDetected = diff > 0.1 or angleDiff < 0.99
+                if diff > 0.1 or angleDiff < 0.99 then
+                    Diagnostics.Assist.ConflictDetected = true
+                    Diagnostics.Assist.ConflictCount = Diagnostics.Assist.ConflictCount + 1
+                end
             end
         end
     end)
@@ -675,6 +691,8 @@ local function CombatTrackingLoop(deltaTime)
         SilentAim.Active = false
         SilentAim.Target = nil
         SilentAim.TargetPosition = nil
+
+        Diagnostics.Target.Found = false
         return
     end
 
@@ -689,6 +707,13 @@ local function CombatTrackingLoop(deltaTime)
         TargetData.OnScreen = candidate.OnScreen
         TargetData.LineOfSight = candidate.LineOfSight
         TargetData.IsValid = true
+
+        Diagnostics.Target.Found = true
+        Diagnostics.Target.LastPosition = candidate.Position
+        Diagnostics.Target.LastDistance = TargetData.Distance
+        Diagnostics.Target.LastAngle = TargetData.Angle
+        Diagnostics.Target.LoSPassed = candidate.LineOfSight
+        Diagnostics.Target.OnScreen = candidate.OnScreen
 
         if State.Aim.Silent then
             TargetData.Mode = "Silent"
@@ -713,6 +738,8 @@ local function CombatTrackingLoop(deltaTime)
         SilentAim.Active = false
         SilentAim.Target = nil
         SilentAim.TargetPosition = nil
+
+        Diagnostics.Target.Found = false
     end
 end
 
@@ -728,6 +755,8 @@ local function ResetCombatState()
     SilentAim.Active = false
     SilentAim.Target = nil
     SilentAim.TargetPosition = nil
+
+    Diagnostics.Target.Found = false
 end
 
 local function StartCombatLoop()
@@ -1383,7 +1412,7 @@ local function Cleanup()
 end
 
 -- ============================================================
--- UI (COM PAINEL DE DIAGNÓSTICO)
+-- UI (COM PAINEL DE DIAGNÓSTICO COMPLETO)
 -- ============================================================
 
 local function CreateUI()
@@ -1459,10 +1488,12 @@ local function CreateUI()
         end
     end)
 
-    -- DIAGNÓSTICO
+    -- DIAGNÓSTICO COMPLETO
     combatRight:AddSection("Diagnóstico")
-    local diagLabel = combatRight:AddLabel("Silent: Hooked=No | Available=No | Calls=0 | ActiveCalls=0")
-    local diagLabel2 = combatRight:AddLabel("Assist: Called=No | Conflict=No | Target=No")
+
+    local diagLabel1 = combatRight:AddLabel("Silent: Hook=No | Avail=No | Calls=0 | Active=0")
+    local diagLabel2 = combatRight:AddLabel("Assist: Called=No | Conflict=No | Count=0")
+    local diagLabel3 = combatRight:AddLabel("Target: Found=No | LoS=No | Dist=0 | Angle=0")
 
     -- VISUALS
     local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
@@ -1733,8 +1764,8 @@ local function CreateUI()
             task.wait(0.5)
 
             local silent = Diagnostics.Silent
-            diagLabel:SetText(string.format(
-                "Silent: Hooked=%s | Available=%s | Calls=%d | ActiveCalls=%d",
+            diagLabel1:SetText(string.format(
+                "Silent: Hook=%s | Avail=%s | Calls=%d | Active=%d",
                 silent.Hooked and "Yes" or "No",
                 silent.Available and "Yes" or "No",
                 silent.BuildCalls or 0,
@@ -1743,10 +1774,19 @@ local function CreateUI()
 
             local assist = Diagnostics.Assist
             diagLabel2:SetText(string.format(
-                "Assist: Called=%s | Conflict=%s | Target=%s",
+                "Assist: Called=%s | Conflict=%s | Count=%d",
                 assist.Called and "Yes" or "No",
                 assist.ConflictDetected and "Yes" or "No",
-                assist.TargetValid and "Yes" or "No"
+                assist.ConflictCount or 0
+            ))
+
+            local target = Diagnostics.Target
+            diagLabel3:SetText(string.format(
+                "Target: Found=%s | LoS=%s | Dist=%.0f | Angle=%.0f",
+                target.Found and "Yes" or "No",
+                target.LoSPassed and "Yes" or "No",
+                target.LastDistance or 0,
+                target.LastAngle or 0
             ))
 
             local localRoot = GetTargetPart(LocalPlayer.Character)
