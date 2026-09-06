@@ -22,14 +22,15 @@ jobs:
       - name: Reconstruct exact source and adapt project UI
         shell: bash
         run: |
+          cp .github/scripts/use_exact_reference_ui.py /tmp/use_exact_reference_ui.py
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('.github/scripts/use_exact_reference_ui.py')
+          p = Path('/tmp/use_exact_reference_ui.py')
           s = p.read_text()
           s = s.replace("subprocess.run(['git','diff','--check'], check=True)", "subprocess.run(['git','diff','--check','--','Games/MurderDuel.lua'], check=True)")
           p.write_text(s)
           PY
-          python3 .github/scripts/use_exact_reference_ui.py
+          python3 /tmp/use_exact_reference_ui.py
 
       - name: Triple review final diff
         shell: bash
