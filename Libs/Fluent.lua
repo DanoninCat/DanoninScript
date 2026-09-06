@@ -1849,6 +1849,13 @@ function Library:CreateWindow(config)
                 return
             end
 
+            if
+                minimizeKey == Enum.KeyCode.Unknown
+                or input.UserInputType ~= Enum.UserInputType.Keyboard
+            then
+                return
+            end
+
             if input.KeyCode == minimizeKey then
                 window:ToggleMinimize()
             end
