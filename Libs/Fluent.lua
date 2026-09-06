@@ -7392,7 +7392,11 @@ local aa = {
             c.AddSignal(
                 p.MouseButton1Click,
                 function()
-                    l:Open()
+                    if l.Opened then
+                        l:Close()
+                    else
+                        l:Open()
+                    end
                 end
             )
             c.AddSignal(
@@ -7436,6 +7440,22 @@ local aa = {
                 _applyDropShine(l, u, shouldAnimate)
             end
             function l.Open(B)
+                if l.Opened then
+                    return
+                end
+                local _closeQueue = {}
+                for state in next, _openDropdowns do
+                    if state ~= l then
+                        table.insert(_closeQueue, state)
+                    end
+                end
+                for _, state in ipairs(_closeQueue) do
+                    if state and state.Close then
+                        pcall(function()
+                            state:Close()
+                        end)
+                    end
+                end
                 l.Opened = true
                 A.ScrollingEnabled = false
                 y()
