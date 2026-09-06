@@ -1,0 +1,76 @@
+name: Fix CAT EMPIRE UI interactions
+
+on:
+  push:
+    branches:
+      - ui-fix-dropdown-thumbs-mobile
+    paths:
+      - .github/workflows/fix-ui-dropdown-thumbs-mobile.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ui-fix-dropdown-thumbs-mobile
+          fetch-depth: 0
+
+      - name: Apply UI fixes
+        run: python3 .github/scripts/fix_ui_dropdown_thumbs_mobile.py
+
+      - name: Review pass 1 - scope and diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check -- Games/MurderDuel.lua
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "Games/MurderDuel.lua Libs/Fluent.lua "
+          test "$(git hash-object Assets/CatEmpireLogo.jpg)" = "3c394399eebd4429859e9290a30368aa57268d7f"
+          test "$(git hash-object Assets/SidebarIcons/combat.png)" = "e7b8f31490055758d3ea97e07767e75928537eba"
+          test "$(git hash-object Assets/SidebarIcons/visuals.png)" = "cd2d9fdc298ce73ad4169bfe6b1d45c799640dc1"
+          test "$(git hash-object Assets/SidebarIcons/misc.png)" = "3a6d26d9a4f7adbbc62f58c7e87d8cd819b8a0e0"
+          test "$(git hash-object Assets/SidebarIcons/settings.png)" = "054bdb80a2d97ac1f375ecc3da168552d8f48d5a"
+
+      - name: Review pass 2 - UI invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'Title = "CAT EMPIRE"' Games/MurderDuel.lua
+          grep -q 'SubTitle = "Murder Duel"' Games/MurderDuel.lua
+          grep -q 'Theme = "Crimson"' Games/MurderDuel.lua
+          grep -q 'Title = "Combat"' Games/MurderDuel.lua
+          grep -q 'Title = "Visuals"' Games/MurderDuel.lua
+          grep -q 'Title = "Misc"' Games/MurderDuel.lua
+          grep -q 'Title = "Players"' Games/MurderDuel.lua
+          grep -q 'Title = "Settings"' Games/MurderDuel.lua
+          grep -q 'if l.Opened then' Libs/Fluent.lua
+          grep -q 'state:Close()' Libs/Fluent.lua
+          grep -q 'CAT_EMPIRE_MobileToggle' Games/MurderDuel.lua
+          grep -q 'Players:GetUserThumbnailAsync' Games/MurderDuel.lua
+          grep -q 'resolveGameIcon()' Games/MurderDuel.lua
+          grep -q 'resolveAvatarThumbnail()' Games/MurderDuel.lua
+
+      - name: Review pass 3 - lifecycle and removed features
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -q 'Silent Aim' Games/MurderDuel.lua
+          ! grep -q 'Aim Assist' Games/MurderDuel.lua
+          ! grep -q 'Aim FOV' Games/MurderDuel.lua
+          ! grep -q 'Camera FOV' Games/MurderDuel.lua
+          grep -q 'DestroyMobileToggle' Games/MurderDuel.lua
+          grep -q 'WindowRef:Destroy()' Games/MurderDuel.lua
+          grep -q 'Default = false' Games/MurderDuel.lua
+
+      - name: Commit reviewed UI fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "CAT EMPIRE Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Libs/Fluent.lua Games/MurderDuel.lua
+          git commit -m "Fix dropdowns thumbnails and mobile toggle"
+          git push origin HEAD:ui-fix-dropdown-thumbs-mobile
