@@ -1,15 +1,10 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local MarketplaceService = game:GetService("MarketplaceService")
 
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
-
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Shared = ReplicatedStorage:WaitForChild("Shared")
-
-local FOVController = require(Shared:WaitForChild("FOVController"))
-local ThirdPerson = require(Shared:WaitForChild("ThirdPerson"))
 
 local Fluent = loadstring(game:HttpGet(
     "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Libs/Fluent.lua",
@@ -18,28 +13,23 @@ local Fluent = loadstring(game:HttpGet(
 
 local State = {
     Filters = {
-        TeamCheck = true,
+        TeamCheck = false,
     },
     ESP = {
-        Enabled = true,
-        Box = true,
-        Skeleton = true,
-        Name = true,
-        Distance = true,
-        Lines = true,
+        Enabled = false,
+        Box = false,
+        Skeleton = false,
+        Name = false,
+        Distance = false,
+        Lines = false,
         RenderingDistance = 500,
     },
     Aim = {
         Enabled = false,
-        Silent = false,
-        Assist = false,
-        Strength = 0.5,
-        Smoothing = 0.35,
     },
     Visual = {
         FOVCircle = false,
         FOVRadius = 200,
-        CameraFOV = 70,
         TracerOrigin = "BottomCenter",
     },
 }
@@ -48,7 +38,6 @@ local ESPObjects = {}
 local Connections = {}
 local WindowRef = nil
 local UIClosed = false
-local FOVCallbackLock = false
 local IsCleaningUp = false
 
 -- ============================================================
@@ -65,70 +54,6 @@ local TargetData = {
     IsValid = false,
     Mode = "None",
 }
-
--- ============================================================
--- SILENT AIM: APENAS TARGET TRACKING (SEM HOOK)
--- ============================================================
-
-local SilentAim = {
-    Active = false,
-    Target = nil,
-    TargetPosition = nil,
-}
-
-local function ApplySilentAim()
-    if not SilentAim.Target or not SilentAim.TargetPosition then
-        return false
-    end
-
-    SilentAim.Active = true
-    return true
-end
-
--- ============================================================
--- AIM ASSIST: USA MOUSE (NÃO CAMERA.CFRAME)
--- ============================================================
-
-local function ApplyAimAssist(camera, targetPosition, deltaTime)
-    -- Projeta o alvo para a tela
-    local screenPos, onScreen = camera:WorldToViewportPoint(targetPosition)
-    if not onScreen then
-        return false
-    end
-
-    local screenPos2 = Vector2.new(screenPos.X, screenPos.Y)
-    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-    local distance = (screenPos2 - mousePos).Magnitude
-
-    -- Raio de assistência (baseado no FOV)
-    local maxDist = State.Visual.FOVRadius * 0.4
-    if distance > maxDist then
-        return false
-    end
-
-    local strength = State.Aim.Strength or 0.5
-    local smoothing = State.Aim.Smoothing or 0.35
-
-    -- Fator de assistência baseado na distância
-    local assistFactor = 1 - (distance / maxDist)
-    local moveStrength = strength * assistFactor * 0.3
-
-    -- Calcula o delta para mover o mouse
-    local deltaX = (screenPos2.X - mousePos.X) * moveStrength * smoothing * deltaTime * 60
-    local deltaY = (screenPos2.Y - mousePos.Y) * moveStrength * smoothing * deltaTime * 60
-
-    -- Move o mouse via UserInputService (NÃO a câmera)
-    local success, err = pcall(function()
-        UserInputService:SetMouseDelta(Vector2.new(deltaX, deltaY))
-    end)
-
-    if not success then
-        warn("[CAT_EMPIRE] Aim Assist SetMouseDelta failed:", err)
-        return false
-    end
-
-    return true
-end
 
 -- ============================================================
 -- PLAYER CACHE
@@ -383,33 +308,8 @@ end
 local UpdateFOVCircle
 
 local function SetSharedFOV(value)
-    if FOVCallbackLock then
-        return
-    end
-
-    FOVCallbackLock = true
-
-    local success, err = pcall(function()
-        value = math.clamp(value, 30, 500)
-        State.Visual.FOVRadius = value
-
-        if Fluent and Fluent.Options then
-            if Fluent.Options.AimFOV then
-                Fluent.Options.AimFOV:SetValue(value)
-            end
-            if Fluent.Options.FOVRadius then
-                Fluent.Options.FOVRadius:SetValue(value)
-            end
-        end
-
-        UpdateFOVCircle()
-    end)
-
-    FOVCallbackLock = false
-
-    if not success then
-        warn("[CAT_EMPIRE] SetSharedFOV error:", err)
-    end
+    State.Visual.FOVRadius = math.clamp(tonumber(value) or 200, 30, 500)
+    UpdateFOVCircle()
 end
 
 local function IsTargetVisible(origin, targetPos, targetChar)
@@ -516,22 +416,20 @@ end
 local CombatRenderStepName = "CAT_EMPIRE_Combat"
 local CombatBound = false
 
-local function UpdateCamera(deltaTime)
+local function ResetTargetData()
+    TargetData.Current = nil
+    TargetData.Position = nil
+    TargetData.Distance = 0
+    TargetData.Angle = 0
+    TargetData.OnScreen = false
+    TargetData.LineOfSight = false
+    TargetData.IsValid = false
+    TargetData.Mode = "None"
+end
+
+local function UpdateCamera()
     local camera = GetCamera()
-    if not camera then
-        return
-    end
-
-    local mode = "None"
-    if State.Aim.Silent then
-        mode = "Silent"
-    elseif State.Aim.Enabled then
-        mode = "Aimbot"
-    elseif State.Aim.Assist then
-        mode = "Assist"
-    end
-
-    if mode == "None" then
+    if not camera or not State.Aim.Enabled then
         return
     end
 
@@ -539,36 +437,16 @@ local function UpdateCamera(deltaTime)
         return
     end
 
-    if mode == "Aimbot" then
-        ApplyAimbot(camera, TargetData.Position)
-    elseif mode == "Assist" then
-        ApplyAimAssist(camera, TargetData.Position, deltaTime)
-    elseif mode == "Silent" then
-        SilentAim.Target = TargetData.Current
-        SilentAim.TargetPosition = TargetData.Position
-        ApplySilentAim()
-    end
+    ApplyAimbot(camera, TargetData.Position)
 end
 
-local function CombatTrackingLoop(deltaTime)
+local function CombatTrackingLoop(_deltaTime)
     if UIClosed then
         return
     end
 
-    local isEnabled = State.Aim.Enabled or State.Aim.Silent or State.Aim.Assist
-
-    if not isEnabled then
-        TargetData.Current = nil
-        TargetData.Position = nil
-        TargetData.Distance = 0
-        TargetData.Angle = 0
-        TargetData.OnScreen = false
-        TargetData.LineOfSight = false
-        TargetData.IsValid = false
-        TargetData.Mode = "None"
-        SilentAim.Active = false
-        SilentAim.Target = nil
-        SilentAim.TargetPosition = nil
+    if not State.Aim.Enabled then
+        ResetTargetData()
         return
     end
 
@@ -583,45 +461,15 @@ local function CombatTrackingLoop(deltaTime)
         TargetData.OnScreen = candidate.OnScreen
         TargetData.LineOfSight = candidate.LineOfSight
         TargetData.IsValid = true
-
-        if State.Aim.Silent then
-            TargetData.Mode = "Silent (Track Only)"
-            SilentAim.Target = candidate.Character
-            SilentAim.TargetPosition = candidate.Position
-        elseif State.Aim.Enabled then
-            TargetData.Mode = "Aimbot"
-        elseif State.Aim.Assist then
-            TargetData.Mode = "Assist"
-        end
-
-        UpdateCamera(deltaTime)
+        TargetData.Mode = "Aimbot"
+        UpdateCamera()
     else
-        TargetData.Current = nil
-        TargetData.Position = nil
-        TargetData.Distance = 0
-        TargetData.Angle = 0
-        TargetData.OnScreen = false
-        TargetData.LineOfSight = false
-        TargetData.IsValid = false
-        TargetData.Mode = "None"
-        SilentAim.Active = false
-        SilentAim.Target = nil
-        SilentAim.TargetPosition = nil
+        ResetTargetData()
     end
 end
 
 local function ResetCombatState()
-    TargetData.Current = nil
-    TargetData.Position = nil
-    TargetData.Distance = 0
-    TargetData.Angle = 0
-    TargetData.OnScreen = false
-    TargetData.LineOfSight = false
-    TargetData.IsValid = false
-    TargetData.Mode = "None"
-    SilentAim.Active = false
-    SilentAim.Target = nil
-    SilentAim.TargetPosition = nil
+    ResetTargetData()
 end
 
 local function StartCombatLoop()
@@ -659,9 +507,7 @@ local function StopCombatLoop()
 end
 
 local function RefreshCombatTracking()
-    local isEnabled = State.Aim.Enabled or State.Aim.Silent or State.Aim.Assist
-
-    if isEnabled then
+    if State.Aim.Enabled then
         StartCombatLoop()
     else
         StopCombatLoop()
@@ -1130,6 +976,15 @@ local function UpdatePlayerESP(char, data, myRoot)
     UpdateSkeleton(char, data)
 end
 
+local function RefreshESPEnabled()
+    State.ESP.Enabled = State.ESP.Box
+        or State.ESP.Skeleton
+        or State.ESP.Name
+        or State.ESP.Distance
+        or State.ESP.Lines
+    return State.ESP.Enabled
+end
+
 local function UpdateESP()
     if not State.ESP.Enabled then
         for _, data in pairs(ESPObjects) do
@@ -1288,14 +1143,14 @@ local function CreateUI()
         Acrylic = false,
         Animated = false,
         Theme = "CAT EMPIRE",
-        MinimizeKey = Enum.KeyCode.LeftControl,
+        MinimizeKey = Enum.KeyCode.Unknown,
         ScreenGuiName = "CAT_EMPIRE",
     })
 
     WindowRef = Window
 
     local Tabs = {
-        Combat = Window:AddTab({Title = "Combat", Icon = "pc", SubTabs = {"Aimbot", "Silent"}}),
+        Combat = Window:AddTab({Title = "Combat", Icon = "pc", SubTabs = {"Aimbot"}}),
         Visuals = Window:AddTab({Title = "Visuals", Icon = "eye", SubTabs = {"Players", "Vehicles"}}),
         Exploits = Window:AddTab({Title = "Misc", Icon = "folder", SubTabs = {"Player", "Others", "Teleport"}}),
         Cloud = Window:AddTab({Title = "Players", Icon = "players"}),
@@ -1313,47 +1168,14 @@ local function CreateUI()
         RefreshCombatTracking()
     end)
 
-    combatLeft:AddToggle("AimAssist", {Title = "Aim Assist (Mouse)", Default = false})
-    Fluent.Options.AimAssist:OnChanged(function(value)
-        State.Aim.Assist = value
-        RefreshCombatTracking()
-    end)
-
-    combatLeft:AddSlider("AimFOV", {Title = "Aim FOV", Min = 30, Max = 500, Default = 200, Rounding = 0})
-    Fluent.Options.AimFOV:OnChanged(function(value)
-        SetSharedFOV(value)
-    end)
-
-    combatLeft:AddSection("Smoothing")
-    combatLeft:AddSlider("AimStrength", {Title = "Aim Strength", Min = 0.1, Max = 1, Default = 0.5, Rounding = 2})
-    Fluent.Options.AimStrength:OnChanged(function(value)
-        State.Aim.Strength = value
-    end)
-
-    combatLeft:AddSlider("AimSmoothing", {Title = "Smooth", Min = 0.1, Max = 1, Default = 0.35, Rounding = 2})
-    Fluent.Options.AimSmoothing:OnChanged(function(value)
-        State.Aim.Smoothing = value
-    end)
-
-    combatRight:AddSection("Aim Modes")
-    combatRight:AddToggle("SilentAim", {Title = "Silent (Track Only)", Default = false})
-    Fluent.Options.SilentAim:OnChanged(function(value)
-        State.Aim.Silent = value
-        RefreshCombatTracking()
-    end)
-
     combatRight:AddSection("Target Filters")
-    combatRight:AddToggle("CombatTeamCheck", {Title = "Team Check", Default = true})
+    combatRight:AddToggle("CombatTeamCheck", {Title = "Team Check", Default = false})
     Fluent.Options.CombatTeamCheck:OnChanged(function(value)
         State.Filters.TeamCheck = value
         if Fluent.Options.TeamCheck and Fluent.Options.TeamCheck.Value ~= value then
             Fluent.Options.TeamCheck:SetValue(value)
         end
     end)
-
-    -- DIAGNÓSTICO HONESTO
-    combatRight:AddSection("Diagnóstico (Status Real)")
-    local diagLabel = combatRight:AddLabel("Aimbot: Working | Silent: Track Only | Assist: Mouse")
 
     -- VISUALS
     local visualGrid = Tabs.Visuals:AddGroup({Columns = 2, Gap = 10})
@@ -1368,42 +1190,47 @@ local function CreateUI()
         UpdateESP()
     end)
 
-    visualLeft:AddToggle("ESPBox", {Title = "Box", Default = true})
+    visualLeft:AddToggle("ESPBox", {Title = "Box", Default = false})
     Fluent.Options.ESPBox:OnChanged(function(value)
         State.ESP.Box = value
+        RefreshESPEnabled()
         UpdateESP()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("ESPSkeleton", {Title = "Skeleton", Default = true})
+    visualLeft:AddToggle("ESPSkeleton", {Title = "Skeleton", Default = false})
     Fluent.Options.ESPSkeleton:OnChanged(function(value)
         State.ESP.Skeleton = value
+        RefreshESPEnabled()
         UpdateESP()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("ESPName", {Title = "Name", Default = true})
+    visualLeft:AddToggle("ESPName", {Title = "Name", Default = false})
     Fluent.Options.ESPName:OnChanged(function(value)
         State.ESP.Name = value
+        RefreshESPEnabled()
         UpdateESP()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("ESPDistance", {Title = "Distance", Default = true})
+    visualLeft:AddToggle("ESPDistance", {Title = "Distance", Default = false})
     Fluent.Options.ESPDistance:OnChanged(function(value)
         State.ESP.Distance = value
+        RefreshESPEnabled()
         UpdateESP()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("ESPLines", {Title = "Lines", Default = true})
+    visualLeft:AddToggle("ESPLines", {Title = "Lines", Default = false})
     Fluent.Options.ESPLines:OnChanged(function(value)
         State.ESP.Lines = value
+        RefreshESPEnabled()
         UpdateESP()
         UpdatePreview()
     end)
 
-    visualLeft:AddToggle("TeamCheck", {Title = "Team Check", Default = true})
+    visualLeft:AddToggle("TeamCheck", {Title = "Team Check", Default = false})
     Fluent.Options.TeamCheck:OnChanged(function(value)
         State.Filters.TeamCheck = value
         if Fluent.Options.CombatTeamCheck and Fluent.Options.CombatTeamCheck.Value ~= value then
@@ -1551,7 +1378,7 @@ local function CreateUI()
     local colorNames = {"White", "Red", "Blue", "Purple", "Pink"}
 
     local function BindESPColorSelect(id, title, key, defaultIndex)
-        visualRight:AddSelect(id, {Title = title, Icon = "🪣", Values = colorNames, ColorMap = colorPresets, Default = defaultIndex})
+        visualRight:AddSelect(id, {Title = title, Icon = "", Values = colorNames, ColorMap = colorPresets, Default = defaultIndex})
         Fluent.Options[id]:OnChanged(function(value)
             ESP_COLORS[key] = colorPresets[value] or colorPresets.Purple
             UpdateESP()
@@ -1565,7 +1392,7 @@ local function CreateUI()
     BindESPColorSelect("NameColor", "Name", "Name", 1)
     BindESPColorSelect("DistanceColor", "Distance", "Distance", 1)
 
-    visualRight:AddSection("Camera / FOV")
+    visualRight:AddSection("FOV")
     visualRight:AddToggle("FOVCircle", {Title = "Draw FOV", Default = false})
     Fluent.Options.FOVCircle:OnChanged(function(value)
         State.Visual.FOVCircle = value
@@ -1577,15 +1404,188 @@ local function CreateUI()
         SetSharedFOV(value)
     end)
 
-    visualRight:AddSlider("CameraFOV", {Title = "Camera FOV", Min = 40, Max = 120, Default = 70, Rounding = 0})
-    Fluent.Options.CameraFOV:OnChanged(function(value)
-        State.Visual.CameraFOV = value
-        pcall(function() FOVController.SetBase(value) end)
-    end)
+    local function AddInfoCard(section, imageSource, titleText, bodyText)
+        local rows = section and section:FindFirstChild("Rows")
+        if not rows then
+            return nil, nil
+        end
 
-    Tabs.Exploits:AddSection("Camera")
-    Tabs.Exploits:AddButton({Title = "Toggle Third Person", Callback = function()
-        pcall(function() ThirdPerson.Toggle() end)
+        local card = Instance.new("Frame")
+        card.Name = "InfoCard"
+        card.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
+        card.BorderSizePixel = 0
+        card.Size = UDim2.new(1, 0, 0, 96)
+        card.Parent = rows
+
+        local cardCorner = Instance.new("UICorner")
+        cardCorner.CornerRadius = UDim.new(0, 5)
+        cardCorner.Parent = card
+
+        local cardStroke = Instance.new("UIStroke")
+        cardStroke.Color = Color3.fromRGB(31, 31, 42)
+        cardStroke.Transparency = 0.15
+        cardStroke.Thickness = 1
+        cardStroke.Parent = card
+
+        local image = Instance.new("ImageLabel")
+        image.Name = "CardImage"
+        image.BackgroundColor3 = Color3.fromRGB(8, 8, 11)
+        image.BorderSizePixel = 0
+        image.Image = imageSource or ""
+        image.ScaleType = Enum.ScaleType.Crop
+        image.Position = UDim2.fromOffset(8, 8)
+        image.Size = UDim2.fromOffset(80, 80)
+        image.Parent = card
+
+        local imageCorner = Instance.new("UICorner")
+        imageCorner.CornerRadius = UDim.new(0, 6)
+        imageCorner.Parent = image
+
+        local title = Instance.new("TextLabel")
+        title.Name = "CardTitle"
+        title.BackgroundTransparency = 1
+        title.BorderSizePixel = 0
+        title.Text = tostring(titleText or "")
+        title.TextColor3 = Color3.fromRGB(255, 255, 255)
+        title.TextSize = 12
+        title.Font = Enum.Font.GothamBold
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Position = UDim2.fromOffset(98, 8)
+        title.Size = UDim2.new(1, -106, 0, 20)
+        title.Parent = card
+
+        local body = Instance.new("TextLabel")
+        body.Name = "CardBody"
+        body.BackgroundTransparency = 1
+        body.BorderSizePixel = 0
+        body.Text = tostring(bodyText or "")
+        body.TextColor3 = Color3.fromRGB(218, 218, 228)
+        body.TextSize = 10
+        body.Font = Enum.Font.Gotham
+        body.TextXAlignment = Enum.TextXAlignment.Left
+        body.TextYAlignment = Enum.TextYAlignment.Top
+        body.TextWrapped = true
+        body.Position = UDim2.fromOffset(98, 30)
+        body.Size = UDim2.new(1, -106, 1, -36)
+        body.Parent = card
+
+        return card, body
+    end
+
+    local function CreateTextInput(section, placeholder)
+        local rows = section and section:FindFirstChild("Rows")
+        if not rows then
+            return nil
+        end
+
+        local row = Instance.new("Frame")
+        row.BackgroundTransparency = 1
+        row.BorderSizePixel = 0
+        row.Size = UDim2.new(1, 0, 0, 34)
+        row.Parent = rows
+
+        local input = Instance.new("TextBox")
+        input.Name = "CustomBackgroundURL"
+        input.BackgroundColor3 = Color3.fromRGB(13, 13, 20)
+        input.BorderSizePixel = 0
+        input.ClearTextOnFocus = false
+        input.PlaceholderText = placeholder or "https://..."
+        input.PlaceholderColor3 = Color3.fromRGB(120, 120, 138)
+        input.Text = ""
+        input.TextColor3 = Color3.fromRGB(235, 235, 240)
+        input.TextSize = 10
+        input.Font = Enum.Font.Gotham
+        input.TextXAlignment = Enum.TextXAlignment.Left
+        input.Position = UDim2.fromOffset(2, 3)
+        input.Size = UDim2.new(1, -4, 1, -6)
+        input.Parent = row
+
+        local inputCorner = Instance.new("UICorner")
+        inputCorner.CornerRadius = UDim.new(0, 4)
+        inputCorner.Parent = input
+
+        local inputStroke = Instance.new("UIStroke")
+        inputStroke.Color = Color3.fromRGB(31, 31, 42)
+        inputStroke.Transparency = 0.15
+        inputStroke.Thickness = 1
+        inputStroke.Parent = input
+
+        local inputPadding = Instance.new("UIPadding")
+        inputPadding.PaddingLeft = UDim.new(0, 8)
+        inputPadding.PaddingRight = UDim.new(0, 8)
+        inputPadding.Parent = input
+
+        return input
+    end
+
+    local function ResolveGameName()
+        local gameName = "Murder Duel"
+        pcall(function()
+            local info = MarketplaceService:GetProductInfo(game.PlaceId)
+            if info and type(info.Name) == "string" and info.Name ~= "" then
+                gameName = info.Name
+            end
+        end)
+        return gameName
+    end
+
+    local function ShortJobId()
+        local id = tostring(game.JobId or "")
+        if id == "" then
+            return "N/A"
+        end
+        if #id > 18 then
+            return string.sub(id, 1, 18) .. "..."
+        end
+        return id
+    end
+
+    local miscGrid = Tabs.Exploits:AddGroup({Columns = 2, Gap = 10})
+    local miscLeft = miscGrid:AddElement()
+    local miscRight = miscGrid:AddElement()
+
+    local serverSection = miscLeft:AddSection("Servidor Atual")
+    local _, serverInfoBody = AddInfoCard(
+        serverSection,
+        "rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=150&h=150",
+        ResolveGameName(),
+        string.format(
+            "Jogadores: %d/%d\nPlace ID: %s\nServer ID: %s",
+            #Players:GetPlayers(),
+            tonumber(Players.MaxPlayers) or 0,
+            tostring(game.PlaceId),
+            ShortJobId()
+        )
+    )
+
+    local accountSection = miscRight:AddSection("Sua Conta")
+    AddInfoCard(
+        accountSection,
+        "rbxthumb://type=AvatarHeadShot&id=" .. tostring(LocalPlayer.UserId) .. "&w=150&h=150",
+        LocalPlayer.DisplayName,
+        string.format(
+            "Display Name: %s\nNickname: @%s\nUser ID: %d\nConta: %d dias",
+            LocalPlayer.DisplayName,
+            LocalPlayer.Name,
+            LocalPlayer.UserId,
+            LocalPlayer.AccountAge
+        )
+    )
+
+    miscRight:AddSection("Comunidade")
+    miscRight:AddParagraph({
+        Title = "Discord",
+        Content = "https://discord.gg/yykVnTjd2Y",
+    })
+    miscRight:AddButton({Title = "Copiar Discord", Callback = function()
+        local env = (getgenv and getgenv()) or _G
+        local clipboard = (env and env.setclipboard) or rawget(_G, "setclipboard")
+        if type(clipboard) == "function" then
+            pcall(clipboard, "https://discord.gg/yykVnTjd2Y")
+            Fluent:Notify({Title = "CAT EMPIRE", Content = "Link do Discord copiado.", Duration = 2})
+        else
+            Fluent:Notify({Title = "CAT EMPIRE", Content = "Clipboard indisponível neste executor.", Duration = 3})
+        end
     end})
 
     local playersGrid = Tabs.Cloud:AddGroup({Columns = 2, Gap = 10})
@@ -1605,6 +1605,9 @@ local function CreateUI()
     local configGrid = Tabs.Config:AddGroup({Columns = 1, Gap = 8})
     local configLeft = configGrid:AddElement()
 
+    configLeft:AddSection("Developer")
+    configLeft:AddParagraph({Title = "Dev", Content = "Danonin"})
+
     configLeft:AddSection("Interface")
     local initialUIScale = math.floor((Window:GetScale() * 100) + 0.5)
     configLeft:AddSlider("UISize", {Title = "UI Size", Min = 50, Max = 110, Default = initialUIScale, Rounding = 0})
@@ -1612,8 +1615,307 @@ local function CreateUI()
         Window:SetScale(value / 100)
     end)
 
-    configLeft:AddParagraph({Title = "Open / Close", Content = "Use the floating CE button outside the panel."})
-    configLeft:AddParagraph({Title = "Desktop Hotkey", Content = "Left Control • minimize / restore"})
+    local panelAccentPresets = {
+        Purple = Color3.fromRGB(92, 72, 255),
+        Blue = Color3.fromRGB(45, 120, 255),
+        Red = Color3.fromRGB(235, 65, 75),
+        Pink = Color3.fromRGB(230, 70, 180),
+        White = Color3.fromRGB(225, 225, 235),
+    }
+    local panelFontPresets = {
+        Gotham = Enum.Font.Gotham,
+        SourceSans = Enum.Font.SourceSans,
+        Code = Enum.Font.Code,
+        Arial = Enum.Font.Arial,
+        SciFi = Enum.Font.SciFi,
+    }
+
+    local defaultAccent = Color3.fromRGB(92, 72, 255)
+    local defaultAccentDark = Color3.fromRGB(67, 54, 214)
+    local defaultAccentSoft = Color3.fromRGB(126, 110, 255)
+    local currentAccent = defaultAccent
+    local currentAccentDark = defaultAccentDark
+    local currentAccentSoft = defaultAccentSoft
+    local currentFont = Enum.Font.Gotham
+
+    local function SameColor(a, b)
+        return math.abs(a.R - b.R) < 0.004
+            and math.abs(a.G - b.G) < 0.004
+            and math.abs(a.B - b.B) < 0.004
+    end
+
+    local function Darken(color)
+        return Color3.new(color.R * 0.72, color.G * 0.72, color.B * 0.72)
+    end
+
+    local function Soften(color)
+        return Color3.new(
+            math.min(1, color.R * 1.24 + 0.04),
+            math.min(1, color.G * 1.24 + 0.04),
+            math.min(1, color.B * 1.24 + 0.04)
+        )
+    end
+
+    local function RefreshPanelAccent(previousAccent, previousDark, previousSoft)
+        if not Window.Gui or not Window.Gui.Parent then
+            return
+        end
+
+        previousAccent = previousAccent or currentAccent
+        previousDark = previousDark or currentAccentDark
+        previousSoft = previousSoft or currentAccentSoft
+
+        for _, object in ipairs(Window.Gui:GetDescendants()) do
+            if object:IsA("GuiObject") then
+                local background = object.BackgroundColor3
+                if SameColor(background, defaultAccent) or SameColor(background, currentAccent) or SameColor(background, previousAccent) then
+                    object.BackgroundColor3 = currentAccent
+                elseif SameColor(background, defaultAccentDark) or SameColor(background, currentAccentDark) or SameColor(background, previousDark) then
+                    object.BackgroundColor3 = currentAccentDark
+                elseif SameColor(background, defaultAccentSoft) or SameColor(background, currentAccentSoft) or SameColor(background, previousSoft) then
+                    object.BackgroundColor3 = currentAccentSoft
+                end
+            end
+
+            if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+                if SameColor(object.TextColor3, defaultAccent) or SameColor(object.TextColor3, previousAccent) then
+                    object.TextColor3 = currentAccent
+                end
+            end
+
+            if object:IsA("UIStroke") then
+                if SameColor(object.Color, defaultAccent) or SameColor(object.Color, previousAccent) then
+                    object.Color = currentAccent
+                elseif SameColor(object.Color, defaultAccentDark) or SameColor(object.Color, previousDark) then
+                    object.Color = currentAccentDark
+                elseif SameColor(object.Color, defaultAccentSoft) or SameColor(object.Color, previousSoft) then
+                    object.Color = currentAccentSoft
+                end
+            end
+
+            if object:IsA("ScrollingFrame") and (SameColor(object.ScrollBarImageColor3, defaultAccent) or SameColor(object.ScrollBarImageColor3, previousAccent)) then
+                object.ScrollBarImageColor3 = currentAccent
+            end
+        end
+    end
+
+    local function ApplyPanelAccent(name)
+        local previousAccent = currentAccent
+        local previousDark = currentAccentDark
+        local previousSoft = currentAccentSoft
+        local newAccent = panelAccentPresets[name] or panelAccentPresets.Purple
+        currentAccent = newAccent
+        currentAccentDark = Darken(newAccent)
+        currentAccentSoft = Soften(newAccent)
+        RefreshPanelAccent(previousAccent, previousDark, previousSoft)
+    end
+
+    local function RefreshPanelFont()
+        if not Window.Gui or not Window.Gui.Parent then
+            return
+        end
+        for _, object in ipairs(Window.Gui:GetDescendants()) do
+            if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+                object.Font = currentFont
+            end
+        end
+    end
+
+    local function ApplyPanelFont(name)
+        currentFont = panelFontPresets[name] or Enum.Font.Gotham
+        RefreshPanelFont()
+    end
+
+    local backgroundLayer = Instance.new("ImageLabel")
+    backgroundLayer.Name = "CAT_EMPIRE_Background"
+    backgroundLayer.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
+    backgroundLayer.BackgroundTransparency = 1
+    backgroundLayer.BorderSizePixel = 0
+    backgroundLayer.Image = ""
+    backgroundLayer.ImageTransparency = 1
+    backgroundLayer.ScaleType = Enum.ScaleType.Crop
+    backgroundLayer.Size = UDim2.fromScale(1, 1)
+    backgroundLayer.ZIndex = 0
+    backgroundLayer.Parent = Window.Root
+
+    local backgroundGradient = Instance.new("UIGradient")
+    backgroundGradient.Enabled = false
+    backgroundGradient.Rotation = 35
+    backgroundGradient.Parent = backgroundLayer
+
+    local function SetBaseTransparency(value)
+        Window.Sidebar.BackgroundTransparency = value
+        Window.Content.BackgroundTransparency = value
+    end
+
+    local backgroundPresets = {
+        None = {
+            A = Color3.fromRGB(8, 8, 10),
+            B = Color3.fromRGB(8, 8, 11),
+        },
+        Purple = {
+            A = Color3.fromRGB(24, 14, 52),
+            B = Color3.fromRGB(8, 8, 14),
+        },
+        Blue = {
+            A = Color3.fromRGB(10, 28, 55),
+            B = Color3.fromRGB(7, 9, 18),
+        },
+        Red = {
+            A = Color3.fromRGB(52, 12, 18),
+            B = Color3.fromRGB(12, 7, 9),
+        },
+        Midnight = {
+            A = Color3.fromRGB(7, 12, 28),
+            B = Color3.fromRGB(4, 4, 8),
+        },
+    }
+
+    local function ApplyBackgroundPreset(name)
+        local preset = backgroundPresets[name] or backgroundPresets.None
+        backgroundLayer.Image = ""
+        backgroundLayer.ImageTransparency = 1
+
+        if name == "None" then
+            backgroundLayer.BackgroundTransparency = 1
+            backgroundGradient.Enabled = false
+            SetBaseTransparency(0)
+            return
+        end
+
+        backgroundLayer.BackgroundTransparency = 0
+        backgroundLayer.BackgroundColor3 = preset.A
+        backgroundGradient.Color = ColorSequence.new(preset.A, preset.B)
+        backgroundGradient.Enabled = true
+        SetBaseTransparency(0.18)
+    end
+
+    local function SimpleHash(value)
+        local hash = 5381
+        for index = 1, #value do
+            hash = (hash * 33 + string.byte(value, index)) % 2147483647
+        end
+        return tostring(hash)
+    end
+
+    local function ResolveCustomBackground(url)
+        url = tostring(url or "")
+        if url == "" then
+            return nil, "Informe um link de imagem."
+        end
+
+        if string.match(url, "^rbxassetid://") or string.match(url, "^rbxthumb://") then
+            return url
+        end
+
+        if not string.match(url, "^https?://") then
+            return nil, "Use um link http(s), rbxassetid:// ou rbxthumb://."
+        end
+
+        local env = (getgenv and getgenv()) or _G
+        local assetFn = (env and (env.getcustomasset or env.getsynasset))
+            or rawget(_G, "getcustomasset")
+            or rawget(_G, "getsynasset")
+        local writeFn = (env and env.writefile) or rawget(_G, "writefile")
+
+        if type(assetFn) ~= "function" or type(writeFn) ~= "function" then
+            return nil, "Executor sem suporte a getcustomasset/writefile para links externos."
+        end
+
+        local extension = string.match(string.lower(url), "%.([%a%d]+)[%?#]?") or "png"
+        if extension ~= "png" and extension ~= "jpg" and extension ~= "jpeg" and extension ~= "webp" then
+            extension = "png"
+        end
+
+        local fileName = "CAT_EMPIRE_background_" .. SimpleHash(url) .. "." .. extension
+        local ok, err = pcall(function()
+            writeFn(fileName, game:HttpGet(url))
+        end)
+        if not ok then
+            return nil, "Falha ao baixar background: " .. tostring(err)
+        end
+
+        local okAsset, asset = pcall(assetFn, fileName)
+        if not okAsset or not asset then
+            return nil, "Falha ao carregar a imagem local."
+        end
+
+        return asset
+    end
+
+    configLeft:AddDropdown("PanelColor", {
+        Title = "Cor do Painel",
+        Values = {"Purple", "Blue", "Red", "Pink", "White"},
+        Default = 1,
+    })
+    Fluent.Options.PanelColor:OnChanged(ApplyPanelAccent)
+
+    configLeft:AddDropdown("PanelFont", {
+        Title = "Fonte",
+        Values = {"Gotham", "SourceSans", "Code", "Arial", "SciFi"},
+        Default = 1,
+    })
+    Fluent.Options.PanelFont:OnChanged(ApplyPanelFont)
+
+    configLeft:AddDropdown("PanelBackground", {
+        Title = "Background",
+        Values = {"None", "Purple", "Blue", "Red", "Midnight"},
+        Default = 1,
+    })
+    Fluent.Options.PanelBackground:OnChanged(ApplyBackgroundPreset)
+
+    local customBackgroundSection = configLeft:AddSection("Background Personalizado")
+    local customBackgroundInput = CreateTextInput(customBackgroundSection, "Cole o link direto da imagem")
+    configLeft:AddButton({Title = "Aplicar Background do Link", Callback = function()
+        local asset, err = ResolveCustomBackground(customBackgroundInput and customBackgroundInput.Text or "")
+        if not asset then
+            Fluent:Notify({Title = "CAT EMPIRE", Content = tostring(err or "Background inválido."), Duration = 3})
+            return
+        end
+
+        backgroundGradient.Enabled = false
+        backgroundLayer.BackgroundTransparency = 1
+        backgroundLayer.Image = asset
+        backgroundLayer.ImageTransparency = 0.32
+        SetBaseTransparency(0.24)
+        Fluent:Notify({Title = "CAT EMPIRE", Content = "Background personalizado aplicado.", Duration = 2})
+    end})
+
+    local panelKeybind = Enum.KeyCode.LeftControl
+    local waitingForKeybind = false
+    local keybindLabel = configLeft:AddLabel("Keybind: LeftControl")
+
+    configLeft:AddButton({Title = "Alterar Keybind", Callback = function()
+        waitingForKeybind = true
+        keybindLabel:SetText("Keybind: pressione uma tecla...")
+    end})
+
+    table.insert(Connections, UserInputService.InputBegan:Connect(function(input, processed)
+        if UIClosed then
+            return
+        end
+
+        if waitingForKeybind then
+            if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+                if input.KeyCode == Enum.KeyCode.Escape then
+                    waitingForKeybind = false
+                    keybindLabel:SetText("Keybind: " .. panelKeybind.Name)
+                    return
+                end
+
+                panelKeybind = input.KeyCode
+                waitingForKeybind = false
+                keybindLabel:SetText("Keybind: " .. panelKeybind.Name)
+            end
+            return
+        end
+
+        if not processed and input.KeyCode == panelKeybind then
+            Window:ToggleMinimize()
+        end
+    end))
+
+    configLeft:AddParagraph({Title = "Open / Close", Content = "Use o botão CE ou o keybind configurado acima."})
     configLeft:AddButton({Title = "Unload CAT EMPIRE", Callback = function()
         Cleanup()
     end})
@@ -1621,6 +1923,19 @@ local function CreateUI()
     task.spawn(function()
         while not UIClosed do
             task.wait(0.5)
+
+            if serverInfoBody then
+                serverInfoBody.Text = string.format(
+                    "Jogadores: %d/%d\nPlace ID: %s\nServer ID: %s",
+                    #Players:GetPlayers(),
+                    tonumber(Players.MaxPlayers) or 0,
+                    tostring(game.PlaceId),
+                    ShortJobId()
+                )
+            end
+
+            RefreshPanelAccent()
+            RefreshPanelFont()
 
             local localRoot = GetTargetPart(LocalPlayer.Character)
             local rows = {}
