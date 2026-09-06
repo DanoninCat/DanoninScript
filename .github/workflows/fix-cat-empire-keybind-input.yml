@@ -1,0 +1,129 @@
+name: Fix CAT EMPIRE keybind input
+
+on:
+  push:
+    paths:
+      - .github/workflows/fix-cat-empire-keybind-input.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify reviewed base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "15d643e00bf5346971a481655cb5b575aaab12b4"
+          test "$(git rev-parse HEAD^:Libs/Fluent.lua)" = "08e5dfac4ba450a9ef1dd775caa3aaafb05d002f"
+          test "$(git rev-parse HEAD:Libs/Fluent.lua)" = "08e5dfac4ba450a9ef1dd775caa3aaafb05d002f"
+          test "$(git rev-parse HEAD^:Games/MurderDuel.lua)" = "bacfa73b6e017030f66cfd9abb9ac0f62b452648"
+          test "$(git rev-parse HEAD:Games/MurderDuel.lua)" = "bacfa73b6e017030f66cfd9abb9ac0f62b452648"
+
+      - name: Apply keyboard-only minimize guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('Libs/Fluent.lua')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''    local minimizeKey =
+        config.MinimizeKey
+        or Enum.KeyCode.LeftControl
+
+    window:_connect(
+        UserInputService.InputBegan,
+        function(input, processed)
+            if processed then
+                return
+            end
+
+            if input.KeyCode == minimizeKey then
+                window:ToggleMinimize()
+            end
+        end
+    )
+'''
+
+          new = '''    local minimizeKey =
+        config.MinimizeKey
+        or Enum.KeyCode.LeftControl
+
+    window:_connect(
+        UserInputService.InputBegan,
+        function(input, processed)
+            if processed then
+                return
+            end
+
+            if
+                minimizeKey == Enum.KeyCode.Unknown
+                or input.UserInputType ~= Enum.UserInputType.Keyboard
+            then
+                return
+            end
+
+            if input.KeyCode == minimizeKey then
+                window:ToggleMinimize()
+            end
+        end
+    )
+'''
+
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one reviewed keybind block, found {text.count(old)}')
+
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
+      - name: Triple-review scope and invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Pass 1: scope/diff — only Fluent may change before workflow cleanup.
+          test "$(git diff --name-only | tr -d '\r')" = "Libs/Fluent.lua"
+          grep -Fq 'minimizeKey == Enum.KeyCode.Unknown' Libs/Fluent.lua
+          grep -Fq 'input.UserInputType ~= Enum.UserInputType.Keyboard' Libs/Fluent.lua
+
+          # Pass 2: visual/repo invariants — gameplay UI source and assets remain untouched.
+          test "$(git rev-parse HEAD:Games/MurderDuel.lua)" = "bacfa73b6e017030f66cfd9abb9ac0f62b452648"
+          test "$(git rev-parse HEAD:Assets/CatEmpireLogo.jpg)" = "3c394399eebd4429859e9290a30368aa57268d7f"
+
+          # Pass 3: runtime/lifecycle static check — mouse/touch cannot hit the library hotkey path.
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('Libs/Fluent.lua').read_text(encoding='utf-8')
+          required = [
+              'minimizeKey == Enum.KeyCode.Unknown',
+              'input.UserInputType ~= Enum.UserInputType.Keyboard',
+              'if input.KeyCode == minimizeKey then',
+              'window:ToggleMinimize()',
+          ]
+          for item in required:
+              if item not in text:
+                  raise SystemExit(f'missing reviewed guard: {item}')
+          PY
+
+      - name: Commit reviewed fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/fix-cat-empire-keybind-input.yml
+          git config user.name "CAT EMPIRE Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Libs/Fluent.lua .github/workflows/fix-cat-empire-keybind-input.yml
+          git diff --cached --name-only | sort > /tmp/changed.txt
+          printf '%s\n' '.github/workflows/fix-cat-empire-keybind-input.yml' 'Libs/Fluent.lua' | sort > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/changed.txt
+          git commit -m "Fix CAT EMPIRE keybind mouse toggles"
+          git push origin HEAD:main
