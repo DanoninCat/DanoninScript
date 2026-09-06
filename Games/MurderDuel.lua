@@ -1137,7 +1137,7 @@ end
 local function CreateUI()
     local Window = Fluent:CreateWindow({
         Title = "CAT EMPIRE",
-        SubTitle = "",
+        SubTitle = "Murder Duel",
         TabWidth = 112,
         Size = UDim2.fromOffset(760, 460),
         Acrylic = false,
@@ -1616,9 +1616,9 @@ local function CreateUI()
     end)
 
     local panelAccentPresets = {
+        Crimson = Color3.fromRGB(220, 30, 60),
         Purple = Color3.fromRGB(92, 72, 255),
         Blue = Color3.fromRGB(45, 120, 255),
-        Red = Color3.fromRGB(235, 65, 75),
         Pink = Color3.fromRGB(230, 70, 180),
         White = Color3.fromRGB(225, 225, 235),
     }
@@ -1630,9 +1630,9 @@ local function CreateUI()
         SciFi = Enum.Font.SciFi,
     }
 
-    local defaultAccent = Color3.fromRGB(92, 72, 255)
-    local defaultAccentDark = Color3.fromRGB(67, 54, 214)
-    local defaultAccentSoft = Color3.fromRGB(126, 110, 255)
+    local defaultAccent = Color3.fromRGB(220, 30, 60)
+    local defaultAccentDark = Color3.fromRGB(120, 15, 35)
+    local defaultAccentSoft = Color3.fromRGB(235, 70, 95)
     local currentAccent = defaultAccent
     local currentAccentDark = defaultAccentDark
     local currentAccentSoft = defaultAccentSoft
@@ -1703,7 +1703,7 @@ local function CreateUI()
         local previousAccent = currentAccent
         local previousDark = currentAccentDark
         local previousSoft = currentAccentSoft
-        local newAccent = panelAccentPresets[name] or panelAccentPresets.Purple
+        local newAccent = panelAccentPresets[name] or panelAccentPresets.Crimson
         currentAccent = newAccent
         currentAccentDark = Darken(newAccent)
         currentAccentSoft = Soften(newAccent)
@@ -1744,8 +1744,10 @@ local function CreateUI()
     backgroundGradient.Parent = backgroundLayer
 
     local function SetBaseTransparency(value)
-        Window.Sidebar.BackgroundTransparency = value
-        Window.Content.BackgroundTransparency = value
+        local sidebar = Window.SidebarVisual or Window.Sidebar
+        local content = Window.ContentVisual or Window.Content
+        if sidebar then sidebar.BackgroundTransparency = value end
+        if content then content.BackgroundTransparency = value end
     end
 
     local backgroundPresets = {
@@ -1845,7 +1847,7 @@ local function CreateUI()
 
     configLeft:AddDropdown("PanelColor", {
         Title = "Cor do Painel",
-        Values = {"Purple", "Blue", "Red", "Pink", "White"},
+        Values = {"Crimson", "Purple", "Blue", "Pink", "White"},
         Default = 1,
     })
     Fluent.Options.PanelColor:OnChanged(ApplyPanelAccent)

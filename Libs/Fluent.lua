@@ -19,21 +19,21 @@ local Library = {
 -- Keep these three accent values stable. MurderDuel.lua's existing
 -- customization code recognizes them when recoloring the panel.
 local C = {
-    Background = Color3.fromRGB(8, 8, 12),
-    Topbar = Color3.fromRGB(10, 9, 15),
-    Sidebar = Color3.fromRGB(10, 9, 15),
-    Content = Color3.fromRGB(10, 9, 15),
-    Section = Color3.fromRGB(14, 12, 20),
-    Row = Color3.fromRGB(16, 13, 22),
-    RowHover = Color3.fromRGB(24, 18, 34),
-    Border = Color3.fromRGB(50, 42, 72),
-    BorderSoft = Color3.fromRGB(34, 28, 48),
-    Accent = Color3.fromRGB(92, 72, 255),
-    AccentDark = Color3.fromRGB(67, 54, 214),
-    AccentSoft = Color3.fromRGB(126, 110, 255),
-    Text = Color3.fromRGB(248, 245, 255),
-    Muted = Color3.fromRGB(213, 207, 226),
-    Muted2 = Color3.fromRGB(150, 143, 168),
+    Background = Color3.fromRGB(30, 6, 9),
+    Topbar = Color3.fromRGB(24, 5, 8),
+    Sidebar = Color3.fromRGB(26, 6, 10),
+    Content = Color3.fromRGB(30, 6, 9),
+    Section = Color3.fromRGB(18, 8, 14),
+    Row = Color3.fromRGB(14, 8, 14),
+    RowHover = Color3.fromRGB(50, 12, 22),
+    Border = Color3.fromRGB(100, 10, 25),
+    BorderSoft = Color3.fromRGB(60, 8, 18),
+    Accent = Color3.fromRGB(220, 30, 60),
+    AccentDark = Color3.fromRGB(120, 15, 35),
+    AccentSoft = Color3.fromRGB(235, 70, 95),
+    Text = Color3.fromRGB(255, 235, 240),
+    Muted = Color3.fromRGB(220, 185, 195),
+    Muted2 = Color3.fromRGB(180, 100, 115),
     Knob = Color3.fromRGB(250, 248, 255),
 }
 
@@ -1127,17 +1127,18 @@ function Window:AddTab(config)
         Size = UDim2.new(1, 0, 0, 54),
     }, page)
 
-    local pageAccent = create("Frame", {
-        BackgroundColor3 = C.Accent,
+    local pageIconFrame = create("Frame", {
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(2, 14),
-        Size = UDim2.fromOffset(4, 24),
+        Position = UDim2.fromOffset(2, 13),
+        Size = UDim2.fromOffset(24, 24),
     }, pageHeader)
-    corner(pageAccent, 2)
+    local pageIconHolder = DrawSidebarIcon(pageIconFrame, iconValue)
+    SetSidebarIconColor(pageIconHolder, C.Text)
 
     local pageLabel = text(pageHeader, titleValue, 20, C.Text, Enum.Font.GothamMedium)
-    pageLabel.Position = UDim2.fromOffset(14, 5)
-    pageLabel.Size = UDim2.new(1, -14, 0, 38)
+    pageLabel.Position = UDim2.fromOffset(34, 5)
+    pageLabel.Size = UDim2.new(1, -34, 0, 38)
 
     local body = create("Frame", {
         BackgroundTransparency = 1,
@@ -1279,10 +1280,18 @@ function Library:CreateWindow(config)
     corner(root, 9)
     stroke(root, C.AccentDark, 0.32, 1)
 
-    -- Subtle tinted layer similar to the translucent reference UI.
-    -- It intentionally uses the default accent-dark color directly so the
-    -- existing panel-color selector can recolor it without special APIs.
-    local glass = makeGlass(root, C.AccentDark, 0.86, 1)
+    local themeBackground = create("ImageLabel", {
+        Name = "CAT_EMPIRE_ThemeBackground",
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Image = "rbxassetid://74252111742950",
+        ImageTransparency = 0.46,
+        ScaleType = Enum.ScaleType.Crop,
+        Size = UDim2.fromScale(1, 1),
+        ZIndex = 0,
+    }, root)
+
+    local glass = makeGlass(root, C.AccentDark, 0.82, 1)
 
     local uiScale = create("UIScale", {
         Scale = 1,
@@ -1322,45 +1331,32 @@ function Library:CreateWindow(config)
         ZIndex = 6,
     }, topbar)
 
-    local logoWrap = create("Frame", {
+    local titleBlock = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(12, 6),
-        Size = UDim2.fromOffset(126, 32),
+        Position = UDim2.fromOffset(16, 5),
+        Size = UDim2.new(0.62, -16, 0, 34),
         ZIndex = 7,
     }, topbar)
 
-    local fallback = text(logoWrap, config.Title or "CAT EMPIRE", 13, C.Text, Enum.Font.GothamMedium)
-    fallback.Size = UDim2.fromScale(1, 1)
-    fallback.ZIndex = 7
-
-    local logoAsset = ResolveCatEmpireLogo()
-    if logoAsset then
-        create("ImageLabel", {
-            Name = "CAT_EMPIRE_Logo",
-            BackgroundTransparency = 1,
-            BorderSizePixel = 0,
-            Image = logoAsset,
-            ScaleType = Enum.ScaleType.Fit,
-            Size = UDim2.fromScale(1, 1),
-            ZIndex = 8,
-        }, logoWrap)
-    end
+    local titleLabel = text(titleBlock, config.Title or "CAT EMPIRE", 11, C.Text, Enum.Font.GothamMedium)
+    titleLabel.Position = UDim2.fromOffset(0, 0)
+    titleLabel.Size = UDim2.new(1, 0, 0, 17)
+    titleLabel.ZIndex = 7
 
     local subtitleText = tostring(config.SubTitle or "")
-    if subtitleText ~= "" then
-        local subtitle = text(topbar, subtitleText, 9, C.Muted2, Enum.Font.Gotham)
-        subtitle.Position = UDim2.fromOffset(146, 0)
-        subtitle.Size = UDim2.new(0.5, -146, 1, 0)
-        subtitle.ZIndex = 7
-    end
+    local subtitle = text(titleBlock, subtitleText, 8, C.Muted2, Enum.Font.Gotham)
+    subtitle.Position = UDim2.fromOffset(0, 16)
+    subtitle.Size = UDim2.new(1, 0, 0, 15)
+    subtitle.Visible = subtitleText ~= ""
+    subtitle.ZIndex = 7
 
     local controlWrap = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         AnchorPoint = Vector2.new(1, 0),
         Position = UDim2.new(1, -7, 0, 7),
-        Size = UDim2.fromOffset(76, 30),
+        Size = UDim2.fromOffset(116, 30),
         ZIndex = 8,
     }, topbar)
 
@@ -1379,6 +1375,21 @@ function Library:CreateWindow(config)
     }, controlWrap)
     corner(minimizeButton, 5)
 
+    local maximizeButton = create("TextButton", {
+        BackgroundColor3 = C.Row,
+        BackgroundTransparency = 0.75,
+        BorderSizePixel = 0,
+        Text = "□",
+        TextColor3 = C.Muted,
+        TextSize = 12,
+        Font = Enum.Font.GothamMedium,
+        AutoButtonColor = false,
+        Position = UDim2.fromOffset(40, 0),
+        Size = UDim2.fromOffset(34, 28),
+        ZIndex = 9,
+    }, controlWrap)
+    corner(maximizeButton, 5)
+
     local closeButton = create("TextButton", {
         BackgroundColor3 = C.Row,
         BackgroundTransparency = 0.75,
@@ -1388,7 +1399,7 @@ function Library:CreateWindow(config)
         TextSize = 16,
         Font = Enum.Font.Gotham,
         AutoButtonColor = false,
-        Position = UDim2.fromOffset(40, 0),
+        Position = UDim2.fromOffset(80, 0),
         Size = UDim2.fromOffset(34, 28),
         ZIndex = 9,
     }, controlWrap)
@@ -1413,16 +1424,11 @@ function Library:CreateWindow(config)
         ZIndex = 3,
     }, sidebarVisual)
 
-    local menuLabel = text(sidebarVisual, "MENU", 8, C.Muted2, Enum.Font.GothamBold)
-    menuLabel.Position = UDim2.fromOffset(14, 10)
-    menuLabel.Size = UDim2.fromOffset(80, 14)
-    menuLabel.ZIndex = 4
-
     local sidebarList = create("Frame", {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(8, 30),
-        Size = UDim2.new(1, -8, 1, -38),
+        Position = UDim2.fromOffset(8, 8),
+        Size = UDim2.new(1, -8, 1, -16),
         ZIndex = 4,
     }, sidebarVisual)
     list(sidebarList, 4, false)
@@ -1450,7 +1456,7 @@ function Library:CreateWindow(config)
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         Position = UDim2.fromOffset(0, 0),
-        Size = UDim2.new(1, -90, 0, 44),
+        Size = UDim2.new(1, -130, 0, 44),
         Active = true,
         ZIndex = 20,
     }, topbar)
@@ -1511,11 +1517,15 @@ function Library:CreateWindow(config)
         Minimized = false,
         Destroyed = false,
         MinButton = minimizeButton,
+        MaxButton = maximizeButton,
+        Maximized = false,
+        RestorePosition = nil,
+        RestoreSize = nil,
         _connections = {},
     }, Window)
 
     window.TitleBar = {
-        MaxButton = nil,
+        MaxButton = maximizeButton,
         MinButton = minimizeButton,
         CloseButton = closeButton,
     }
@@ -1528,11 +1538,29 @@ function Library:CreateWindow(config)
         window:ToggleMinimize()
     end)
 
+    window:_connect(maximizeButton.MouseButton1Click, function()
+        if window.Maximized then
+            window.Maximized = false
+            if window.RestorePosition then root.Position = window.RestorePosition end
+            if window.RestoreSize then root.Size = window.RestoreSize end
+            maximizeButton.Text = "□"
+        else
+            window.Maximized = true
+            window.RestorePosition = root.Position
+            window.RestoreSize = root.Size
+            local camera = workspace.CurrentCamera
+            local vp = camera and camera.ViewportSize or Vector2.new(1280, 720)
+            root.Position = UDim2.fromScale(0.5, 0.5)
+            root.Size = UDim2.fromOffset(math.max(760, vp.X - 24), math.max(460, vp.Y - 24))
+            maximizeButton.Text = "❐"
+        end
+    end)
+
     window:_connect(closeButton.MouseButton1Click, function()
         window:Destroy()
     end)
 
-    for _, btn in ipairs({externalToggle, minimizeButton, closeButton}) do
+    for _, btn in ipairs({externalToggle, minimizeButton, maximizeButton, closeButton}) do
         window:_connect(btn.MouseEnter, function()
             tween(btn, {BackgroundColor3 = C.AccentSoft, BackgroundTransparency = 0.16}, 0.08)
         end)
