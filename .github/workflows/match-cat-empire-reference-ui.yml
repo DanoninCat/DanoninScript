@@ -1,17 +1,17 @@
-name: Match CAT EMPIRE reference UI
+name: Use exact CAT EMPIRE reference UI
 
 on:
   push:
     branches:
       - ui-reference-exact
     paths:
-      - .github/scripts/match_reference_ui.py
+      - .github/workflows/match-cat-empire-reference-ui.yml
 
 permissions:
   contents: write
 
 jobs:
-  patch-ui:
+  exact-ui:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,20 +19,31 @@ jobs:
           ref: ui-reference-exact
           fetch-depth: 0
 
-      - name: Apply and review reference UI patch
-        run: python3 .github/scripts/match_reference_ui.py
+      - name: Reconstruct exact source and adapt project UI
+        run: python3 .github/scripts/use_exact_reference_ui.py
 
-      - name: Validate diff
+      - name: Triple review final diff
         shell: bash
         run: |
+          set -euo pipefail
           git diff --check
+          test "$(git hash-object Libs/Fluent.lua)" = "baf6fb51b076e48e34e3c0bb2309ee7fdce509ab"
           test "$(git diff --name-only | sort | tr '\n' ' ')" = "Games/MurderDuel.lua Libs/Fluent.lua "
+          grep -q 'Title = "CAT EMPIRE"' Games/MurderDuel.lua
+          grep -q 'SubTitle = "Murder Duel"' Games/MurderDuel.lua
+          grep -q 'Theme = "Crimson"' Games/MurderDuel.lua
+          grep -q 'MinimizeKey = Enum.KeyCode.LeftControl' Games/MurderDuel.lua
+          ! grep -q 'Silent Aim' Games/MurderDuel.lua
+          ! grep -q 'Aim Assist' Games/MurderDuel.lua
+          ! grep -q 'Aim FOV' Games/MurderDuel.lua
+          ! grep -q 'Camera FOV' Games/MurderDuel.lua
 
-      - name: Commit reviewed UI adaptation
+      - name: Commit exact UI output
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name "CAT EMPIRE Bot"
           git config user.email "actions@users.noreply.github.com"
           git add Libs/Fluent.lua Games/MurderDuel.lua
-          git commit -m "Match CAT EMPIRE reference UI"
+          git commit -m "Use exact CAT EMPIRE reference UI"
           git push origin HEAD:ui-reference-exact
