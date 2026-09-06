@@ -1,0 +1,68 @@
+name: Apply CAT EMPIRE Murder Duel UI refresh
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-cat-empire-ui-refresh.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify reviewed base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^:Games/MurderDuel.lua)" = "79083216d2e4f8eb39e90c66e64bcd2180f5fa54"
+          test "$(git rev-parse HEAD:Games/MurderDuel.lua)" = "79083216d2e4f8eb39e90c66e64bcd2180f5fa54"
+
+      - name: Apply reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' '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' | base64 -d | gzip -d > /tmp/murderduel.diff
+          git apply --check /tmp/murderduel.diff
+          git apply /tmp/murderduel.diff
+          test "$(git hash-object Games/MurderDuel.lua)" = "bacfa73b6e017030f66cfd9abb9ac0f62b452648"
+
+      - name: Static review gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          ! grep -q 'SilentAim' Games/MurderDuel.lua
+          ! grep -q 'AimAssist' Games/MurderDuel.lua
+          ! grep -q 'AimFOV' Games/MurderDuel.lua
+          ! grep -q 'CameraFOV' Games/MurderDuel.lua
+          ! grep -q 'Diagnóstico' Games/MurderDuel.lua
+          ! grep -q 'FOVController' Games/MurderDuel.lua
+          ! grep -q 'ThirdPerson' Games/MurderDuel.lua
+          ! grep -q '🪣' Games/MurderDuel.lua
+          grep -Fq 'local function GetESPHeadTopScreen' Games/MurderDuel.lua
+          grep -Fq 'data.BoxStroke = Instance.new("UIStroke")' Games/MurderDuel.lua
+          grep -Fq 'visualLeft:AddToggle("ESPBox", {Title = "Box", Default = false})' Games/MurderDuel.lua
+          grep -Fq 'visualLeft:AddToggle("ESPSkeleton", {Title = "Skeleton", Default = false})' Games/MurderDuel.lua
+          grep -Fq 'visualLeft:AddToggle("ESPLines", {Title = "Lines", Default = false})' Games/MurderDuel.lua
+          grep -Fq 'visualRight:AddSlider("FOVRadius", {Title = "FOV Radius", Min = 30, Max = 500' Games/MurderDuel.lua
+          grep -Fq 'https://discord.gg/yykVnTjd2Y' Games/MurderDuel.lua
+          grep -Fq 'Content = "Danonin"' Games/MurderDuel.lua
+          grep -Fq 'CustomBackgroundURL' Games/MurderDuel.lua
+          grep -Fq 'Alterar Keybind' Games/MurderDuel.lua
+
+      - name: Commit reviewed change and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "CAT EMPIRE Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/apply-cat-empire-ui-refresh.yml
+          git add Games/MurderDuel.lua
+          git commit -m "Refine Murder Duel UI and defaults"
+          git push origin HEAD:main
