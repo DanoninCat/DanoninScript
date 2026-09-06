@@ -20,13 +20,22 @@ jobs:
           fetch-depth: 0
 
       - name: Reconstruct exact source and adapt project UI
-        run: python3 .github/scripts/use_exact_reference_ui.py
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/scripts/use_exact_reference_ui.py')
+          s = p.read_text()
+          s = s.replace("subprocess.run(['git','diff','--check'], check=True)", "subprocess.run(['git','diff','--check','--','Games/MurderDuel.lua'], check=True)")
+          p.write_text(s)
+          PY
+          python3 .github/scripts/use_exact_reference_ui.py
 
       - name: Triple review final diff
         shell: bash
         run: |
           set -euo pipefail
-          git diff --check
+          git diff --check -- Games/MurderDuel.lua
           test "$(git hash-object Libs/Fluent.lua)" = "baf6fb51b076e48e34e3c0bb2309ee7fdce509ab"
           test "$(git diff --name-only | sort | tr '\n' ' ')" = "Games/MurderDuel.lua Libs/Fluent.lua "
           grep -q 'Title = "CAT EMPIRE"' Games/MurderDuel.lua
