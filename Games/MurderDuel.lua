@@ -1113,6 +1113,7 @@ local function Cleanup()
     safeStep("ClearESP", ClearESP)
     safeStep("DestroyESPGui", function() DestroyNamedGui(ESP_GUI_NAME) end)
     safeStep("DestroyFOVGui", function() DestroyNamedGui("FOVCircle") end)
+    safeStep("DestroyMobileToggle", function() DestroyNamedGui("CAT_EMPIRE_MobileToggle") end)
     safeStep("ResetFOVGui", function()
         FOVGui = nil
         FOVFrame = nil
@@ -1148,6 +1149,50 @@ local function CreateUI()
     })
 
     WindowRef = Window
+
+    DestroyNamedGui("CAT_EMPIRE_MobileToggle")
+    local mobileToggleGui = Instance.new("ScreenGui")
+    mobileToggleGui.Name = "CAT_EMPIRE_MobileToggle"
+    mobileToggleGui.ResetOnSpawn = false
+    mobileToggleGui.IgnoreGuiInset = true
+    mobileToggleGui.DisplayOrder = 1000000
+    mobileToggleGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    mobileToggleGui.Parent = GetPlayerGui()
+
+    local mobileToggle = Instance.new("TextButton")
+    mobileToggle.Name = "CE"
+    mobileToggle.AnchorPoint = Vector2.new(0, 0.5)
+    mobileToggle.Position = UDim2.new(0, 14, 0.5, 0)
+    mobileToggle.Size = UDim2.fromOffset(54, 54)
+    mobileToggle.BackgroundColor3 = Color3.fromRGB(220, 30, 60)
+    mobileToggle.BackgroundTransparency = 0.08
+    mobileToggle.BorderSizePixel = 0
+    mobileToggle.AutoButtonColor = true
+    mobileToggle.Text = "CE"
+    mobileToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    mobileToggle.TextSize = 15
+    mobileToggle.Font = Enum.Font.GothamBold
+    mobileToggle.ZIndex = 1000001
+    mobileToggle.Parent = mobileToggleGui
+
+    local mobileCorner = Instance.new("UICorner")
+    mobileCorner.CornerRadius = UDim.new(0, 12)
+    mobileCorner.Parent = mobileToggle
+
+    local mobileStroke = Instance.new("UIStroke")
+    mobileStroke.Color = Color3.fromRGB(255, 85, 110)
+    mobileStroke.Transparency = 0.2
+    mobileStroke.Thickness = 1
+    mobileStroke.Parent = mobileToggle
+
+    table.insert(Connections, mobileToggle.Activated:Connect(function()
+        if UIClosed or not WindowRef then
+            return
+        end
+        pcall(function()
+            WindowRef:Minimize()
+        end)
+    end))
 
     local Tabs = {
         Combat = Window:AddTab({Title = "Combat", Icon = "solar/target-bold"}),
@@ -1284,6 +1329,35 @@ local function CreateUI()
         return gameName
     end
 
+    local function resolveGameIcon()
+        local fallback = "rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=150&h=150"
+        local resolved = fallback
+        pcall(function()
+            local info = MarketplaceService:GetProductInfo(game.PlaceId)
+            local iconId = info and tonumber(info.IconImageAssetId)
+            if iconId and iconId > 0 then
+                resolved = "rbxassetid://" .. tostring(iconId)
+            end
+        end)
+        return resolved
+    end
+
+    local function resolveAvatarThumbnail()
+        local fallback = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(LocalPlayer.UserId) .. "&w=150&h=150"
+        local resolved = fallback
+        pcall(function()
+            local content = Players:GetUserThumbnailAsync(
+                LocalPlayer.UserId,
+                Enum.ThumbnailType.HeadShot,
+                Enum.ThumbnailSize.Size150x150
+            )
+            if type(content) == "string" and content ~= "" then
+                resolved = content
+            end
+        end)
+        return resolved
+    end
+
     local function shortJobId()
         local id = tostring(game.JobId or "")
         if id == "" then
@@ -1294,7 +1368,7 @@ local function CreateUI()
 
     local serverSection = Tabs.Misc:AddSection("Servidor Atual", "solar/server-square-bold")
     serverSection:AddImage({
-        Image = "rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=150&h=150",
+        Image = resolveGameIcon(),
         AspectRatio = "4:1",
         Radius = 10,
     })
@@ -1311,7 +1385,7 @@ local function CreateUI()
 
     local accountSection = Tabs.Misc:AddSection("Sua Conta", "solar/user-bold")
     accountSection:AddImage({
-        Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(LocalPlayer.UserId) .. "&w=150&h=150",
+        Image = resolveAvatarThumbnail(),
         AspectRatio = "4:1",
         Radius = 10,
     })
