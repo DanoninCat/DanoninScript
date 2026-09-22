@@ -1485,7 +1485,6 @@ function Controller:StopRecording()
 
     if ok and macro then
         local id, stored = self.macros:add(macro)
-        self.events = self.events
         return true, stored, id
     end
 
