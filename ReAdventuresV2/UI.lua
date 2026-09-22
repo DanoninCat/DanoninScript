@@ -53,7 +53,7 @@ local function unitOptions(app)
         if unit.locked then
             label = string.format("Slot %d - Locked", unit.slot)
         elseif unit.equipped then
-            label = string.format("Slot %d - %s", unit.slot, tostring(unit.name))
+            label = string.format("Slot %d", unit.slot)
         else
             label = string.format("Slot %d - Empty", unit.slot)
         end
