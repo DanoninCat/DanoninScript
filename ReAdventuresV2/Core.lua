@@ -1259,6 +1259,181 @@ function MacroRecorder:getMacro()
     return self.macro and deepCopy(self.macro) or nil
 end
 
+-- In-memory macro library used by the existing UI integration.
+-- Persistent storage is intentionally left to the Loader/application layer.
+local MacroLibrary = {}
+MacroLibrary.__index = MacroLibrary
+
+function MacroLibrary.new()
+    return setmetatable({
+        items = {},
+        order = {},
+        selectedId = nil,
+    }, MacroLibrary)
+end
+
+function MacroLibrary:_newId()
+    local generated = safe(function()
+        return HttpService:GenerateGUID(false)
+    end)
+
+    if type(generated) == "string" and generated ~= "" then
+        return generated
+    end
+
+    local base = tostring(os.time()) .. "-" .. tostring(#self.order + 1)
+    return base
+end
+
+function MacroLibrary:add(macro, overrideName)
+    assert(type(macro) == "table", "macro must be a table")
+    assert(macro.schema == "re-adventures-macro", "unsupported macro schema")
+    assert(type(macro.events) == "table", "macro events are missing")
+    assert(type(macro.snapshots) == "table", "macro snapshots are missing")
+
+    local stored = deepCopy(macro)
+    local id = stored.libraryId
+
+    if type(id) ~= "string" or id == "" or self.items[id] ~= nil then
+        id = self:_newId()
+    end
+
+    stored.libraryId = id
+
+    if type(overrideName) == "string" and overrideName ~= "" then
+        stored.name = overrideName
+    elseif type(stored.name) ~= "string" or stored.name == "" then
+        stored.name = "Macro " .. tostring(#self.order + 1)
+    end
+
+    local isNew = self.items[id] == nil
+    self.items[id] = stored
+
+    if isNew then
+        table.insert(self.order, id)
+    end
+
+    self.selectedId = id
+    return id, deepCopy(stored)
+end
+
+function MacroLibrary:list()
+    local out = {}
+
+    for index, id in ipairs(self.order) do
+        local macro = self.items[id]
+
+        if macro then
+            table.insert(out, {
+                index = index,
+                id = id,
+                name = macro.name,
+                selected = id == self.selectedId,
+                createdAt = macro.createdAt,
+                finishedAt = macro.finishedAt,
+                duration = macro.duration,
+                area = macro.map and macro.map.area or nil,
+                level = macro.map and macro.map.level or nil,
+                eventCount = type(macro.events) == "table" and #macro.events or 0,
+                snapshotCount = type(macro.snapshots) == "table" and #macro.snapshots or 0,
+            })
+        end
+    end
+
+    return out
+end
+
+function MacroLibrary:count()
+    local count = 0
+
+    for _, id in ipairs(self.order) do
+        if self.items[id] then
+            count = count + 1
+        end
+    end
+
+    return count
+end
+
+function MacroLibrary:select(id)
+    if type(id) ~= "string" or not self.items[id] then
+        return false, "macro not found"
+    end
+
+    self.selectedId = id
+    return true, deepCopy(self.items[id])
+end
+
+function MacroLibrary:get(id)
+    id = id or self.selectedId
+
+    if not id or not self.items[id] then
+        return nil
+    end
+
+    return deepCopy(self.items[id])
+end
+
+function MacroLibrary:getSelectedId()
+    return self.selectedId
+end
+
+function MacroLibrary:rename(id, newName)
+    assert(type(newName) == "string", "new macro name must be a string")
+
+    newName = newName:match("^%s*(.-)%s*$")
+
+    if newName == "" then
+        return false, "macro name cannot be empty"
+    end
+
+    local macro = self.items[id]
+    if not macro then
+        return false, "macro not found"
+    end
+
+    macro.name = newName
+    return true, deepCopy(macro)
+end
+
+function MacroLibrary:remove(id)
+    if not self.items[id] then
+        return false, "macro not found"
+    end
+
+    self.items[id] = nil
+
+    for index, candidate in ipairs(self.order) do
+        if candidate == id then
+            table.remove(self.order, index)
+            break
+        end
+    end
+
+    if self.selectedId == id then
+        self.selectedId = self.order[#self.order]
+    end
+
+    return true
+end
+
+function MacroLibrary:clear()
+    table.clear(self.items)
+    table.clear(self.order)
+    self.selectedId = nil
+end
+
+function MacroLibrary:importJson(json, overrideName)
+    local macro = Serializer.decode(json)
+    return self:add(macro, overrideName)
+end
+
+function MacroLibrary:exportJson(id)
+    local macro = self:get(id)
+    assert(macro, "macro not found")
+    return Serializer.encode(macro)
+end
+
 local Controller = {}
 Controller.__index = Controller
 
@@ -1266,10 +1441,12 @@ function Controller.new(options)
     options = options or {}
 
     local tracker = StateTracker.new(options.tracker)
+    local recorder = MacroRecorder.new(tracker, options.recorder)
 
     return setmetatable({
         tracker = tracker,
-        recorder = MacroRecorder.new(tracker, options.recorder),
+        recorder = recorder,
+        macros = MacroLibrary.new(),
         importedMacro = nil,
         webhookTransport = nil,
     }, Controller)
@@ -1280,7 +1457,10 @@ function Controller:Start()
 end
 
 function Controller:Stop()
-    self.recorder:stop()
+    if self.recorder.recording then
+        self:StopRecording()
+    end
+
     self.tracker:stop()
 end
 
@@ -1301,27 +1481,91 @@ function Controller:StartRecording(name)
 end
 
 function Controller:StopRecording()
-    return self.recorder:stop()
+    local ok, macro = self.recorder:stop()
+
+    if ok and macro then
+        local id, stored = self.macros:add(macro)
+        self.events = self.events
+        return true, stored, id
+    end
+
+    return ok, macro, nil
 end
 
 function Controller:GetRecording()
     return self.recorder:getMacro()
 end
 
-function Controller:ExportMacro(macro)
-    macro = macro or self.recorder:getMacro() or self.importedMacro
+function Controller:ExportMacro(macroOrId)
+    if type(macroOrId) == "string" then
+        return self.macros:exportJson(macroOrId)
+    end
+
+    local macro = macroOrId
+        or self.recorder:getMacro()
+        or self.importedMacro
+        or self.macros:get()
+
     assert(macro, "no macro available to export")
     return Serializer.encode(macro)
 end
 
-function Controller:ImportMacro(json)
-    local macro = Serializer.decode(json)
+function Controller:ImportMacro(json, overrideName)
+    local id, macro = self.macros:importJson(json, overrideName)
     self.importedMacro = macro
-    return deepCopy(macro)
+    return deepCopy(macro), id
 end
 
 function Controller:GetImportedMacro()
     return self.importedMacro and deepCopy(self.importedMacro) or nil
+end
+
+-- Public Macros section API.
+function Controller:ListMacros()
+    return self.macros:list()
+end
+
+function Controller:GetMacro(id)
+    return self.macros:get(id)
+end
+
+function Controller:GetSelectedMacro()
+    return self.macros:get()
+end
+
+function Controller:GetSelectedMacroId()
+    return self.macros:getSelectedId()
+end
+
+function Controller:SelectMacro(id)
+    return self.macros:select(id)
+end
+
+function Controller:RenameMacro(id, newName)
+    return self.macros:rename(id, newName)
+end
+
+function Controller:DeleteMacro(id)
+    return self.macros:remove(id)
+end
+
+function Controller:ClearMacros()
+    self.macros:clear()
+    self.importedMacro = nil
+end
+
+function Controller:ExportSelectedMacro()
+    return self.macros:exportJson()
+end
+
+function Controller:GetMacrosSummary()
+    return {
+        count = self.macros:count(),
+        selectedId = self.macros:getSelectedId(),
+        recording = self.recorder.recording,
+        currentRecording = self.recorder:getMacro(),
+        items = self.macros:list(),
+    }
 end
 
 function Controller:SetWebhookTransport(callback)
@@ -1367,6 +1611,7 @@ Core.StateTracker = StateTracker
 Core.MapProfiles = MapProfiles
 Core.Serializer = Serializer
 Core.MacroRecorder = MacroRecorder
+Core.MacroLibrary = MacroLibrary
 Core.Controller = Controller
 
 function Core.new(options)
