@@ -1476,6 +1476,71 @@ function Controller:GetCurrentMapProfile()
     return MapProfiles.captureRuntimeGeometry()
 end
 
+function Controller:GetEquippedUnits()
+    local result = {}
+
+    if not LocalPlayer then
+        return result
+    end
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local spawnUnits = playerGui and playerGui:FindFirstChild("spawn_units")
+    local lives = spawnUnits and spawnUnits:FindFirstChild("Lives")
+    local frame = lives and lives:FindFirstChild("Frame")
+    local unitsRoot = frame and frame:FindFirstChild("Units")
+
+    for slot = 1, 6 do
+        local slotFrame = unitsRoot and unitsRoot:FindFirstChild(tostring(slot))
+        local entry = {
+            slot = slot,
+            name = "Empty",
+            equipped = false,
+            locked = false,
+        }
+
+        if slotFrame then
+            local uuid = safe(function()
+                return slotFrame:GetAttribute("_equipped_frame_unit_uuid")
+            end)
+
+            entry.equipped = type(uuid) == "string" and uuid ~= ""
+
+            local locked = slotFrame:FindFirstChild("locked")
+            if locked and locked:IsA("GuiObject") then
+                entry.locked = locked.Visible == true
+            end
+
+            local unitValue = slotFrame:FindFirstChild("unit")
+            if unitValue and unitValue:IsA("ObjectValue") and unitValue.Value then
+                entry.name = unitValue.Value.Name
+            else
+                local main = slotFrame:FindFirstChild("Main")
+                local view = main and main:FindFirstChild("View")
+                local worldModel = view and view:FindFirstChildOfClass("WorldModel")
+
+                if worldModel then
+                    for _, model in ipairs(worldModel:GetChildren()) do
+                        if model:IsA("Model") then
+                            entry.name = model.Name
+                            break
+                        end
+                    end
+                end
+            end
+
+            local costFrame = slotFrame:FindFirstChild("Cost")
+            local text = costFrame and costFrame:FindFirstChild("text")
+            if text and text:IsA("TextLabel") then
+                entry.cost = parseNumber(text.Text)
+            end
+        end
+
+        table.insert(result, entry)
+    end
+
+    return result
+end
+
 function Controller:StartRecording(name)
     return self.recorder:start(name)
 end
