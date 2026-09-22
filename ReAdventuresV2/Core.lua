@@ -1450,7 +1450,9 @@ function Controller.new(options)
         importedMacro = nil,
         webhookTransport = nil,
         autoStory = {
+            autoPlace = false,
             placeSlots = {},
+            autoUpgrade = false,
             upgradeSlots = {},
             autoNext = false,
             autoReplay = false,
@@ -1567,6 +1569,17 @@ function Controller:SetAutoStoryConfig(config)
         elseif self.autoStory[key] ~= nil then
             self.autoStory[key] = value == true
         end
+    end
+
+    if config.autoNext == true then
+        self.autoStory.autoReplay = false
+        self.autoStory.autoReturnLobby = false
+    elseif config.autoReplay == true then
+        self.autoStory.autoNext = false
+        self.autoStory.autoReturnLobby = false
+    elseif config.autoReturnLobby == true then
+        self.autoStory.autoNext = false
+        self.autoStory.autoReplay = false
     end
 
     return deepCopy(self.autoStory)
