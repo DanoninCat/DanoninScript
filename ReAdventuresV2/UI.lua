@@ -1,50 +1,159 @@
--- Re Adventures V2 - Fluent UI integration
--- Adds a dedicated "Macros" tab to the SAME Fluent window used by Re Adventures.
--- Does not create a second ScreenGui or second window.
-
 local UI = {}
 
-local function setParagraph(paragraph, text)
-    if not paragraph then
-        return
+local function notify(Fluent, text)
+    if Fluent and type(Fluent.Notify) == "function" then
+        pcall(function()
+            Fluent:Notify({
+                Title = "Cat Empire",
+                Content = tostring(text),
+                Duration = 2,
+            })
+        end)
     end
-
-    pcall(function()
-        paragraph:SetDesc(tostring(text))
-    end)
 end
 
-local function safeNotify(Fluent, title, content, duration)
-    if not Fluent or type(Fluent.Notify) ~= "function" then
-        return
+local function selectedSlots(value, labelToSlot)
+    local slots = {}
+
+    if type(value) ~= "table" then
+        local slot = labelToSlot[value]
+        if slot then
+            table.insert(slots, slot)
+        end
+        return slots
     end
 
-    pcall(function()
-        Fluent:Notify({
-            Title = title,
-            Content = content,
-            Duration = duration or 3,
+    for key, item in pairs(value) do
+        local label
+        local enabled = true
+
+        if type(key) == "string" then
+            label = key
+            enabled = item == true
+        elseif type(item) == "string" then
+            label = item
+        end
+
+        if enabled and label and labelToSlot[label] then
+            table.insert(slots, labelToSlot[label])
+        end
+    end
+
+    table.sort(slots)
+    return slots
+end
+
+local function unitOptions(app)
+    local values = {}
+    local map = {}
+
+    for _, unit in ipairs(app:GetEquippedUnits()) do
+        local label
+
+        if unit.locked then
+            label = string.format("Slot %d - Locked", unit.slot)
+        elseif unit.equipped then
+            label = string.format("Slot %d - %s", unit.slot, tostring(unit.name))
+        else
+            label = string.format("Slot %d - Empty", unit.slot)
+        end
+
+        table.insert(values, label)
+        map[label] = unit.slot
+    end
+
+    return values, map
+end
+
+function UI.AttachAutoStory(Window, app, Fluent)
+    local Tab = Window:AddTab({
+        Title = "Auto Story",
+        Icon = "play",
+    })
+
+    Tab:AddSection("Units")
+
+    local values, labelToSlot = unitOptions(app)
+
+    local place = Tab:AddDropdown("RE_AutoPlaceUnits", {
+        Title = "Auto Place Units",
+        Values = values,
+        Multi = true,
+        Default = {},
+    })
+
+    place:OnChanged(function(value)
+        app:SetAutoStoryConfig({
+            placeSlots = selectedSlots(value, labelToSlot),
         })
     end)
+
+    local upgrade = Tab:AddDropdown("RE_AutoUpgradeUnits", {
+        Title = "Auto Upgrade Units",
+        Values = values,
+        Multi = true,
+        Default = {},
+    })
+
+    upgrade:OnChanged(function(value)
+        app:SetAutoStoryConfig({
+            upgradeSlots = selectedSlots(value, labelToSlot),
+        })
+    end)
+
+    Tab:AddButton({
+        Title = "Refresh Units",
+        Callback = function()
+            values, labelToSlot = unitOptions(app)
+
+            pcall(function()
+                place:SetValues(values)
+                upgrade:SetValues(values)
+            end)
+        end,
+    })
+
+    Tab:AddSection("After Match")
+
+    local autoNext = Tab:AddToggle("RE_AutoNext", {
+        Title = "Auto Next",
+        Default = false,
+    })
+
+    autoNext:OnChanged(function(value)
+        app:SetAutoStoryConfig({
+            autoNext = value,
+        })
+    end)
+
+    local autoReplay = Tab:AddToggle("RE_AutoReplay", {
+        Title = "Auto Replay",
+        Default = false,
+    })
+
+    autoReplay:OnChanged(function(value)
+        app:SetAutoStoryConfig({
+            autoReplay = value,
+        })
+    end)
+
+    local autoLobby = Tab:AddToggle("RE_AutoReturnLobby", {
+        Title = "Auto Return Lobby",
+        Default = false,
+    })
+
+    autoLobby:OnChanged(function(value)
+        app:SetAutoStoryConfig({
+            autoReturnLobby = value,
+        })
+    end)
+
+    return Tab
 end
 
-local function displayName(item)
-    return string.format(
-        "%s | %s | %s",
-        tostring(item.name or "Macro"),
-        tostring(item.area or "unknown"),
-        tostring(item.level or "unknown")
-    )
-end
-
-function UI.AttachMacrosArea(Window, app, Fluent)
-    assert(Window ~= nil, "existing Fluent window is required")
-    assert(app ~= nil, "Re Adventures V2 controller is required")
-    assert(Fluent ~= nil, "Fluent instance is required")
-
+function UI.AttachMacros(Window, app, Fluent)
     local Options = Fluent.Options
     local state = {
-        selectedId = nil,
         optionToId = {},
         lastExport = nil,
     }
@@ -54,344 +163,274 @@ function UI.AttachMacrosArea(Window, app, Fluent)
         Icon = "list",
     })
 
-    -- =========================================================
-    -- MACRO RECORDER
-    -- =========================================================
-    Tab:AddSection("Macro Recorder")
+    Tab:AddSection("Recorder")
 
     Tab:AddInput("RE_MacroName", {
         Title = "Macro Name",
-        Placeholder = "Ex: Namek Story",
-    })
-
-    local recorderStatus = Tab:AddParagraph({
-        Title = "Recorder Status",
-        Content = "Stopped",
+        Placeholder = "Macro Name",
     })
 
     Tab:AddButton({
         Title = "Record Macro",
         Callback = function()
             local name = Options.RE_MacroName and Options.RE_MacroName.Value or ""
-            if name == "" then
-                name = nil
-            end
-
-            local ok, result = app:StartRecording(name)
+            local ok = app:StartRecording(name ~= "" and name or nil)
 
             if ok then
-                setParagraph(recorderStatus, "Recording...")
-                safeNotify(Fluent, "Macros", "Recording started.", 2)
-            else
-                setParagraph(recorderStatus, "Could not start: " .. tostring(result))
-                safeNotify(Fluent, "Macros", "Could not start recording.", 3)
+                notify(Fluent, "Recording")
             end
         end,
     })
 
     Tab:AddButton({
-        Title = "Stop & Save Macro",
+        Title = "Stop & Save",
         Callback = function()
-            local ok, macro, id = app:StopRecording()
+            local ok = app:StopRecording()
 
-            if ok and macro then
-                state.selectedId = id
-                setParagraph(
-                    recorderStatus,
-                    string.format(
-                        "Saved: %s | %.2fs | %d events",
-                        tostring(macro.name),
-                        tonumber(macro.duration) or 0,
-                        type(macro.events) == "table" and #macro.events or 0
-                    )
-                )
-                safeNotify(Fluent, "Macros", "Macro saved: " .. tostring(macro.name), 3)
-            else
-                setParagraph(recorderStatus, "Stopped")
+            if ok then
+                notify(Fluent, "Saved")
             end
         end,
     })
 
-    -- =========================================================
-    -- MACRO LIBRARY
-    -- =========================================================
-    Tab:AddSection("Macro Library")
+    Tab:AddSection("Macros")
 
-    local macroDropdown = Tab:AddDropdown("RE_MacroSelected", {
-        Title = "Saved Macros",
-        Values = { "No macros saved" },
-        Default = "No macros saved",
-    })
-
-    local macroInfo = Tab:AddParagraph({
-        Title = "Selected Macro",
-        Content = "None",
-    })
-
-    local function buildMacroOptions()
-        local items = app:ListMacros()
+    local function getValues()
         local values = {}
         state.optionToId = {}
 
-        for _, item in ipairs(items) do
-            local label = displayName(item)
-            table.insert(values, label)
+        for _, item in ipairs(app:ListMacros()) do
+            local label = tostring(item.name or "Macro")
+            local base = label
+            local suffix = 2
+
+            while state.optionToId[label] do
+                label = base .. " " .. tostring(suffix)
+                suffix = suffix + 1
+            end
+
             state.optionToId[label] = item.id
+            table.insert(values, label)
         end
 
         if #values == 0 then
-            table.insert(values, "No macros saved")
+            table.insert(values, "No Macros")
         end
 
         return values
     end
 
-    local function updateMacroInfo()
-        local macro = app:GetSelectedMacro()
+    local dropdown = Tab:AddDropdown("RE_MacroSelected", {
+        Title = "Saved Macros",
+        Values = getValues(),
+        Default = "No Macros",
+    })
 
-        if not macro then
-            setParagraph(macroInfo, "None")
-            return
-        end
-
-        local eventCount = type(macro.events) == "table" and #macro.events or 0
-        local snapshotCount = type(macro.snapshots) == "table" and #macro.snapshots or 0
-
-        setParagraph(
-            macroInfo,
-            string.format(
-                "%s\nMap: %s / %s\nDuration: %.2fs\nEvents: %d | Snapshots: %d",
-                tostring(macro.name),
-                tostring(macro.map and macro.map.area or "unknown"),
-                tostring(macro.map and macro.map.level or "unknown"),
-                tonumber(macro.duration) or 0,
-                eventCount,
-                snapshotCount
-            )
-        )
-    end
-
-    local function refreshLibrary()
-        local values = buildMacroOptions()
-
-        pcall(function()
-            macroDropdown:SetValues(values)
-        end)
-
-        if values[1] ~= "No macros saved" then
-            local selectedId = app:GetSelectedMacroId()
-            local selectedLabel
-
-            for label, id in pairs(state.optionToId) do
-                if id == selectedId then
-                    selectedLabel = label
-                    break
-                end
-            end
-
-            if selectedLabel then
-                pcall(function()
-                    macroDropdown:SetValue(selectedLabel)
-                end)
-            end
-        end
-
-        updateMacroInfo()
-    end
-
-    macroDropdown:OnChanged(function(value)
-        if value == "No macros saved" then
-            return
-        end
-
+    dropdown:OnChanged(function(value)
         local id = state.optionToId[value]
-
         if id then
-            local ok = app:SelectMacro(id)
-
-            if ok then
-                state.selectedId = id
-                updateMacroInfo()
-            end
+            app:SelectMacro(id)
         end
     end)
 
+    local function refresh()
+        local values = getValues()
+        pcall(function()
+            dropdown:SetValues(values)
+        end)
+    end
+
     Tab:AddButton({
-        Title = "Refresh Macro List",
-        Callback = refreshLibrary,
+        Title = "Refresh",
+        Callback = refresh,
     })
 
     Tab:AddInput("RE_MacroRename", {
-        Title = "Rename Selected Macro",
-        Placeholder = "New macro name",
+        Title = "Rename",
+        Placeholder = "New Name",
     })
 
     Tab:AddButton({
         Title = "Apply Rename",
         Callback = function()
-            local id = app:GetSelectedMacroId() or state.selectedId
+            local id = app:GetSelectedMacroId()
             local name = Options.RE_MacroRename and Options.RE_MacroRename.Value or ""
 
-            if not id then
-                safeNotify(Fluent, "Macros", "Select a macro first.", 2)
-                return
-            end
-
-            if name == "" then
-                safeNotify(Fluent, "Macros", "Enter a new macro name.", 2)
-                return
-            end
-
-            local ok, result = app:RenameMacro(id, name)
-
-            if ok then
-                safeNotify(Fluent, "Macros", "Macro renamed.", 2)
-                refreshLibrary()
-            else
-                safeNotify(Fluent, "Macros", tostring(result), 3)
+            if id and name ~= "" then
+                local ok = app:RenameMacro(id, name)
+                if ok then
+                    refresh()
+                    notify(Fluent, "Renamed")
+                end
             end
         end,
     })
 
     Tab:AddButton({
-        Title = "Delete Selected Macro",
+        Title = "Delete Macro",
         Callback = function()
-            local id = app:GetSelectedMacroId() or state.selectedId
-
-            if not id then
-                safeNotify(Fluent, "Macros", "Select a macro first.", 2)
-                return
-            end
-
-            local ok = app:DeleteMacro(id)
-
-            if ok then
-                state.selectedId = nil
-                safeNotify(Fluent, "Macros", "Macro deleted.", 2)
-                refreshLibrary()
+            local id = app:GetSelectedMacroId()
+            if id and app:DeleteMacro(id) then
+                refresh()
+                notify(Fluent, "Deleted")
             end
         end,
     })
 
-    -- =========================================================
-    -- IMPORT / EXPORT
-    -- =========================================================
     Tab:AddSection("Import / Export")
 
     Tab:AddInput("RE_MacroImport", {
-        Title = "Import Macro JSON",
-        Placeholder = "Paste macro JSON here",
-    })
-
-    local ioStatus = Tab:AddParagraph({
-        Title = "Import / Export Status",
-        Content = "Idle",
+        Title = "Import Macro",
+        Placeholder = "Macro JSON",
     })
 
     Tab:AddButton({
-        Title = "Import Macro",
+        Title = "Import",
         Callback = function()
             local json = Options.RE_MacroImport and Options.RE_MacroImport.Value or ""
-
             if json == "" then
-                setParagraph(ioStatus, "No JSON provided.")
                 return
             end
 
-            local ok, macro, id = pcall(function()
-                local imported, importedId = app:ImportMacro(json)
-                return imported, importedId
+            local ok = pcall(function()
+                app:ImportMacro(json)
             end)
 
-            if ok and macro then
-                state.selectedId = id
-                setParagraph(ioStatus, "Imported: " .. tostring(macro.name))
-                safeNotify(Fluent, "Macros", "Macro imported.", 2)
-                refreshLibrary()
-            else
-                setParagraph(ioStatus, "Import failed.")
-                safeNotify(Fluent, "Macros", "Invalid macro JSON.", 3)
+            if ok then
+                refresh()
+                notify(Fluent, "Imported")
             end
         end,
     })
 
     Tab:AddButton({
-        Title = "Export Selected Macro",
+        Title = "Export",
         Callback = function()
             local ok, json = pcall(function()
                 return app:ExportSelectedMacro()
             end)
 
-            if not ok or type(json) ~= "string" then
-                setParagraph(ioStatus, "Export failed.")
-                safeNotify(Fluent, "Macros", "Select a macro first.", 2)
-                return
+            if ok and type(json) == "string" then
+                state.lastExport = json
+                print("[Macro]", json)
+                notify(Fluent, "Exported")
             end
-
-            state.lastExport = json
-            setParagraph(ioStatus, "Export ready: " .. tostring(#json) .. " bytes")
-            print("[ReAdventuresV2][MacroExport]", json)
-            safeNotify(Fluent, "Macros", "Macro exported to console output.", 3)
         end,
     })
-
-    -- =========================================================
-    -- MACRO STATUS
-    -- =========================================================
-    Tab:AddSection("Macro Status")
-
-    local runtimeStatus = Tab:AddParagraph({
-        Title = "Runtime",
-        Content = "Loading state...",
-    })
-
-    local function refreshRuntime()
-        local snapshot = app:GetState()
-        local summary = app:GetMacrosSummary()
-
-        setParagraph(
-            runtimeStatus,
-            string.format(
-                "Map: %s / %s\nWave: %s | Money: %s | Life: %s/%s\nUnits: %s | Enemies: %s\nSaved Macros: %s | Recording: %s",
-                tostring(snapshot.map.area or "unknown"),
-                tostring(snapshot.map.level or "unknown"),
-                tostring(snapshot.match.wave or 0),
-                tostring(snapshot.player.money or "?"),
-                tostring(snapshot.player.baseLife or "?"),
-                tostring(snapshot.player.baseMaxLife or "?"),
-                tostring(snapshot.counters.unitsPlaced or 0),
-                tostring(snapshot.counters.enemiesAlive or 0),
-                tostring(summary.count or 0),
-                tostring(summary.recording == true)
-            )
-        )
-    end
-
-    Tab:AddButton({
-        Title = "Refresh Macro Status",
-        Callback = function()
-            refreshLibrary()
-            refreshRuntime()
-        end,
-    })
-
-    refreshLibrary()
-    refreshRuntime()
 
     return {
         Tab = Tab,
-        Refresh = function()
-            refreshLibrary()
-            refreshRuntime()
-        end,
+        Refresh = refresh,
         GetLastExport = function()
             return state.lastExport
         end,
-        SetImportText = function(value)
-            pcall(function()
-                Options.RE_MacroImport:SetValue(tostring(value or ""))
-            end)
+    }
+end
+
+function UI.AttachWebhook(Window, app, Fluent)
+    local Options = Fluent.Options
+
+    local Tab = Window:AddTab({
+        Title = "Webhook",
+        Icon = "send",
+    })
+
+    Tab:AddSection("Webhook")
+
+    Tab:AddInput("RE_WebhookURL", {
+        Title = "Webhook URL",
+        Placeholder = "Webhook URL",
+    })
+
+    local enabled = Tab:AddToggle("RE_WebhookEnabled", {
+        Title = "Enable Webhook",
+        Default = false,
+    })
+
+    enabled:OnChanged(function(value)
+        app:SetWebhookConfig({
+            enabled = value,
+            url = Options.RE_WebhookURL and Options.RE_WebhookURL.Value or "",
+        })
+    end)
+
+    Tab:AddButton({
+        Title = "Save Webhook",
+        Callback = function()
+            app:SetWebhookConfig({
+                url = Options.RE_WebhookURL and Options.RE_WebhookURL.Value or "",
+            })
+            notify(Fluent, "Saved")
         end,
+    })
+
+    Tab:AddSection("Events")
+
+    local matchStart = Tab:AddToggle("RE_WebhookMatchStart", {
+        Title = "Match Start",
+        Default = true,
+    })
+
+    matchStart:OnChanged(function(value)
+        app:SetWebhookConfig({
+            matchStart = value,
+        })
+    end)
+
+    local wave = Tab:AddToggle("RE_WebhookWave", {
+        Title = "Wave",
+        Default = false,
+    })
+
+    wave:OnChanged(function(value)
+        app:SetWebhookConfig({
+            wave = value,
+        })
+    end)
+
+    local victory = Tab:AddToggle("RE_WebhookVictory", {
+        Title = "Victory",
+        Default = true,
+    })
+
+    victory:OnChanged(function(value)
+        app:SetWebhookConfig({
+            victory = value,
+        })
+    end)
+
+    local defeat = Tab:AddToggle("RE_WebhookDefeat", {
+        Title = "Defeat",
+        Default = true,
+    })
+
+    defeat:OnChanged(function(value)
+        app:SetWebhookConfig({
+            defeat = value,
+        })
+    end)
+
+    Tab:AddButton({
+        Title = "Test Webhook",
+        Callback = function()
+            local ok = app:SendWebhook("test", {
+                message = "Test",
+            })
+
+            if ok then
+                notify(Fluent, "Sent")
+            end
+        end,
+    })
+
+    return Tab
+end
+
+function UI.Attach(Window, app, Fluent)
+    return {
+        AutoStory = UI.AttachAutoStory(Window, app, Fluent),
+        Macros = UI.AttachMacros(Window, app, Fluent),
+        Webhook = UI.AttachWebhook(Window, app, Fluent),
     }
 end
 
