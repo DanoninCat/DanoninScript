@@ -19,6 +19,8 @@ Implemented:
 - Macro recording driven by detected game-state changes
 - Periodic synchronization snapshots
 - JSON macro import/export
+- Dedicated `Macros` area integration for the existing UI
+- Macro Library controls kept separate from match automation controls
 - Webhook payload builder with injectable transport
 - Known profile metadata for Marineford, Walled City, Snowy Town, Sand Village and Namek
 
@@ -29,7 +31,7 @@ Not implemented in this core:
 - RemoteEvent/RemoteFunction invocation
 - Replay action execution
 
-The core is intentionally independent from the current UI. The next integration step can wire the existing Loader buttons/toggles into the public Controller API without replacing the Loader.
+The core stays independent from the UI. `UI.lua` now adds a dedicated **Macros** area to an existing Loader window without creating a second ScreenGui/window. Macro controls remain isolated from Auto Story, Units and other automation areas.
 
 ## Public API
 
@@ -59,17 +61,22 @@ local imported = app:ImportMacro(json)
 
 ### Existing UI integration
 
-The module creates no ScreenGui, Window, Tab, Toggle or Button.
+`Core.lua` creates no ScreenGui/window.
 
-Wire the existing UI to:
+`UI.lua` receives the existing window object and adds a dedicated **Macros** area inside it:
 
-- `app:Start()`
-- `app:StartRecording(name)`
-- `app:StopRecording()`
-- `app:ExportMacro()`
-- `app:ImportMacro(json)`
-- `app:GetState()`
-- `app:GetCurrentMapProfile()`
+```lua
+local macrosUI = UI.AttachMacrosArea(existingWindow, app)
+```
+
+The Macros area contains separate blocks for:
+
+- Macro Recorder
+- Macro Library
+- Import / Export
+- Macro Status
+
+It does not place macro controls inside Auto Story, Units, Webhook, or other feature sections.
 
 ### Events
 
