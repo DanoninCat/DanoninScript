@@ -1449,6 +1449,21 @@ function Controller.new(options)
         macros = MacroLibrary.new(),
         importedMacro = nil,
         webhookTransport = nil,
+        autoStory = {
+            placeSlots = {},
+            upgradeSlots = {},
+            autoNext = false,
+            autoReplay = false,
+            autoReturnLobby = false,
+        },
+        webhook = {
+            enabled = false,
+            url = "",
+            matchStart = true,
+            wave = false,
+            victory = true,
+            defeat = true,
+        },
     }, Controller)
 end
 
@@ -1539,6 +1554,44 @@ function Controller:GetEquippedUnits()
     end
 
     return result
+end
+
+function Controller:SetAutoStoryConfig(config)
+    assert(type(config) == "table", "Auto Story config must be a table")
+
+    for key, value in pairs(config) do
+        if key == "placeSlots" or key == "upgradeSlots" then
+            if type(value) == "table" then
+                self.autoStory[key] = deepCopy(value)
+            end
+        elseif self.autoStory[key] ~= nil then
+            self.autoStory[key] = value == true
+        end
+    end
+
+    return deepCopy(self.autoStory)
+end
+
+function Controller:GetAutoStoryConfig()
+    return deepCopy(self.autoStory)
+end
+
+function Controller:SetWebhookConfig(config)
+    assert(type(config) == "table", "Webhook config must be a table")
+
+    for key, value in pairs(config) do
+        if key == "url" then
+            self.webhook.url = tostring(value or "")
+        elseif self.webhook[key] ~= nil then
+            self.webhook[key] = value == true
+        end
+    end
+
+    return deepCopy(self.webhook)
+end
+
+function Controller:GetWebhookConfig()
+    return deepCopy(self.webhook)
 end
 
 function Controller:StartRecording(name)
