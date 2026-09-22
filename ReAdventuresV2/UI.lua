@@ -66,6 +66,8 @@ local function unitOptions(app)
 end
 
 function UI.AttachAutoStory(Window, app, Fluent)
+    local Options = Fluent.Options
+
     local Tab = Window:AddTab({
         Title = "Auto Story",
         Icon = "play",
@@ -75,8 +77,19 @@ function UI.AttachAutoStory(Window, app, Fluent)
 
     local values, labelToSlot = unitOptions(app)
 
-    local place = Tab:AddDropdown("RE_AutoPlaceUnits", {
+    local autoPlace = Tab:AddToggle("RE_AutoPlaceEnabled", {
         Title = "Auto Place Units",
+        Default = false,
+    })
+
+    autoPlace:OnChanged(function(value)
+        app:SetAutoStoryConfig({
+            autoPlace = value,
+        })
+    end)
+
+    local place = Tab:AddDropdown("RE_AutoPlaceUnits", {
+        Title = "Place Units",
         Values = values,
         Multi = true,
         Default = {},
@@ -88,8 +101,19 @@ function UI.AttachAutoStory(Window, app, Fluent)
         })
     end)
 
-    local upgrade = Tab:AddDropdown("RE_AutoUpgradeUnits", {
+    local autoUpgrade = Tab:AddToggle("RE_AutoUpgradeEnabled", {
         Title = "Auto Upgrade Units",
+        Default = false,
+    })
+
+    autoUpgrade:OnChanged(function(value)
+        app:SetAutoStoryConfig({
+            autoUpgrade = value,
+        })
+    end)
+
+    local upgrade = Tab:AddDropdown("RE_AutoUpgradeUnits", {
+        Title = "Upgrade Units",
         Values = values,
         Multi = true,
         Default = {},
@@ -101,51 +125,98 @@ function UI.AttachAutoStory(Window, app, Fluent)
         })
     end)
 
-    Tab:AddButton({
-        Title = "Refresh Units",
-        Callback = function()
-            values, labelToSlot = unitOptions(app)
-
-            pcall(function()
-                place:SetValues(values)
-                upgrade:SetValues(values)
-            end)
-        end,
-    })
-
     Tab:AddSection("After Match")
+
+    local syncingPostMatch = false
 
     local autoNext = Tab:AddToggle("RE_AutoNext", {
         Title = "Auto Next",
         Default = false,
     })
 
-    autoNext:OnChanged(function(value)
-        app:SetAutoStoryConfig({
-            autoNext = value,
-        })
-    end)
-
     local autoReplay = Tab:AddToggle("RE_AutoReplay", {
         Title = "Auto Replay",
         Default = false,
     })
-
-    autoReplay:OnChanged(function(value)
-        app:SetAutoStoryConfig({
-            autoReplay = value,
-        })
-    end)
 
     local autoLobby = Tab:AddToggle("RE_AutoReturnLobby", {
         Title = "Auto Return Lobby",
         Default = false,
     })
 
+    local function setOtherOff(optionName)
+        local option = Options[optionName]
+        if option and option.Value == true then
+            pcall(function()
+                option:SetValue(false)
+            end)
+        end
+    end
+
+    autoNext:OnChanged(function(value)
+        if syncingPostMatch then
+            return
+        end
+
+        if value then
+            syncingPostMatch = true
+            setOtherOff("RE_AutoReplay")
+            setOtherOff("RE_AutoReturnLobby")
+            syncingPostMatch = false
+        end
+
+        app:SetAutoStoryConfig({
+            autoNext = value,
+        })
+    end)
+
+    autoReplay:OnChanged(function(value)
+        if syncingPostMatch then
+            return
+        end
+
+        if value then
+            syncingPostMatch = true
+            setOtherOff("RE_AutoNext")
+            setOtherOff("RE_AutoReturnLobby")
+            syncingPostMatch = false
+        end
+
+        app:SetAutoStoryConfig({
+            autoReplay = value,
+        })
+    end)
+
     autoLobby:OnChanged(function(value)
+        if syncingPostMatch then
+            return
+        end
+
+        if value then
+            syncingPostMatch = true
+            setOtherOff("RE_AutoNext")
+            setOtherOff("RE_AutoReplay")
+            syncingPostMatch = false
+        end
+
         app:SetAutoStoryConfig({
             autoReturnLobby = value,
         })
+    end)
+
+    task.spawn(function()
+        while true do
+            task.wait(2)
+
+            local latestValues, latestMap = unitOptions(app)
+            values = latestValues
+            labelToSlot = latestMap
+
+            pcall(function()
+                place:SetValues(values)
+                upgrade:SetValues(values)
+            end)
+        end
     end)
 
     return Tab
@@ -337,10 +408,16 @@ function UI.AttachWebhook(Window, app, Fluent)
 
     Tab:AddSection("Webhook")
 
-    Tab:AddInput("RE_WebhookURL", {
+    local webhookInput = Tab:AddInput("RE_WebhookURL", {
         Title = "Webhook URL",
         Placeholder = "Webhook URL",
     })
+
+    webhookInput:OnChanged(function(value)
+        app:SetWebhookConfig({
+            url = tostring(value or ""),
+        })
+    end)
 
     local enabled = Tab:AddToggle("RE_WebhookEnabled", {
         Title = "Enable Webhook",
@@ -353,16 +430,6 @@ function UI.AttachWebhook(Window, app, Fluent)
             url = Options.RE_WebhookURL and Options.RE_WebhookURL.Value or "",
         })
     end)
-
-    Tab:AddButton({
-        Title = "Save Webhook",
-        Callback = function()
-            app:SetWebhookConfig({
-                url = Options.RE_WebhookURL and Options.RE_WebhookURL.Value or "",
-            })
-            notify(Fluent, "Saved")
-        end,
-    })
 
     Tab:AddSection("Events")
 
@@ -409,19 +476,6 @@ function UI.AttachWebhook(Window, app, Fluent)
             defeat = value,
         })
     end)
-
-    Tab:AddButton({
-        Title = "Test Webhook",
-        Callback = function()
-            local ok = app:SendWebhook("test", {
-                message = "Test",
-            })
-
-            if ok then
-                notify(Fluent, "Sent")
-            end
-        end,
-    })
 
     return Tab
 end
