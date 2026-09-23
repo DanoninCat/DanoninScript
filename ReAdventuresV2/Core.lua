@@ -2050,8 +2050,8 @@ function Controller:_automationStep()
     if config.autoReady
         and not self.readySubmitted
         and not state.match.finished
-        and not state.match.started
         and not state.match.votingFinished
+        and not state.match.wavesStarted
         and state.match.serverReady == true
         and state.map.mapLoaded ~= false
     then
