@@ -73,8 +73,57 @@ return function(Core, UI)
         InterfaceManager:BuildInterfaceSection(Settings)
         SaveManager:BuildConfigSection(Settings)
 
+        local autoSaveReady = false
+        local autoSaveQueued = false
+
+        local function queueAutoSave()
+            if not autoSaveReady or autoSaveQueued then
+                return
+            end
+
+            autoSaveQueued = true
+
+            task.delay(0.25, function()
+                autoSaveQueued = false
+                pcall(function()
+                    SaveManager:Save("autosave")
+                end)
+            end)
+        end
+
+        local webhookUrlOption = Fluent.Options.RE_WebhookURL
+        local webhookEnabledOption = Fluent.Options.RE_WebhookEnabled
+
+        if webhookUrlOption and type(webhookUrlOption.OnChanged) == "function" then
+            webhookUrlOption:OnChanged(queueAutoSave)
+        end
+
+        if webhookEnabledOption and type(webhookEnabledOption.OnChanged) == "function" then
+            webhookEnabledOption:OnChanged(queueAutoSave)
+        end
+
         pcall(function()
             SaveManager:LoadAutoloadConfig()
+        end)
+
+        pcall(function()
+            SaveManager:Load("autosave")
+        end)
+
+        task.delay(0.35, function()
+            local url = Fluent.Options.RE_WebhookURL
+                and Fluent.Options.RE_WebhookURL.Value
+                or ""
+
+            local enabled = Fluent.Options.RE_WebhookEnabled
+                and Fluent.Options.RE_WebhookEnabled.Value == true
+
+            app:SetWebhookConfig({
+                url = tostring(url or ""),
+                enabled = enabled,
+            })
+
+            autoSaveReady = true
         end)
     end
 
