@@ -5,7 +5,7 @@ Match `138271828389486` and lobby `94823097601547` share the payload.
 
 ## Features
 
-- Auto Ready: automatically submits the match start vote once the server/map are ready. Ready is tracked per vote window, so Replay and Next can start a new round in the same server without requiring a teleport. Expected temporary remote rejections during transitions are retried silently.
+- Auto Ready: recognizes the game's visible `PlayerGui.VoteStart` Ready/Start window and submits `vote_start` once per visible Ready cycle. Replay and Next can therefore start another round in the same server even when Workspace match values are stale. Temporary remote rejections are retried silently.
 - Auto Place: select equipped units, select a Marker Unit and click **Place Marker**, then click a valid map position. Each selected slot has one compact floor X marker with a small side label. Enable Auto Place to maintain a placement at that marker. Server placement rules still apply.
 - Auto Upgrade: upgrades owned units matching selected equipped slots.
 - After Match: mutually exclusive Next, Replay or Return Lobby. Next is only attempted after a victory. Result capture and webhook submission precede the action.
