@@ -1,3 +1,6 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
 local UI = {}
 
 local function notify(Fluent, text)
@@ -72,6 +75,83 @@ local function unitOptions(app)
     return values, map
 end
 
+local function markerOptions(app)
+    local values = {}
+    local map = {}
+    local names = {}
+    local used = {}
+
+    for _, unit in ipairs(app:GetEquippedUnits()) do
+        if unit.equipped and not unit.locked then
+            local label = tostring(unit.name or ("Unit " .. tostring(unit.slot)))
+
+            if used[label] then
+                label = string.format("%s (Slot %d)", label, unit.slot)
+            end
+
+            used[label] = true
+            table.insert(values, label)
+            map[label] = unit.slot
+            names[label] = tostring(unit.name or label)
+        end
+    end
+
+    if #values == 0 then
+        table.insert(values, "No Units")
+    end
+
+    return values, map, names
+end
+
+local function markerFolder()
+    local folder = Workspace:FindFirstChild("RE_PlacementMarkers")
+
+    if not folder then
+        folder = Instance.new("Folder")
+        folder.Name = "RE_PlacementMarkers"
+        folder.Parent = Workspace
+    end
+
+    return folder
+end
+
+local function drawMarker(slot, cframe, name)
+    local folder = markerFolder()
+    local old = folder:FindFirstChild("Slot_" .. tostring(slot))
+
+    if old then
+        old:Destroy()
+    end
+
+    local marker = Instance.new("Part")
+    marker.Name = "Slot_" .. tostring(slot)
+    marker.Anchored = true
+    marker.CanCollide = false
+    marker.CanTouch = false
+    marker.CanQuery = false
+    marker.Shape = Enum.PartType.Ball
+    marker.Size = Vector3.new(1.4, 1.4, 1.4)
+    marker.Transparency = 0.35
+    marker.CFrame = cframe
+    marker.Parent = folder
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "Label"
+    billboard.AlwaysOnTop = true
+    billboard.Size = UDim2.fromOffset(120, 30)
+    billboard.StudsOffset = Vector3.new(0, 1.8, 0)
+    billboard.Parent = marker
+
+    local text = Instance.new("TextLabel")
+    text.BackgroundTransparency = 1
+    text.Size = UDim2.fromScale(1, 1)
+    text.Text = tostring(name or ("Slot " .. tostring(slot)))
+    text.TextScaled = true
+    text.Parent = billboard
+
+    return marker
+end
+
 function UI.AttachAutoStory(Window, app, Fluent)
     local Options = Fluent.Options
 
@@ -131,6 +211,75 @@ function UI.AttachAutoStory(Window, app, Fluent)
             upgradeSlots = selectedSlots(value, labelToSlot),
         })
     end)
+
+    Tab:AddSection("Placement Marker")
+
+    local markerValues, markerToSlot, markerNames = markerOptions(app)
+    local markerDropdown = Tab:AddDropdown("RE_MarkerUnit", {
+        Title = "Marker Unit",
+        Values = markerValues,
+        Default = markerValues[1],
+    })
+
+    local markerArmed = false
+    local mouse = Players.LocalPlayer and Players.LocalPlayer:GetMouse()
+
+    Tab:AddButton({
+        Title = "Place Marker",
+        Callback = function()
+            local selected = Options.RE_MarkerUnit and Options.RE_MarkerUnit.Value
+            local slot = markerToSlot[selected]
+
+            if not slot then
+                notify(Fluent, "Select Unit")
+                return
+            end
+
+            markerArmed = true
+            notify(Fluent, "Click Map")
+        end,
+    })
+
+    Tab:AddButton({
+        Title = "Clear Markers",
+        Callback = function()
+            markerArmed = false
+            app:ClearPlacementMarker()
+
+            local folder = Workspace:FindFirstChild("RE_PlacementMarkers")
+            if folder then
+                folder:Destroy()
+            end
+
+            notify(Fluent, "Markers Cleared")
+        end,
+    })
+
+    if mouse then
+        mouse.Button1Down:Connect(function()
+            if not markerArmed then
+                return
+            end
+
+            markerArmed = false
+
+            local selected = Options.RE_MarkerUnit and Options.RE_MarkerUnit.Value
+            local slot = markerToSlot[selected]
+            local hit = mouse.Hit
+
+            if not slot or not hit then
+                return
+            end
+
+            local name = markerNames[selected] or selected
+            local ok = app:SetPlacementMarker(slot, hit, name)
+
+            if ok then
+                drawMarker(slot, hit, name)
+                notify(Fluent, "Marker Saved")
+            end
+        end)
+    end
 
     Tab:AddSection("After Match")
 
@@ -219,9 +368,12 @@ function UI.AttachAutoStory(Window, app, Fluent)
             values = latestValues
             labelToSlot = latestMap
 
+            markerValues, markerToSlot, markerNames = markerOptions(app)
+
             pcall(function()
                 place:SetValues(values)
                 upgrade:SetValues(values)
+                markerDropdown:SetValues(markerValues)
             end)
         end
     end)
@@ -309,6 +461,32 @@ function UI.AttachMacros(Window, app, Fluent)
         if id then
             app:SelectMacro(id)
         end
+    end)
+
+    local autoPlay = Tab:AddToggle("RE_MacroAutoPlay", {
+        Title = "Auto Play Macro",
+        Default = false,
+    })
+
+    autoPlay:OnChanged(function(value)
+        if value then
+            local ok, err = app:StartSelectedMacroReplay()
+
+            if not ok then
+                notify(Fluent, tostring(err or "Replay Failed"))
+                pcall(function()
+                    autoPlay:SetValue(false)
+                end)
+            end
+        else
+            app:StopMacroReplay()
+        end
+    end)
+
+    app:On("macroReplayFinished", function()
+        pcall(function()
+            autoPlay:SetValue(false)
+        end)
     end)
 
     local function refresh()
