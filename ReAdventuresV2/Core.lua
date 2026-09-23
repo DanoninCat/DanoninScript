@@ -1758,6 +1758,7 @@ function Controller.new(options)
         replayUnits = {},
         lastPostMatchAction = nil,
         lastReadyAttempt = 0,
+        readySubmitted = false,
         importedMacro = nil,
         webhookTransport = nil,
         webhookBound = false,
@@ -1798,8 +1799,10 @@ function Controller:Start()
                 self.lastWebhookResultKey = nil
                 self.lastPostMatchAction = nil
                 self.lastReadyAttempt = 0
+                self.readySubmitted = false
             elseif payload.to == "FINISHED" then
                 self.lastReadyAttempt = 0
+                self.readySubmitted = false
                 task.spawn(function()
                     self:_handleFinishedMatch()
                 end)
@@ -2045,10 +2048,10 @@ function Controller:_automationStep()
     -- recorder is armed before the first wave. Vote only when the server/map
     -- are ready and this client has not already contributed a start vote.
     if config.autoReady
+        and not self.readySubmitted
         and not state.match.finished
         and not state.match.started
         and not state.match.votingFinished
-        and (tonumber(state.match.voteCount) or 0) <= 0
         and state.match.serverReady == true
         and state.map.mapLoaded ~= false
     then
@@ -2057,6 +2060,7 @@ function Controller:_automationStep()
             self.lastReadyAttempt = now
             local ok, err = self:_dispatch({kind = "ready"})
             if not ok then error(err or "Auto Ready failed") end
+            self.readySubmitted = true
             return
         end
     end
