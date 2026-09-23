@@ -47,17 +47,24 @@ local function unitOptions(app)
     local values = {}
     local map = {}
 
+    local used = {}
+
     for _, unit in ipairs(app:GetEquippedUnits()) do
         local label
 
         if unit.locked then
             label = string.format("Slot %d - Locked", unit.slot)
         elseif unit.equipped then
-            label = string.format("Slot %d", unit.slot)
+            label = tostring(unit.name or ("Unit " .. tostring(unit.slot)))
+
+            if used[label] then
+                label = string.format("%s (Slot %d)", label, unit.slot)
+            end
         else
             label = string.format("Slot %d - Empty", unit.slot)
         end
 
+        used[label] = true
         table.insert(values, label)
         map[label] = unit.slot
     end
@@ -429,52 +436,10 @@ function UI.AttachWebhook(Window, app, Fluent)
             enabled = value,
             url = Options.RE_WebhookURL and Options.RE_WebhookURL.Value or "",
         })
-    end)
 
-    Tab:AddSection("Events")
-
-    local matchStart = Tab:AddToggle("RE_WebhookMatchStart", {
-        Title = "Match Start",
-        Default = true,
-    })
-
-    matchStart:OnChanged(function(value)
-        app:SetWebhookConfig({
-            matchStart = value,
-        })
-    end)
-
-    local wave = Tab:AddToggle("RE_WebhookWave", {
-        Title = "Wave",
-        Default = false,
-    })
-
-    wave:OnChanged(function(value)
-        app:SetWebhookConfig({
-            wave = value,
-        })
-    end)
-
-    local victory = Tab:AddToggle("RE_WebhookVictory", {
-        Title = "Victory",
-        Default = true,
-    })
-
-    victory:OnChanged(function(value)
-        app:SetWebhookConfig({
-            victory = value,
-        })
-    end)
-
-    local defeat = Tab:AddToggle("RE_WebhookDefeat", {
-        Title = "Defeat",
-        Default = true,
-    })
-
-    defeat:OnChanged(function(value)
-        app:SetWebhookConfig({
-            defeat = value,
-        })
+        if value then
+            notify(Fluent, "Webhook Enabled")
+        end
     end)
 
     return Tab
