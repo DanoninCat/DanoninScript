@@ -1,117 +1,51 @@
-# Re Adventures V2 Core
+# Re Adventures V2
 
-This folder is the first additive implementation for Re Adventures V2.
+The existing Cat Empire Loader embeds `Core.lua`, `UI.lua` and `Entry.lua`.
+Match `138271828389486` and lobby `94823097601547` share the payload.
 
-## Current status
+## Features
 
-Implemented:
+- Auto Place: select equipped units, select a Marker Unit and click **Place Marker**, then click a valid map position. Each selected slot has one marker. Enable Auto Place to maintain a placement at that marker. Server placement rules still apply.
+- Auto Upgrade: upgrades owned units matching selected equipped slots.
+- After Match: mutually exclusive Next, Replay or Return Lobby. Next is only attempted after a victory. Result capture and webhook submission precede the action.
+- Macros: record local-player placements/upgrades and passive state events; save, select, rename, delete, import and export. Replay uses recorded coordinates and resolves equipped units against the current session. It waits for state confirmation and stops with an error if an action cannot complete within 60 seconds. Ambiguous unit matches fail explicitly.
+- Unit removal is recorded as an observation, never interpreted as a sell action: removal may mean death or round cleanup.
+- Auto Story pauses during recording and replay to avoid competing actions. Stop replay interrupts pending retries.
+- Macros persist at `CatEmpire/ReAdventures/macros.json` when file APIs are available. Otherwise Export provides a portable copy (clipboard when available, console fallback).
+- Webhooks use the environment's HTTP request capability when available, otherwise Roblox HttpService. HTTP errors are reported. Autosave subscribes to controller events without replacing feature callbacks.
+- Re-execution stops the previous app; closing Fluent stops background automation.
 
-- Passive real-time match state tracking
-- Map/level detection through `Workspace._MAP_CONFIG`
-- Wave number/time and match phase tracking
-- Player unit tracking through `Workspace._UNITS`
-- UUID, owner, upgrade, stats, spent amount and placement CFrame capture
-- Enemy tracking through `Workspace._PATH_UNITS`
-- Enemy health/current count tracking
-- Match money detection from the existing `spawn_units` GUI
-- Base-life detection from the existing `Waves.HealthBar.HPDisplay`
-- Runtime map profile capture for bases and lane points
-- Macro recording driven by detected game-state changes
-- Periodic synchronization snapshots
-- JSON macro import/export
-- Dedicated `Macros` area integration for the existing UI
-- Macro Library controls kept separate from match automation controls
-- Webhook payload builder with injectable transport
-- Known profile metadata for Marineford, Walled City, Snowy Town, Sand Village and Namek
+Markers are session-local and must be set for the current map. The script must be loaded in the destination server after teleporting; this change does not install teleport auto-execution. Start recording before placing units; units already present at recording start are not new placement events.
 
-Not implemented in this core:
+## Rebuild
 
-- A second UI (intentionally omitted)
-- Any changes to `Loader/Loader.lua`
-- RemoteEvent/RemoteFunction invocation
-- Replay action execution
+From the repository root:
 
-The core stays independent from the UI. `UI.lua` now adds a dedicated **Macros** area to an existing Loader window without creating a second ScreenGui/window. Macro controls remain isolated from Auto Story, Units and other automation areas.
-
-## Public API
-
-```lua
-local core = ReAdventuresV2Core
-local app = core.new({
-    recorder = {
-        snapshotInterval = 1,
-        maxSnapshots = 7200,
-    },
-})
-
-app:Start()
-
-local state = app:GetState()
-local profile = app:GetCurrentMapProfile()
-
-app:StartRecording("Marineford run")
-
--- play normally
-
-local _, macro = app:StopRecording()
-local json = app:ExportMacro(macro)
-
-local imported = app:ImportMacro(json)
+```sh
+python tools/build_loader.py
 ```
 
-### Existing UI integration
+The builder replaces only the Re Adventures entry, preserving other games, the shared Fluent payload and the lobby alias. Rebuild after changing any of the three Lua source files.
 
-`Core.lua` creates no ScreenGui/window.
+## Verification
 
-`UI.lua` receives the existing window object and adds a dedicated **Macros** area inside it:
-
-```lua
-local macrosUI = UI.AttachMacrosArea(existingWindow, app)
+```sh
+python -m pip install lupa
+python -m unittest discover -s tests -v
 ```
 
-The Macros area contains separate blocks for:
+Offline tests cover syntax, source/payload equality, preservation of other loader entries, selected-slot placement and money checks, automation exclusion, post-match action gating, replay cancellation/errors/confirmation, endpoint argument forwarding, macro refresh events and HTTP success/failure handling.
 
-- Macro Recorder
-- Macro Library
-- Import / Export
-- Macro Status
+**Live validation remains required.** The supplied Namek dump confirms endpoint names/classes and the equipped-unit UUID attribute, but does not capture invocation arguments or server implementations. The adapter currently uses these contracts, which need confirmation in the current game:
 
-It does not place macro controls inside Auto Story, Units, Webhook, or other feature sections.
+| Action | Endpoint | Arguments |
+| --- | --- | --- |
+| Place | `spawn_unit` | equipped UUID, CFrame |
+| Upgrade | `upgrade_unit_ingame` | owned unit Model |
+| Next | `set_game_finished_vote` | `"next_story"` |
+| Replay | `set_game_finished_vote` | `"replay"` |
+| Lobby | `teleport_back_to_lobby` | none |
 
-### Events
+`app:SetActionAdapter(callback)` can replace the default dispatch. The callback receives `{kind, unit?, cframe?, model?, slot?, event?}` and returns `success, error`. No server signature compatibility or live execution is claimed by the offline tests.
 
-```lua
-local disconnect = app:On("waveChanged", function(payload)
-    print(payload.from, payload.to)
-end)
-```
-
-Important tracker events:
-
-- `unitAdded`
-- `unitUpgradeChanged`
-- `unitRemoved`
-- `enemyAdded`
-- `enemyRemoved`
-- `waveChanged`
-- `moneyChanged`
-- `baseLifeChanged`
-- `matchPhaseChanged`
-- `mapChanged`
-
-## Macro format
-
-The recorder writes schema `re-adventures-macro`, version 2.
-
-Actions are recorded with contextual state, including:
-
-- time
-- wave/wave time
-- match phase
-- money
-- base life
-- placed-unit count
-- alive-enemy count
-- unit UUID and placement CFrame where applicable
-
-Snapshots are also stored periodically so later playback can synchronize against state instead of relying only on absolute timing.
+In a match, verify one marked placement, an upgrade, a short record/replay, then each post-match option and the Discord webhook. Check macro persistence after reloading. The existing result parser's reward/EXP extraction also needs comparison with live results.

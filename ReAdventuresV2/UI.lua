@@ -256,7 +256,7 @@ function UI.AttachAutoStory(Window, app, Fluent)
     })
 
     if mouse then
-        mouse.Button1Down:Connect(function()
+        table.insert(app.uiConnections, mouse.Button1Down:Connect(function()
             if not markerArmed then
                 return
             end
@@ -278,7 +278,7 @@ function UI.AttachAutoStory(Window, app, Fluent)
                 drawMarker(slot, hit, name)
                 notify(Fluent, "Marker Saved")
             end
-        end)
+        end))
     end
 
     Tab:AddSection("After Match")
@@ -361,8 +361,9 @@ function UI.AttachAutoStory(Window, app, Fluent)
     end)
 
     task.spawn(function()
-        while true do
+        while app.running do
             task.wait(2)
+            if not app.running then break end
 
             local latestValues, latestMap = unitOptions(app)
             values = latestValues
@@ -404,10 +405,12 @@ function UI.AttachMacros(Window, app, Fluent)
         Title = "Record Macro",
         Callback = function()
             local name = Options.RE_MacroName and Options.RE_MacroName.Value or ""
-            local ok = app:StartRecording(name ~= "" and name or nil)
+            local ok, err = app:StartRecording(name ~= "" and name or nil)
 
             if ok then
                 notify(Fluent, "Recording")
+            else
+                notify(Fluent, err or "Recording Failed")
             end
         end,
     })
@@ -453,7 +456,7 @@ function UI.AttachMacros(Window, app, Fluent)
     local dropdown = Tab:AddDropdown("RE_MacroSelected", {
         Title = "Saved Macros",
         Values = getValues(),
-        Default = "No Macros",
+        Default = nil,
     })
 
     dropdown:OnChanged(function(value)
@@ -483,7 +486,8 @@ function UI.AttachMacros(Window, app, Fluent)
         end
     end)
 
-    app:On("macroReplayFinished", function()
+    app:On("macroReplayFinished", function(payload)
+        if payload.error then notify(Fluent, payload.error) end
         pcall(function()
             autoPlay:SetValue(false)
         end)
@@ -493,8 +497,15 @@ function UI.AttachMacros(Window, app, Fluent)
         local values = getValues()
         pcall(function()
             dropdown:SetValues(values)
+            local selected = app:GetSelectedMacroId()
+            for label, id in pairs(state.optionToId) do
+                if id == selected then dropdown:SetValue(label); return end
+            end
+            dropdown:SetValue(nil)
         end)
     end
+    table.insert(app.uiDisconnectors, app:On("macrosChanged", refresh))
+    refresh()
 
     Tab:AddButton({
         Title = "Refresh",
@@ -548,13 +559,15 @@ function UI.AttachMacros(Window, app, Fluent)
                 return
             end
 
-            local ok = pcall(function()
+            local ok, err = pcall(function()
                 app:ImportMacro(json)
             end)
 
             if ok then
                 refresh()
                 notify(Fluent, "Imported")
+            else
+                notify(Fluent, tostring(err))
             end
         end,
     })
@@ -568,7 +581,12 @@ function UI.AttachMacros(Window, app, Fluent)
 
             if ok and type(json) == "string" then
                 state.lastExport = json
-                print("[Macro]", json)
+                local env = (getgenv and getgenv()) or _G
+                if type(env.setclipboard) == "function" then
+                    env.setclipboard(json)
+                else
+                    print("[Macro]", json)
+                end
                 notify(Fluent, "Exported")
             end
         end,
@@ -624,6 +642,15 @@ function UI.AttachWebhook(Window, app, Fluent)
 end
 
 function UI.Attach(Window, app, Fluent)
+    app.uiConnections = app.uiConnections or {}
+    app.uiDisconnectors = app.uiDisconnectors or {}
+    local lastError, lastErrorTime
+    table.insert(app.uiDisconnectors, app:On("actionError", function(payload)
+        if payload.message ~= lastError or os.clock() - (lastErrorTime or 0) >= 10 then
+            lastError, lastErrorTime = payload.message, os.clock()
+            notify(Fluent, payload.message)
+        end
+    end))
     return {
         AutoStory = UI.AttachAutoStory(Window, app, Fluent),
         Macros = UI.AttachMacros(Window, app, Fluent),

@@ -4,6 +4,18 @@ return function(Core, UI)
     end
 
     local env = (getgenv and getgenv()) or _G
+    local previous = env.__RE_ADVENTURES_V2
+    if previous then
+        if previous.App then previous.App:Stop() end
+        if previous.Fluent and previous.Fluent.Destroy then pcall(function() previous.Fluent:Destroy() end) end
+    end
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    local player = game:GetService("Players").LocalPlayer
+    if player then player:WaitForChild("PlayerGui", 20) end
+    if game.PlaceId == 138271828389486 then
+        local workspace = game:GetService("Workspace")
+        for _, name in ipairs({"_DATA", "_MAP_CONFIG", "_UNITS"}) do workspace:WaitForChild(name, 10) end
+    end
     local fluentSource = env["__CE_F_91A7"]
 
     if type(fluentSource) ~= "string" or fluentSource == "" then
@@ -54,7 +66,46 @@ return function(Core, UI)
         MinimizeKey = Enum.KeyCode.RightControl,
     })
 
+    local archivePath = "CatEmpire/ReAdventures/macros.json"
+    local http = game:GetService("HttpService")
+    local canSave = type(env.writefile) == "function" and type(env.makefolder) == "function"
+    local function storageNotice(text)
+        Fluent:Notify({Title = "Cat Empire", Content = text, Duration = 4})
+    end
+    if type(env.isfile) == "function" and type(env.readfile) == "function" and env.isfile(archivePath) then
+        local ok, err = pcall(function()
+            local archive = http:JSONDecode(env.readfile(archivePath))
+            assert(type(archive) == "table" and archive.version == 1 and type(archive.macros) == "table", "Invalid macro archive")
+            local library = Core.MacroLibrary.new()
+            for _, macro in ipairs(archive.macros) do library:add(macro) end
+            if archive.selectedId then library:select(archive.selectedId) end
+            app.macros = library
+        end)
+        if not ok then storageNotice("Could not load saved macros: " .. tostring(err)) end
+    end
+
     local areas = UI.Attach(Window, app, Fluent)
+    table.insert(app.uiDisconnectors, app:On("macrosChanged", function()
+        if not canSave then
+            storageNotice("Macros are in memory. Use Export to keep a copy.")
+            return
+        end
+        local ok, err = pcall(function()
+            for _, folder in ipairs({"CatEmpire", "CatEmpire/ReAdventures"}) do
+                if type(env.isfolder) ~= "function" or not env.isfolder(folder) then env.makefolder(folder) end
+            end
+            local archive = {version = 1, selectedId = app:GetSelectedMacroId(), macros = {}}
+            for _, item in ipairs(app:ListMacros()) do table.insert(archive.macros, app:GetMacro(item.id)) end
+            env.writefile(archivePath, http:JSONEncode(archive))
+        end)
+        if not ok then storageNotice("Could not save macros: " .. tostring(err)) end
+    end))
+    task.spawn(function()
+        while app.running do
+            if Fluent.Unloaded then app:Stop(); break end
+            task.wait(0.5)
+        end
+    end)
 
     local Settings
 
@@ -67,7 +118,7 @@ return function(Core, UI)
         SaveManager:SetLibrary(Fluent)
         InterfaceManager:SetLibrary(Fluent)
         SaveManager:IgnoreThemeSettings()
-        SaveManager:SetIgnoreIndexes({})
+        SaveManager:SetIgnoreIndexes({"RE_MacroAutoPlay", "RE_MacroImport"})
         InterfaceManager:SetFolder("CatEmpire/ReAdventures")
         SaveManager:SetFolder("CatEmpire/ReAdventures/configs")
         InterfaceManager:BuildInterfaceSection(Settings)
@@ -91,16 +142,9 @@ return function(Core, UI)
             end)
         end
 
-        local webhookUrlOption = Fluent.Options.RE_WebhookURL
-        local webhookEnabledOption = Fluent.Options.RE_WebhookEnabled
-
-        if webhookUrlOption and type(webhookUrlOption.OnChanged) == "function" then
-            webhookUrlOption:OnChanged(queueAutoSave)
-        end
-
-        if webhookEnabledOption and type(webhookEnabledOption.OnChanged) == "function" then
-            webhookEnabledOption:OnChanged(queueAutoSave)
-        end
+        -- Fluent OnChanged replaces the previous callback; subscribe to the
+        -- controller event so autosave cannot disconnect the actual feature.
+        table.insert(app.uiDisconnectors, app:On("webhookConfigChanged", queueAutoSave))
 
         pcall(function()
             SaveManager:LoadAutoloadConfig()
@@ -133,6 +177,7 @@ return function(Core, UI)
 
     env.__RE_ADVENTURES_V2 = {
         App = app,
+        Fluent = Fluent,
         Window = Window,
         AutoStory = areas.AutoStory,
         Macros = areas.Macros,

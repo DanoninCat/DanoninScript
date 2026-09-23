@@ -1,5 +1,5 @@
--- Re Adventures V2 passive runtime core
--- No UI is created here. No RemoteEvent/RemoteFunction is invoked here.
+-- Re Adventures V2 runtime core
+-- UI remains separate; actions use the game endpoints through a replaceable adapter.
 -- Designed to be embedded or wired into the existing Loader/UI.
 
 local Players = game:GetService("Players")
@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.0.0"
+Core.VERSION = "2.1.0"
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -97,8 +97,6 @@ local function scanUnitDisplayNames()
         return
     end
 
-    UNIT_NAMES_SCANNED = true
-
     local srcRoot = ReplicatedStorage:FindFirstChild("src")
     local dataRoot = srcRoot and srcRoot:FindFirstChild("Data")
     local unitsRoot = dataRoot and dataRoot:FindFirstChild("Units")
@@ -106,6 +104,8 @@ local function scanUnitDisplayNames()
     if not unitsRoot then
         return
     end
+
+    UNIT_NAMES_SCANNED = true
 
     for _, module in ipairs(unitsRoot:GetDescendants()) do
         if module:IsA("ModuleScript") then
@@ -1190,7 +1190,7 @@ function Serializer.decode(text)
     local decoded = HttpService:JSONDecode(text)
     assert(type(decoded) == "table", "macro JSON must decode to a table")
     assert(decoded.schema == "re-adventures-macro", "unsupported macro schema")
-    assert(type(decoded.version) == "number", "macro version is missing")
+    assert(decoded.version == 2, "unsupported macro version")
     assert(type(decoded.events) == "table", "macro events are missing")
     assert(type(decoded.snapshots) == "table", "macro snapshots are missing")
 
@@ -1294,12 +1294,14 @@ function MacroRecorder:_bind()
     end
 
     listen("unitAdded", function(payload)
+        if not payload.unit or not LocalPlayer or payload.unit.ownerUserId ~= LocalPlayer.UserId then return end
         self:_record("PLACE_DETECTED", {
             unit = payload.unit,
         })
     end)
 
     listen("unitUpgradeChanged", function(payload)
+        if not payload.unit or not LocalPlayer or payload.unit.ownerUserId ~= LocalPlayer.UserId then return end
         self:_record("UPGRADE_DETECTED", {
             uuid = payload.uuid,
             from = payload.from,
@@ -1309,6 +1311,7 @@ function MacroRecorder:_bind()
     end)
 
     listen("unitRemoved", function(payload)
+        if not payload.unit or not LocalPlayer or payload.unit.ownerUserId ~= LocalPlayer.UserId then return end
         self:_record("UNIT_REMOVED", {
             unit = payload.unit,
         })
@@ -1623,6 +1626,7 @@ function MacroReplay:start(macro, callback)
     end
 
     self.running = true
+    self.lastError = nil
     self.generation = self.generation + 1
     self.macro = deepCopy(macro)
     self.startedClock = os.clock()
@@ -1657,7 +1661,14 @@ function MacroReplay:start(macro, callback)
             self.currentIndex = index
 
             if type(callback) == "function" then
-                pcall(callback, deepCopy(event), index, #events)
+                local ok, success, err = pcall(callback, deepCopy(event), index, #events)
+                if not ok or success == false then
+                    if self.generation ~= generation then return end
+                    self.running = false
+                    self.lastError = tostring(ok and err or success)
+                    pcall(callback, nil, nil, #events, true, self.lastError)
+                    return
+                end
             end
         end
 
@@ -1682,6 +1693,7 @@ end
 function MacroReplay:getStatus()
     return {
         running = self.running,
+        error = self.lastError,
         currentIndex = self.currentIndex,
         eventCount = self.macro and #self.macro.events or 0,
         name = self.macro and self.macro.name or nil,
@@ -1703,7 +1715,11 @@ function Controller.new(options)
         macros = MacroLibrary.new(),
         replay = MacroReplay.new(),
         placementMarkers = {},
-        actionAdapter = nil,
+        actionAdapter = options.actionAdapter,
+        running = false,
+        generation = 0,
+        replayUnits = {},
+        lastPostMatchAction = nil,
         importedMacro = nil,
         webhookTransport = nil,
         webhookBound = false,
@@ -1730,7 +1746,10 @@ function Controller.new(options)
 end
 
 function Controller:Start()
-    local snapshot = self.tracker:start()
+    if self.running then return self:GetState() end
+    self.running = true
+    self.generation = self.generation + 1
+    local generation = self.generation
 
     if not self.webhookBound then
         self.webhookBound = true
@@ -1738,6 +1757,7 @@ function Controller:Start()
         table.insert(self.webhookDisconnectors, self.tracker:on("matchPhaseChanged", function(payload)
             if payload.to == "PLAYING" then
                 self.lastWebhookResultKey = nil
+                self.lastPostMatchAction = nil
             elseif payload.to == "FINISHED" then
                 task.spawn(function()
                     self:_handleFinishedMatch()
@@ -1746,10 +1766,23 @@ function Controller:Start()
         end))
     end
 
+    local snapshot = self.tracker:start()
+    task.spawn(function()
+        while self.running and self.generation == generation do
+            local ok, err = pcall(function() self:_automationStep() end)
+            if not ok then self.tracker.events:emit("actionError", {message = tostring(err)}) end
+            task.wait(1)
+        end
+    end)
+    if snapshot.match.finished then
+        task.spawn(function() self:_handleFinishedMatch() end)
+    end
     return snapshot
 end
 
 function Controller:Stop()
+    self.running = false
+    self.generation = self.generation + 1
     if self.recorder.recording then
         self:StopRecording()
     end
@@ -1762,6 +1795,9 @@ function Controller:Stop()
     table.clear(self.webhookDisconnectors)
     self.webhookBound = false
 
+    for _, connection in ipairs(self.uiConnections or {}) do connection:Disconnect() end
+    for _, disconnect in ipairs(self.uiDisconnectors or {}) do disconnect() end
+    self.uiConnections, self.uiDisconnectors = {}, {}
     self.tracker:stop()
 end
 
@@ -1804,6 +1840,7 @@ function Controller:GetEquippedUnits()
                 return slotFrame:GetAttribute("_equipped_frame_unit_uuid")
             end)
 
+            entry.uuid = uuid
             entry.equipped = type(uuid) == "string" and uuid ~= ""
 
             local locked = slotFrame:FindFirstChild("locked")
@@ -1825,6 +1862,7 @@ function Controller:GetEquippedUnits()
                 end
             end
 
+            entry.unitId = internalId
             if entry.equipped and internalId then
                 entry.name = getUnitDisplayName(internalId)
                     or ("Unit " .. tostring(slot))
@@ -1848,7 +1886,7 @@ end
 function Controller:SetPlacementMarker(slot, cframe, unitName)
     slot = tonumber(slot)
 
-    if not slot or slot < 1 or slot > 6 then
+    if not slot or slot % 1 ~= 0 or slot < 1 or slot > 6 then
         return false, "invalid slot"
     end
 
@@ -1889,6 +1927,179 @@ function Controller:GetAutoStoryPlan()
     return plan
 end
 
+-- Endpoint names are grounded in the supplied match dump. Server argument
+-- contracts must also be checked in a live game when its version changes.
+function Controller:_invoke(name, ...)
+    local endpoint = findPath(ReplicatedStorage, "endpoints", "client_to_server", name)
+    if not endpoint then return false, "Game action unavailable: " .. name end
+    local args = table.pack(...)
+    local ok, result = pcall(function()
+        if endpoint:IsA("RemoteFunction") then
+            return endpoint:InvokeServer(table.unpack(args, 1, args.n))
+        elseif endpoint:IsA("RemoteEvent") then
+            endpoint:FireServer(table.unpack(args, 1, args.n))
+            return true
+        end
+        error("Unsupported endpoint type")
+    end)
+    if not ok then return false, tostring(result) end
+    if result == false then return false, "Game rejected action: " .. name end
+    return true, result
+end
+
+function Controller:_ownModels()
+    local result = {}
+    local root = Workspace:FindFirstChild("_UNITS")
+    if not root or not LocalPlayer then return result end
+    for _, model in ipairs(root:GetChildren()) do
+        local stats = model:FindFirstChild("_stats")
+        local owner = stats and stats:FindFirstChild("player")
+        if owner and owner:IsA("ObjectValue") and owner.Value == LocalPlayer then
+            table.insert(result, model)
+        end
+    end
+    return result
+end
+
+function Controller:_matchingModel(unit, position)
+    local nearest, distance
+    for _, model in ipairs(self:_ownModels()) do
+        local stats = model:FindFirstChild("_stats")
+        local id = getValue(stats, "id") or model.Name
+        if (unit.uuid and getValue(stats, "uuid") == unit.uuid) or (unit.unitId and id == unit.unitId) then
+            local d = position and (model:GetPivot().Position - position).Magnitude or 0
+            if not distance or d < distance then nearest, distance = model, d end
+        end
+    end
+    if position and (not distance or distance > 3) then return nil end
+    return nearest
+end
+
+function Controller:_dispatch(action)
+    if self.actionAdapter then return self.actionAdapter(action) end
+    if action.kind == "place" then
+        return self:_invoke("spawn_unit", action.unit.uuid, action.cframe)
+    elseif action.kind == "upgrade" then
+        return self:_invoke("upgrade_unit_ingame", action.model)
+    elseif action.kind == "next" then
+        return self:_invoke("set_game_finished_vote", "next_story")
+    elseif action.kind == "replay" then
+        return self:_invoke("set_game_finished_vote", "replay")
+    elseif action.kind == "lobby" then
+        return self:_invoke("teleport_back_to_lobby")
+    end
+    return false, "Unsupported action"
+end
+
+function Controller:_automationStep()
+    local state = self:GetState()
+    if not self.running or state.map.isLobby or self.replay.running or self.recorder.recording then return end
+    local config = self.autoStory
+    if state.match.finished then
+        local kind = config.autoReturnLobby and "lobby" or config.autoReplay and "replay" or config.autoNext and "next"
+        if not kind or self.lastPostMatchAction == kind then return end
+        local result = self:_readResult()
+        if not result or (kind == "next" and result.outcome ~= "victory") then return end
+        -- Give the result handler time to read rewards before leaving.
+        if not self.lastWebhookResultKey or self.webhookBusy then return end
+        local ok, err = self:_dispatch({kind = kind})
+        if ok then self.lastPostMatchAction = kind else error(err or "Post-match action failed") end
+        return
+    end
+    if state.match.phase ~= "PLAYING" and state.match.phase ~= "STARTING" then return end
+    local equipped = self:GetEquippedUnits()
+    if config.autoPlace then
+        for _, slot in ipairs(config.placeSlots) do
+            if not self.running then return end
+            local unit, marker = equipped[slot], self.placementMarkers[slot]
+            if unit and unit.equipped and not unit.locked and marker then
+                local cf = CFrame.new(table.unpack(marker.cframe))
+                if not self:_matchingModel(unit, cf.Position) and (not unit.cost or not state.player.money or state.player.money >= unit.cost) then
+                    local ok, err = self:_dispatch({kind = "place", unit = unit, cframe = cf, slot = slot})
+                    if not ok then error(err or "Placement failed") end
+                    return -- At most one placement per tick; wait for replication.
+                end
+            end
+        end
+    end
+    if config.autoUpgrade then
+        for _, model in ipairs(self:_ownModels()) do
+            if not self.running then return end
+            local stats = model:FindFirstChild("_stats")
+            local id, uuid = getValue(stats, "id") or model.Name, getValue(stats, "uuid")
+            for _, slot in ipairs(config.upgradeSlots) do
+                local unit = equipped[slot]
+                local level = tonumber(getValue(stats, "upgrade")) or 0
+                local maximum = tonumber(getValue(stats, "max_upgrade"))
+                if unit and unit.equipped and (uuid == unit.uuid or id == unit.unitId) and (not maximum or maximum <= 0 or level < maximum) then
+                    local ok, err = self:_dispatch({kind = "upgrade", model = model, slot = slot})
+                    if not ok then error(err or "Upgrade failed") end
+                    task.wait(0.25)
+                    break
+                end
+            end
+        end
+    end
+end
+
+function Controller:_executeReplay(payload)
+    local event = payload.event
+    if not event or (event.type ~= "PLACE_DETECTED" and event.type ~= "UPGRADE_DETECTED") then
+        -- UNIT_REMOVED can also mean death or cleanup: never infer a sale.
+        return true
+    end
+    local recorded = event.data and event.data.unit
+    if not recorded then return false, "Macro is missing unit data" end
+    local generation = self.replay.generation
+    local deadline = os.clock() + 60
+    local model = self.replayUnits[recorded.uuid]
+    local cf = recorded.cframe and CFrame.new(table.unpack(recorded.cframe))
+    if not cf then return false, "Macro is missing placement coordinates" end
+    local lastError = "Action was not confirmed by game state"
+    local nextAttempt = 0
+    while self.running and self.replay.running and self.replay.generation == generation and os.clock() < deadline do
+        local state = self:GetState()
+        if state.match.finished then return false, "Match ended during replay" end
+        if state.match.phase == "PLAYING" or state.match.phase == "STARTING" then
+            if not model or not model.Parent then model = self:_matchingModel(recorded, cf.Position) end
+            if event.type == "PLACE_DETECTED" and model then
+                self.replayUnits[recorded.uuid] = model
+                return true
+            end
+            if event.type == "UPGRADE_DETECTED" and model then
+                local current = tonumber(getValue(model:FindFirstChild("_stats"), "upgrade")) or 0
+                if current >= (tonumber(event.data.to) or tonumber(recorded.upgrade) or 0) then return true end
+            end
+            if os.clock() >= nextAttempt then
+                nextAttempt = os.clock() + 1
+                local action
+                if event.type == "PLACE_DETECTED" then
+                    local candidates = {}
+                    for _, unit in ipairs(self:GetEquippedUnits()) do
+                        if unit.equipped and not unit.locked then
+                            if unit.uuid == recorded.uuid then candidates = {unit}; break end
+                            if unit.unitId == recorded.unitId then table.insert(candidates, unit) end
+                        end
+                    end
+                    if #candidates ~= 1 then return false, "Recorded unit is missing or ambiguous in equipped slots" end
+                    local unit = candidates[1]
+                    if not unit.cost or not state.player.money or state.player.money >= unit.cost then
+                        action = {kind = "place", unit = unit, cframe = cf, slot = unit.slot, event = event}
+                    end
+                elseif model then
+                    action = {kind = "upgrade", model = model, event = event}
+                end
+                if action then
+                    local ok, err = self:_dispatch(action)
+                    if not ok then lastError = tostring(err or lastError) end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+    return false, self.replay.generation ~= generation and "Replay cancelled" or lastError
+end
+
 function Controller:SetActionAdapter(callback)
     assert(callback == nil or type(callback) == "function", "action adapter must be a function or nil")
     self.actionAdapter = callback
@@ -1913,11 +2124,14 @@ function Controller:StartSelectedMacroReplay()
         return false, "wrong level"
     end
 
-    return self.replay:start(macro, function(event, index, total, finished)
+    if self.recorder.recording then return false, "stop recording before replay" end
+    self.replayUnits = {}
+    return self.replay:start(macro, function(event, index, total, finished, replayError)
         if finished then
             self.tracker.events:emit("macroReplayFinished", {
                 macro = macro.name,
                 total = total,
+                error = replayError,
             })
             return
         end
@@ -1951,9 +2165,7 @@ function Controller:StartSelectedMacroReplay()
 
         self.tracker.events:emit("macroReplayEvent", payload)
 
-        if self.actionAdapter then
-            pcall(self.actionAdapter, deepCopy(payload))
-        end
+        return self:_executeReplay(payload)
     end)
 end
 
@@ -2008,6 +2220,7 @@ function Controller:SetWebhookConfig(config)
         end
     end
 
+    self.tracker.events:emit("webhookConfigChanged", {})
     return deepCopy(self.webhook)
 end
 
@@ -2016,6 +2229,7 @@ function Controller:GetWebhookConfig()
 end
 
 function Controller:StartRecording(name)
+    if self.replay.running then return false, "stop replay before recording" end
     return self.recorder:start(name)
 end
 
@@ -2024,6 +2238,7 @@ function Controller:StopRecording()
 
     if ok and macro then
         local id, stored = self.macros:add(macro)
+        self.tracker.events:emit("macrosChanged", {})
         return true, stored, id
     end
 
@@ -2051,6 +2266,7 @@ end
 function Controller:ImportMacro(json, overrideName)
     local id, macro = self.macros:importJson(json, overrideName)
     self.importedMacro = macro
+    self.tracker.events:emit("macrosChanged", {})
     return deepCopy(macro), id
 end
 
@@ -2080,11 +2296,15 @@ function Controller:SelectMacro(id)
 end
 
 function Controller:RenameMacro(id, newName)
-    return self.macros:rename(id, newName)
+    local ok, err = self.macros:rename(id, newName)
+    if ok then self.tracker.events:emit("macrosChanged", {}) end
+    return ok, err
 end
 
 function Controller:DeleteMacro(id)
-    return self.macros:remove(id)
+    local ok, err = self.macros:remove(id)
+    if ok then self.tracker.events:emit("macrosChanged", {}) end
+    return ok, err
 end
 
 function Controller:ClearMacros()
@@ -2345,16 +2565,25 @@ function Controller:_postWebhook(payload)
         return false, "webhook url missing"
     end
 
-    local response = HttpService:RequestAsync({
+    local env = (getgenv and getgenv()) or _G
+    local requestFn = env.request or env.http_request or (env.syn and env.syn.request)
+    local requestOptions = {
         Url = self.webhook.url,
         Method = "POST",
         Headers = {
             ["Content-Type"] = "application/json",
         },
         Body = HttpService:JSONEncode(payload),
-    })
+    }
 
-    return response.Success == true, response
+    local response
+    if type(requestFn) == "function" then
+        response = requestFn(requestOptions)
+    else
+        response = HttpService:RequestAsync(requestOptions)
+    end
+    local status = tonumber(response and response.StatusCode)
+    return response ~= nil and (response.Success == true or (status ~= nil and status >= 200 and status < 300)), response
 end
 
 function Controller:SendResultWebhook(result)
@@ -2375,9 +2604,11 @@ function Controller:SendResultWebhook(result)
 end
 
 function Controller:_handleFinishedMatch()
+    local generation = self.generation
     local result
 
     for _ = 1, 20 do
+        if not self.running or self.generation ~= generation then return false, "stopped" end
         result = self:_readResult()
 
         if result then
@@ -2410,7 +2641,12 @@ function Controller:_handleFinishedMatch()
     self.lastWebhookResultKey = resultKey
 
     if self.webhook.enabled then
-        return self:SendResultWebhook(result)
+        self.webhookBusy = true
+        local callOk, ok, err = pcall(self.SendResultWebhook, self, result)
+        self.webhookBusy = false
+        if not callOk then ok, err = false, ok end
+        if not ok then self.tracker.events:emit("actionError", {message = "Webhook failed: " .. tostring(err)}) end
+        return ok, err
     end
 
     return true, result
