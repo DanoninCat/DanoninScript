@@ -51,7 +51,8 @@ class RuntimeTests(unittest.TestCase):
             app.tracker.state.map.isLobby=false
             app.tracker.state.map.mapLoaded=true
             app.tracker.state.match.serverReady=true
-            app.tracker.state.match.started=false
+            app.tracker.state.match.started=true -- may already be true before the first wave
+            app.tracker.state.match.wavesStarted=false
             app.tracker.state.match.finished=false
             app.tracker.state.match.votingFinished=false
             app.tracker.state.match.voteCount=1 -- another player may already be ready
