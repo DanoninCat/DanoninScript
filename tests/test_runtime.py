@@ -45,42 +45,51 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(ok, str(path)+': '+str(err))
 
 
-    def test_auto_ready_rearms_for_same_server_round(self):
+    def test_auto_ready_rearms_from_visible_vote_gui(self):
         self.lua.execute('''
             local app=Core.new(); app.running=true
             app.tracker.state.map.isLobby=false
-            app.tracker.state.map.mapLoaded=true
-            app.tracker.state.match.serverReady=true
-            app.tracker.state.match.started=true
-            app.tracker.state.match.wavesStarted=false
             app.tracker.state.match.finished=false
-            app.tracker.state.match.votingFinished=false
-            app.tracker.state.match.voteCount=1 -- another player may already be ready
+            local guiVisible=true
+            local guiComplete=false
+            function app:_readReadyUI()
+                if not guiVisible then return nil end
+                return {visible=true, votes=guiComplete and 1 or 0, required=1, complete=guiComplete}
+            end
             local calls=0
             app:SetActionAdapter(function(a) assert(a.kind=="ready"); calls=calls+1; return true end)
             app:SetAutoStoryConfig({autoReady=true})
 
-            clock=3
+            clock=2
             app:_automationStep()
             assert(calls==1 and app.readySubmitted and app.readyWindowActive)
             app:_automationStep()
             assert(calls==1)
 
-            -- Current vote closes and waves run in the same server.
-            app.tracker.state.match.votingFinished=true
-            app.tracker.state.match.wavesStarted=true
+            -- The Ready GUI disappears while the round is running.
+            guiVisible=false
+            clock=4
+            app:_automationStep()
+            assert(not app.readyWindowActive and not app.readySubmitted)
+
+            -- Replay/Next shows a fresh Ready GUI in the same server while
+            -- GameFinished may still be stale from the previous result.
+            app.tracker.state.match.finished=true
+            guiVisible=true
+            guiComplete=false
             clock=6
             app:_automationStep()
-            assert(not app.readyWindowActive)
-
-            -- Replay/Next returns to Ready without a teleport. GameFinished can
-            -- still be stale here; the new vote window must win over it.
-            app.tracker.state.match.finished=true
-            app.tracker.state.match.votingFinished=false
-            app.tracker.state.match.wavesStarted=false
-            clock=9
-            app:_automationStep()
             assert(calls==2 and app.readySubmitted and app.readyWindowActive)
+
+            -- A completed 1/1 Ready screen must not submit again.
+            guiVisible=false
+            clock=8
+            app:_automationStep()
+            guiVisible=true
+            guiComplete=true
+            clock=10
+            app:_automationStep()
+            assert(calls==2 and app.readySubmitted)
         ''')
 
     def test_post_match_exclusivity(self):
