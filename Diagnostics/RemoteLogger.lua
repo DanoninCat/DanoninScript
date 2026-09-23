@@ -53,9 +53,13 @@ local state = {
     incomingConnections = {},
     incomingRootConnection = nil,
     captureIncoming = true,
-    endpointsOnly = true,
+    endpointsOnly = false,
     filePath = nil,
     api = nil,
+    directHooks = {
+        fireServer = false,
+        invokeServer = false,
+    },
 }
 
 ENV[STATE_KEY] = state
@@ -205,7 +209,9 @@ local function captureContext()
     if playerGui then
         local voteGui = playerGui:FindFirstChild("VoteStart")
         local voteHolder = voteGui and voteGui:FindFirstChild("Holder")
-        result.readyVisible = voteHolder
+        result.readyVisible = voteGui
+            and (not voteGui:IsA("ScreenGui") or voteGui.Enabled ~= false)
+            and voteHolder
             and voteHolder:IsA("GuiObject")
             and voteHolder.Visible
             or false
@@ -215,7 +221,9 @@ local function captureContext()
 
         local resultsGui = playerGui:FindFirstChild("ResultsUI")
         local resultsHolder = resultsGui and resultsGui:FindFirstChild("Holder")
-        result.resultsVisible = resultsHolder
+        result.resultsVisible = resultsGui
+            and (not resultsGui:IsA("ScreenGui") or resultsGui.Enabled ~= false)
+            and resultsHolder
             and resultsHolder:IsA("GuiObject")
             and resultsHolder.Visible
             or false
@@ -300,6 +308,47 @@ local function shouldLogRemote(remote)
 
     local endpoints = ReplicatedStorage:FindFirstChild("endpoints")
     return endpoints ~= nil and remote:IsDescendantOf(endpoints)
+end
+
+local recentOutgoing = {}
+
+local function outgoingFingerprint(remote, method, args)
+    local parts = {
+        safeFullName(remote),
+        tostring(method),
+        tostring(args and args.n or 0),
+    }
+
+    if args then
+        for index = 1, math.min(args.n, 6) do
+            table.insert(parts, serialize(args[index], 0, {}))
+        end
+    end
+
+    return table.concat(parts, "|")
+end
+
+local function emitOutgoingOnce(remote, method, args, returns, caller)
+    local key = outgoingFingerprint(remote, method, args)
+    local now = os.clock()
+    local previous = recentOutgoing[key]
+
+    if previous and now - previous < 0.075 then
+        return
+    end
+
+    recentOutgoing[key] = now
+
+    -- Keep the dedupe table bounded during long sessions.
+    if state.sequence % 100 == 0 then
+        for fingerprint, seenAt in pairs(recentOutgoing) do
+            if now - seenAt > 2 then
+                recentOutgoing[fingerprint] = nil
+            end
+        end
+    end
+
+    emit("OUT", remote, method, args, returns, caller)
 end
 
 local function emit(direction, remote, method, args, returns, caller)
@@ -406,7 +455,7 @@ local function setupOutputFile()
         "Started: " .. os.date("%Y-%m-%d %H:%M:%S"),
         "PlaceId: " .. tostring(game.PlaceId),
         "GameId: " .. tostring(game.GameId),
-        "Mode: endpoints only; outgoing + incoming RemoteEvents",
+        "Mode: discovery; all outgoing remotes + incoming server_to_client RemoteEvents",
         string.rep("=", 72),
         "",
     }, "\n")
@@ -478,6 +527,10 @@ function API:Status()
         filePath = state.filePath,
         captureIncoming = state.captureIncoming,
         endpointsOnly = state.endpointsOnly,
+        directHooks = {
+            fireServer = state.directHooks.fireServer,
+            invokeServer = state.directHooks.invokeServer,
+        },
     }
 end
 
@@ -523,14 +576,14 @@ if not ENV[HOOK_KEY] then
 
         if method == "FireServer" then
             task.defer(function()
-                emit("OUT", self, method, args, nil, caller)
+                emitOutgoingOnce(self, method, args, nil, caller)
             end)
             return oldNamecall(self, ...)
         end
 
         local returns = table.pack(oldNamecall(self, ...))
         task.defer(function()
-            emit("OUT", self, method, args, returns, caller)
+            emitOutgoingOnce(self, method, args, returns, caller)
         end)
         return unpackFn(returns, 1, returns.n)
     end
@@ -543,8 +596,74 @@ if not ENV[HOOK_KEY] then
     ENV[HOOK_KEY] = true
 end
 
+
+-- Some game modules call RemoteEvent.FireServer(remote, ...) or
+-- RemoteFunction.InvokeServer(remote, ...) directly. Those calls can bypass
+-- __namecall in some executors, so install class-method hooks as a fallback.
+local hookfunctionFn = globalFunction("hookfunction")
+
+if type(hookfunctionFn) == "function" then
+    local function installDirectHook(className, methodName)
+        local probe = Instance.new(className)
+        local target = probe[methodName]
+
+        if type(target) ~= "function" then
+            probe:Destroy()
+            return false, "method unavailable"
+        end
+
+        local oldMethod
+        local wrapped = function(self, ...)
+            local args = table.pack(...)
+
+            if not shouldLogRemote(self) then
+                return oldMethod(self, ...)
+            end
+
+            local caller = callerName()
+
+            if methodName == "FireServer" then
+                task.defer(function()
+                    emitOutgoingOnce(self, methodName, args, nil, caller)
+                end)
+                return oldMethod(self, ...)
+            end
+
+            local returns = table.pack(oldMethod(self, ...))
+            task.defer(function()
+                emitOutgoingOnce(self, methodName, args, returns, caller)
+            end)
+            return unpackFn(returns, 1, returns.n)
+        end
+
+        if newcclosureFn then
+            wrapped = newcclosureFn(wrapped)
+        end
+
+        local ok, original = pcall(hookfunctionFn, target, wrapped)
+        probe:Destroy()
+
+        if not ok or type(original) ~= "function" then
+            return false, tostring(original)
+        end
+
+        oldMethod = original
+        return true
+    end
+
+    local okFire = installDirectHook("RemoteEvent", "FireServer")
+    state.directHooks.fireServer = okFire == true
+
+    local okInvoke = installDirectHook("RemoteFunction", "InvokeServer")
+    state.directHooks.invokeServer = okInvoke == true
+end
+
 print("[RemoteLogger] Lightweight logger started.")
 print("[RemoteLogger] Output:", state.filePath or "memory/clipboard only")
+print("[RemoteLogger] Outgoing capture: __namecall=true"
+    .. " | FireServer hook=" .. tostring(state.directHooks.fireServer)
+    .. " | InvokeServer hook=" .. tostring(state.directHooks.invokeServer))
+print("[RemoteLogger] Discovery mode: ALL outgoing RemoteEvent/RemoteFunction calls are logged.")
 print("[RemoteLogger] Commands:")
 print("  getgenv().__CAT_EMPIRE_REMOTE_LOGGER_STATE.api:Status()")
 print("  getgenv().__CAT_EMPIRE_REMOTE_LOGGER_STATE.api:Export()")
