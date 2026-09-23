@@ -54,15 +54,15 @@ class RuntimeTests(unittest.TestCase):
             app.tracker.state.match.started=false
             app.tracker.state.match.finished=false
             app.tracker.state.match.votingFinished=false
-            app.tracker.state.match.voteCount=0
+            app.tracker.state.match.voteCount=1 -- another player may already be ready
             local calls=0
             app:SetActionAdapter(function(a) assert(a.kind=="ready"); calls=calls+1; return true end)
             app:SetAutoStoryConfig({autoReady=true})
             clock=3
-            app:_automationStep(); assert(calls==1)
+            app:_automationStep(); assert(calls==1 and app.readySubmitted)
             app:_automationStep(); assert(calls==1)
             clock=6
-            app.tracker.state.match.voteCount=1
+            app.tracker.state.match.voteCount=2
             app:_automationStep(); assert(calls==1)
         ''')
 
