@@ -4,6 +4,7 @@
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
@@ -86,6 +87,165 @@ local function parseHealth(text)
     end
 
     return tonumber((a:gsub(",", ""))), tonumber((b:gsub(",", "")))
+end
+
+local UNIT_DISPLAY_NAMES = {}
+local UNIT_NAMES_SCANNED = false
+
+local function scanUnitDisplayNames()
+    if UNIT_NAMES_SCANNED then
+        return
+    end
+
+    UNIT_NAMES_SCANNED = true
+
+    local srcRoot = ReplicatedStorage:FindFirstChild("src")
+    local dataRoot = srcRoot and srcRoot:FindFirstChild("Data")
+    local unitsRoot = dataRoot and dataRoot:FindFirstChild("Units")
+
+    if not unitsRoot then
+        return
+    end
+
+    for _, module in ipairs(unitsRoot:GetDescendants()) do
+        if module:IsA("ModuleScript") then
+            local ok, value = pcall(require, module)
+
+            if ok and type(value) == "table" then
+                for key, unit in pairs(value) do
+                    if type(unit) == "table" then
+                        local id = type(unit.id) == "string" and unit.id
+                            or (type(key) == "string" and key or nil)
+
+                        local displayName = unit.name
+                            or unit.display_name
+                            or unit.displayName
+
+                        if id and type(displayName) == "string" and displayName ~= "" then
+                            UNIT_DISPLAY_NAMES[id] = displayName
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function getUnitDisplayName(unitId)
+    if type(unitId) ~= "string" or unitId == "" then
+        return nil
+    end
+
+    if not UNIT_NAMES_SCANNED then
+        scanUnitDisplayNames()
+    end
+
+    return UNIT_DISPLAY_NAMES[unitId]
+end
+
+local function readText(instance)
+    if instance and (
+        instance:IsA("TextLabel")
+        or instance:IsA("TextButton")
+        or instance:IsA("TextBox")
+    ) then
+        return instance.Text
+    end
+
+    return nil
+end
+
+local function findPath(root, ...)
+    local current = root
+
+    for index = 1, select("#", ...) do
+        if not current then
+            return nil
+        end
+
+        current = current:FindFirstChild(select(index, ...))
+    end
+
+    return current
+end
+
+local function normalizeRewardName(name)
+    name = tostring(name or "Reward")
+    name = name:gsub("Reward$", "")
+    name = name:gsub("_", " ")
+    name = name:gsub("(%l)(%u)", "%1 %2")
+
+    if name == "Gem" then
+        return "Gems"
+    elseif name == "Gold" then
+        return "Gold"
+    elseif name == "XP" then
+        return "EXP"
+    end
+
+    return name
+end
+
+local function parsePlayerProgress(text)
+    if type(text) ~= "string" then
+        return nil
+    end
+
+    local level, current, required = text:match(
+        "Level%s+(%d+)%s*%[%s*([%d,]+)%s*/%s*([%d,]+)%s*%]"
+    )
+
+    if not level then
+        return nil
+    end
+
+    return {
+        level = tonumber(level),
+        current = tonumber((current:gsub(",", ""))),
+        required = tonumber((required:gsub(",", ""))),
+    }
+end
+
+local WEBHOOK_EMOJIS = {
+    victory = "<:victory:1529957193569407064>",
+    defeat = "<:defeat:1529975410928914486>",
+    arrow = "<:arrow:1539718021407440967>",
+    clock = "<:clock:1531389528021925918>",
+    person = "<:person:1529967343193817089>",
+    playerExp = "<:player_exp:1531391369178910720>",
+    unitExp = "<:unit_exp:1531391443975930036>",
+    rewards = "<:Rewards:1531389702756634654>",
+    gold = "<:Gold:1321451928864952361>",
+    gems = "<:Gems:1321452136508166277>",
+}
+
+local WEBHOOK_REWARD_EMOJIS = {
+    gold = WEBHOOK_EMOJIS.gold,
+    gems = WEBHOOK_EMOJIS.gems,
+    gem = WEBHOOK_EMOJIS.gems,
+}
+
+local function rewardEmoji(name)
+    local key = tostring(name or ""):lower():gsub("[^%w]", "")
+    return WEBHOOK_REWARD_EMOJIS[key]
+end
+
+local function detectMode(level)
+    level = tostring(level or ""):lower()
+
+    if level:find("infinite", 1, true) then
+        return "Infinite"
+    elseif level:find("legend", 1, true) then
+        return "Legend"
+    elseif level:find("raid", 1, true) then
+        return "Raid"
+    elseif level:find("portal", 1, true) then
+        return "Portal"
+    elseif level:find("tournament", 1, true) then
+        return "Tournament"
+    end
+
+    return "Story"
 end
 
 local function getValue(parent, name)
@@ -878,26 +1038,31 @@ local MapProfiles = {}
 MapProfiles.KNOWN = {
     marineford = {
         displayName = "Marineford",
+        thumbnail = "https://i.imgur.com/gbeJ8KD.png",
         defaultLevel = "marineford_level_1",
         profileQuality = "complete",
     },
     aot = {
         displayName = "Walled City",
+        thumbnail = "https://i.imgur.com/sYQ7FLf.png",
         defaultLevel = "aot_level_1",
         profileQuality = "complete",
     },
     demonslayer = {
         displayName = "Snowy Town",
+        thumbnail = "https://i.imgur.com/XPLChYo.png",
         defaultLevel = "demonslayer_level_1",
         profileQuality = "partial_workspace_limit",
     },
     naruto = {
         displayName = "Sand Village",
+        thumbnail = "https://i.imgur.com/kcvbhpF.png",
         defaultLevel = "naruto_level_1",
         profileQuality = "complete",
     },
     namek = {
         displayName = "Namek",
+        thumbnail = "https://i.imgur.com/pDDDOGQ.png",
         defaultLevel = "namek_level_1",
         profileQuality = "complete",
     },
@@ -910,6 +1075,7 @@ function MapProfiles.resolve(area, level)
         area = area,
         level = level,
         displayName = known and known.displayName or area or "Unknown",
+        thumbnail = known and known.thumbnail or nil,
         profileQuality = known and known.profileQuality or "runtime_only",
         known = known ~= nil,
     }
@@ -1449,6 +1615,13 @@ function Controller.new(options)
         macros = MacroLibrary.new(),
         importedMacro = nil,
         webhookTransport = nil,
+        webhookBound = false,
+        webhookDisconnectors = {},
+        lastWebhookResultKey = nil,
+        session = {
+            wins = 0,
+            losses = 0,
+        },
         autoStory = {
             autoPlace = false,
             placeSlots = {},
@@ -1461,22 +1634,40 @@ function Controller.new(options)
         webhook = {
             enabled = false,
             url = "",
-            matchStart = true,
-            wave = false,
-            victory = true,
-            defeat = true,
         },
     }, Controller)
 end
 
 function Controller:Start()
-    return self.tracker:start()
+    local snapshot = self.tracker:start()
+
+    if not self.webhookBound then
+        self.webhookBound = true
+
+        table.insert(self.webhookDisconnectors, self.tracker:on("matchPhaseChanged", function(payload)
+            if payload.to == "PLAYING" then
+                self.lastWebhookResultKey = nil
+            elseif payload.to == "FINISHED" then
+                task.spawn(function()
+                    self:_handleFinishedMatch()
+                end)
+            end
+        end))
+    end
+
+    return snapshot
 end
 
 function Controller:Stop()
     if self.recorder.recording then
         self:StopRecording()
     end
+
+    for _, disconnect in ipairs(self.webhookDisconnectors) do
+        safe(disconnect)
+    end
+    table.clear(self.webhookDisconnectors)
+    self.webhookBound = false
 
     self.tracker:stop()
 end
@@ -1527,22 +1718,25 @@ function Controller:GetEquippedUnits()
                 entry.locked = locked.Visible == true
             end
 
-            local unitValue = slotFrame:FindFirstChild("unit")
-            if unitValue and unitValue:IsA("ObjectValue") and unitValue.Value then
-                entry.name = unitValue.Value.Name
-            else
-                local main = slotFrame:FindFirstChild("Main")
-                local view = main and main:FindFirstChild("View")
-                local worldModel = view and view:FindFirstChildOfClass("WorldModel")
+            local internalId
+            local main = slotFrame:FindFirstChild("Main")
+            local view = main and main:FindFirstChild("View")
+            local worldModel = view and view:FindFirstChildOfClass("WorldModel")
 
-                if worldModel then
-                    for _, model in ipairs(worldModel:GetChildren()) do
-                        if model:IsA("Model") then
-                            entry.name = model.Name
-                            break
-                        end
+            if worldModel then
+                for _, model in ipairs(worldModel:GetChildren()) do
+                    if model:IsA("Model") then
+                        internalId = model.Name
+                        break
                     end
                 end
+            end
+
+            if entry.equipped and internalId then
+                entry.name = getUnitDisplayName(internalId)
+                    or ("Unit " .. tostring(slot))
+            elseif not entry.equipped then
+                entry.name = "Empty"
             end
 
             local costFrame = slotFrame:FindFirstChild("Cost")
@@ -1703,38 +1897,324 @@ function Controller:SetWebhookTransport(callback)
     self.webhookTransport = callback
 end
 
-function Controller:BuildWebhookPayload(kind, extra)
+function Controller:_readResult()
+    if not LocalPlayer then
+        return nil, "player unavailable"
+    end
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local resultsUI = playerGui and playerGui:FindFirstChild("ResultsUI")
+    local holder = resultsUI and resultsUI:FindFirstChild("Holder")
+
+    if not holder then
+        return nil, "results unavailable"
+    end
+
+    local title = readText(holder:FindFirstChild("Title"))
+    local outcome
+
+    if title == "VICTORY" then
+        outcome = "victory"
+    elseif title == "DEFEAT" then
+        outcome = "defeat"
+    else
+        return nil, "result not ready"
+    end
+
+    local levelName = readText(holder:FindFirstChild("LevelName")) or "Act ?"
+    local difficulty = readText(holder:FindFirstChild("Difficulty")) or "Unknown"
+
+    local timerText = readText(findPath(holder, "Middle", "Timer")) or "0:00"
+    local duration = timerText:match("([%d]+:%d%d)$") or timerText
+
+    local progressText = readText(findPath(
+        playerGui,
+        "spawn_units",
+        "Lives",
+        "Main",
+        "Desc",
+        "Level"
+    ))
+
+    local progress = parsePlayerProgress(progressText) or {
+        level = 0,
+        current = 0,
+        required = 0,
+    }
+
+    local scrolling = findPath(holder, "LevelRewards", "ScrollingFrame")
+    local rewards = {}
+    local xpAmount = 0
+
+    if scrolling then
+        for _, child in ipairs(scrolling:GetChildren()) do
+            if child:IsA("Frame")
+                and child.Visible
+                and child.Name ~= "Configuration"
+            then
+                local amountLabel = findPath(child, "Main", "Amount")
+                local amountText = readText(amountLabel)
+                local amount = parseNumber(amountText)
+
+                if amount and amount > 0 then
+                    if child.Name == "XPReward" then
+                        xpAmount = amount
+                    else
+                        local rewardName = normalizeRewardName(
+                            child:GetAttribute("reward_name")
+                            or child:GetAttribute("resource")
+                            or child:GetAttribute("item_id")
+                            or child.Name
+                        )
+
+                        table.insert(rewards, {
+                            name = rewardName,
+                            amount = amount,
+                        })
+                    end
+                end
+            end
+        end
+    end
+
     local state = self.tracker:getSnapshot()
+    local mapProfile = MapProfiles.resolve(state.map.area, state.map.level)
 
     return {
-        kind = kind,
-        timestamp = os.time(),
-        map = deepCopy(state.map),
-        match = deepCopy(state.match),
+        outcome = outcome,
+        mode = detectMode(state.map.level),
+        map = mapProfile.displayName,
+        thumbnail = mapProfile.thumbnail,
+        act = levelName,
+        difficulty = difficulty,
+        duration = duration,
         player = {
-            name = state.player.name,
-            money = state.player.money,
-            baseLife = state.player.baseLife,
-            baseMaxLife = state.player.baseMaxLife,
+            username = LocalPlayer.Name,
+            level = progress.level,
+            currentExp = progress.current,
+            requiredExp = progress.required,
         },
-        counters = deepCopy(state.counters),
-        extra = deepCopy(extra or {}),
+        playerExp = xpAmount,
+        unitExp = xpAmount,
+        rewards = rewards,
+        timestamp = os.time(),
+        area = state.map.area,
+        level = state.map.level,
     }
 end
 
-function Controller:SendWebhook(kind, extra)
-    if not self.webhookTransport then
-        return false, "webhook transport not configured"
+function Controller:_formatSession()
+    local wins = self.session.wins
+    local losses = self.session.losses
+    local total = wins + losses
+    local rate = total > 0 and math.floor((wins / total) * 100 + 0.5) or 0
+
+    return string.format(
+        "%s %d W · %s %d L (%d%% WR)",
+        WEBHOOK_EMOJIS.victory,
+        wins,
+        WEBHOOK_EMOJIS.defeat,
+        losses,
+        rate
+    )
+end
+
+function Controller:BuildResultWebhook(result)
+    assert(type(result) == "table", "result must be a table")
+
+    local isWin = result.outcome == "victory"
+    local titleEmoji = isWin and WEBHOOK_EMOJIS.victory or WEBHOOK_EMOJIS.defeat
+    local titleText = isWin and "Victory" or "Loser"
+
+    local lines = {
+        string.format("## %s %s", titleEmoji, titleText),
+        string.format("-# %s", tostring(result.mode or "Story")),
+        string.format(
+            "⠀⠀⠀**%s · %s · %s**",
+            tostring(result.map or "Unknown"),
+            tostring(result.act or "Act ?"),
+            tostring(result.difficulty or "Unknown")
+        ),
+        "-# Run",
+        string.format(
+            "⠀⠀⠀%s **Duration** %s %s",
+            WEBHOOK_EMOJIS.arrow,
+            WEBHOOK_EMOJIS.clock,
+            tostring(result.duration or "0:00")
+        ),
+        string.format(
+            "⠀⠀⠀%s **Session** %s",
+            WEBHOOK_EMOJIS.arrow,
+            self:_formatSession()
+        ),
+        "-# Player",
+        string.format(
+            "⠀⠀⠀%s %s **Username** ||%s||",
+            WEBHOOK_EMOJIS.arrow,
+            WEBHOOK_EMOJIS.person,
+            tostring(result.player and result.player.username or "Unknown")
+        ),
+        string.format(
+            "⠀⠀⠀%s %s **Level** %d (%s / %s)",
+            WEBHOOK_EMOJIS.arrow,
+            WEBHOOK_EMOJIS.playerExp,
+            tonumber(result.player and result.player.level) or 0,
+            tostring(result.player and result.player.currentExp or 0),
+            tostring(result.player and result.player.requiredExp or 0)
+        ),
+        string.format("-# Rewards %s", WEBHOOK_EMOJIS.rewards),
+    }
+
+    if tonumber(result.playerExp) and result.playerExp > 0 then
+        table.insert(lines, string.format(
+            "⠀⠀⠀%s %s **Player EXP** ×%s",
+            WEBHOOK_EMOJIS.arrow,
+            WEBHOOK_EMOJIS.playerExp,
+            tostring(result.playerExp)
+        ))
     end
 
-    local payload = self:BuildWebhookPayload(kind, extra)
-    local ok, result = pcall(self.webhookTransport, payload)
+    if tonumber(result.unitExp) and result.unitExp > 0 then
+        table.insert(lines, string.format(
+            "⠀⠀⠀%s %s **Unit EXP** ×%s",
+            WEBHOOK_EMOJIS.arrow,
+            WEBHOOK_EMOJIS.unitExp,
+            tostring(result.unitExp)
+        ))
+    end
+
+    for _, reward in ipairs(result.rewards or {}) do
+        local emoji = rewardEmoji(reward.name)
+        local prefix = WEBHOOK_EMOJIS.arrow
+
+        if emoji then
+            table.insert(lines, string.format(
+                "⠀⠀⠀%s %s **%s** ×%s",
+                prefix,
+                emoji,
+                tostring(reward.name),
+                tostring(reward.amount)
+            ))
+        else
+            table.insert(lines, string.format(
+                "⠀⠀⠀%s **%s** ×%s",
+                prefix,
+                tostring(reward.name),
+                tostring(reward.amount)
+            ))
+        end
+    end
+
+    table.insert(lines, string.format(
+        "-# Re: Adventures · <t:%d:R>",
+        tonumber(result.timestamp) or os.time()
+    ))
+
+    return {
+        embeds = {
+            {
+                description = table.concat(lines, "\n"),
+                thumbnail = result.thumbnail and {
+                    url = result.thumbnail,
+                } or nil,
+            },
+        },
+    }
+end
+
+function Controller:_postWebhook(payload)
+    if self.webhookTransport then
+        return self.webhookTransport(self.webhook.url, payload)
+    end
+
+    if self.webhook.url == "" then
+        return false, "webhook url missing"
+    end
+
+    local response = HttpService:RequestAsync({
+        Url = self.webhook.url,
+        Method = "POST",
+        Headers = {
+            ["Content-Type"] = "application/json",
+        },
+        Body = HttpService:JSONEncode(payload),
+    })
+
+    return response.Success == true, response
+end
+
+function Controller:SendResultWebhook(result)
+    if not self.webhook.enabled then
+        return false, "webhook disabled"
+    end
+
+    local payload = self:BuildResultWebhook(result)
+    local ok, success, response = pcall(function()
+        return self:_postWebhook(payload)
+    end)
 
     if not ok then
-        return false, result
+        return false, success
+    end
+
+    return success == true, response
+end
+
+function Controller:_handleFinishedMatch()
+    local result
+
+    for _ = 1, 20 do
+        result = self:_readResult()
+
+        if result then
+            break
+        end
+
+        task.wait(0.5)
+    end
+
+    if not result then
+        return false, "result unavailable"
+    end
+
+    local resultKey = table.concat({
+        tostring(result.outcome),
+        tostring(result.level),
+        tostring(result.duration),
+        tostring(result.timestamp),
+    }, "|")
+
+    if self.lastWebhookResultKey == resultKey then
+        return false, "already sent"
+    end
+
+    if result.outcome == "victory" then
+        self.session.wins = self.session.wins + 1
+    else
+        self.session.losses = self.session.losses + 1
+    end
+
+    self.lastWebhookResultKey = resultKey
+
+    if self.webhook.enabled then
+        return self:SendResultWebhook(result)
     end
 
     return true, result
+end
+
+function Controller:GetWebhookPreview()
+    local result, err = self:_readResult()
+
+    if not result then
+        return nil, err
+    end
+
+    return self:BuildResultWebhook(result)
+end
+
+function Controller:GetWebhookSession()
+    return deepCopy(self.session)
 end
 
 Core.StateTracker = StateTracker
