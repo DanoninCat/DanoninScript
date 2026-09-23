@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.2.2"
+Core.VERSION = "2.2.3"
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -218,7 +218,7 @@ end
 local WEBHOOK_EMOJIS = {
     victory = "<:victory:1529957193569407064>",
     defeat = "<:defeat:1529975410928914486>",
-    arrow = "<:arrow:1539718021407440967>",
+    arrow = "<:arrow:1529932375339827271>",
     clock = "<:clock:1531389528021925918>",
     person = "<:person:1529967343193817089>",
     playerExp = "<:player_exp:1531391369178910720>",
@@ -226,12 +226,14 @@ local WEBHOOK_EMOJIS = {
     rewards = "<:Rewards:1531389702756634654>",
     gold = "<:Gold:1321451928864952361>",
     gems = "<:Gems:1321452136508166277>",
+    expeditionCoin = "<:expedition_coin:1531389815147462848>",
 }
 
 local WEBHOOK_REWARD_EMOJIS = {
     gold = WEBHOOK_EMOJIS.gold,
     gems = WEBHOOK_EMOJIS.gems,
     gem = WEBHOOK_EMOJIS.gems,
+    expeditioncoin = WEBHOOK_EMOJIS.expeditionCoin,
 }
 
 local function rewardEmoji(name)
@@ -252,6 +254,8 @@ local function detectMode(level)
         return "Portal"
     elseif level:find("tournament", 1, true) then
         return "Tournament"
+    elseif level:find("expedition", 1, true) then
+        return "Expedition"
     end
 
     return "Story"
@@ -2491,13 +2495,32 @@ function Controller:_readResult()
     local resultsUI = playerGui and playerGui:FindFirstChild("ResultsUI")
     local holder = resultsUI and resultsUI:FindFirstChild("Holder")
 
-    if not holder then
+    if not resultsUI or not holder then
         return nil, "results unavailable"
     end
 
-    local title = readText(holder:FindFirstChild("Title"))
-    local outcome
+    -- ResultsUI keeps the previous Title text cached while Holder is hidden.
+    -- Never classify a match from that stale text: only the visible results
+    -- window is authoritative for Victory/Defeat.
+    if resultsUI:IsA("ScreenGui") and resultsUI.Enabled == false then
+        return nil, "results hidden"
+    end
 
+    if holder:IsA("GuiObject") and holder.Visible == false then
+        return nil, "results hidden"
+    end
+
+    local titleLabel = holder:FindFirstChild("Title")
+    if titleLabel and titleLabel:IsA("GuiObject") and titleLabel.Visible == false then
+        return nil, "result title hidden"
+    end
+
+    local title = readText(titleLabel)
+    title = type(title) == "string"
+        and title:match("^%s*(.-)%s*$"):upper()
+        or nil
+
+    local outcome
     if title == "VICTORY" then
         outcome = "victory"
     elseif title == "DEFEAT" then
@@ -2608,18 +2631,33 @@ function Controller:BuildResultWebhook(result)
     assert(type(result) == "table", "result must be a table")
 
     local isWin = result.outcome == "victory"
-    local titleEmoji = isWin and WEBHOOK_EMOJIS.victory or WEBHOOK_EMOJIS.defeat
-    local titleText = isWin and "Victory" or "Loser"
+    local isLoss = result.outcome == "defeat"
+    assert(isWin or isLoss, "unsupported result outcome")
 
-    local lines = {
-        string.format("## %s %s", titleEmoji, titleText),
-        string.format("-# %s", tostring(result.mode or "Story")),
-        string.format(
+    local titleEmoji = isWin and WEBHOOK_EMOJIS.victory or WEBHOOK_EMOJIS.defeat
+    local titleText = isWin and "Victory" or "Defeat"
+    local mode = tostring(result.mode or "Story")
+
+    local locationLine
+    if mode == "Expedition" then
+        locationLine = string.format(
+            "⠀⠀⠀**%s · %s**",
+            tostring(result.map or "Unknown"),
+            tostring(result.difficulty or "Unknown")
+        )
+    else
+        locationLine = string.format(
             "⠀⠀⠀**%s · %s · %s**",
             tostring(result.map or "Unknown"),
             tostring(result.act or "Act ?"),
             tostring(result.difficulty or "Unknown")
-        ),
+        )
+    end
+
+    local lines = {
+        string.format("## %s %s", titleEmoji, titleText),
+        string.format("-# %s", mode),
+        locationLine,
         "-# Run",
         string.format(
             "⠀⠀⠀%s **Duration** %s %s",
@@ -2690,8 +2728,10 @@ function Controller:BuildResultWebhook(result)
         end
     end
 
+    local footerName = mode == "Expedition" and "Anime Expeditions" or "Re: Adventures"
     table.insert(lines, string.format(
-        "-# Re: Adventures · <t:%d:R>",
+        "-# %s · <t:%d:R>",
+        footerName,
         tonumber(result.timestamp) or os.time()
     ))
 
@@ -2758,6 +2798,10 @@ function Controller:_handleFinishedMatch()
     local generation = self.generation
     local result
 
+    -- game_finished can arrive before ResultsUI replaces the previous cached
+    -- title. Let the visible result frame settle before the first read.
+    task.wait(0.35)
+
     for _ = 1, 20 do
         if not self.running or self.generation ~= generation then return false, "stopped" end
         result = self:_readResult()
@@ -2785,8 +2829,10 @@ function Controller:_handleFinishedMatch()
 
     if result.outcome == "victory" then
         self.session.wins = self.session.wins + 1
-    else
+    elseif result.outcome == "defeat" then
         self.session.losses = self.session.losses + 1
+    else
+        return false, "unsupported result outcome"
     end
 
     self.lastWebhookResultKey = resultKey
