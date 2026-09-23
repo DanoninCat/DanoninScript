@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.1.2"
+Core.VERSION = "2.2.0"
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -1757,6 +1757,7 @@ function Controller.new(options)
         generation = 0,
         replayUnits = {},
         lastPostMatchAction = nil,
+        lastReadyAttempt = 0,
         importedMacro = nil,
         webhookTransport = nil,
         webhookBound = false,
@@ -1767,6 +1768,7 @@ function Controller.new(options)
             losses = 0,
         },
         autoStory = {
+            autoReady = false,
             autoPlace = false,
             placeSlots = {},
             autoUpgrade = false,
@@ -1795,7 +1797,9 @@ function Controller:Start()
             if payload.to == "PLAYING" then
                 self.lastWebhookResultKey = nil
                 self.lastPostMatchAction = nil
+                self.lastReadyAttempt = 0
             elseif payload.to == "FINISHED" then
+                self.lastReadyAttempt = 0
                 task.spawn(function()
                     self:_handleFinishedMatch()
                 end)
@@ -2016,7 +2020,9 @@ end
 
 function Controller:_dispatch(action)
     if self.actionAdapter then return self.actionAdapter(action) end
-    if action.kind == "place" then
+    if action.kind == "ready" then
+        return self:_invoke("vote_start")
+    elseif action.kind == "place" then
         return self:_invoke("spawn_unit", action.unit.uuid, action.cframe)
     elseif action.kind == "upgrade" then
         return self:_invoke("upgrade_unit_ingame", action.model)
@@ -2032,8 +2038,31 @@ end
 
 function Controller:_automationStep()
     local state = self.tracker.state
-    if not self.running or state.map.isLobby or self.replay.running or self.recorder.recording then return end
+    if not self.running or state.map.isLobby then return end
     local config = self.autoStory
+
+    -- Ready is independent from placement/upgrade and may run while a macro
+    -- recorder is armed before the first wave. Vote only when the server/map
+    -- are ready and this client has not already contributed a start vote.
+    if config.autoReady
+        and not state.match.finished
+        and not state.match.started
+        and not state.match.votingFinished
+        and (tonumber(state.match.voteCount) or 0) <= 0
+        and state.match.serverReady == true
+        and state.map.mapLoaded ~= false
+    then
+        local now = os.clock()
+        if now - (self.lastReadyAttempt or 0) >= 2.5 then
+            self.lastReadyAttempt = now
+            local ok, err = self:_dispatch({kind = "ready"})
+            if not ok then error(err or "Auto Ready failed") end
+            return
+        end
+    end
+
+    if self.replay.running or self.recorder.recording then return end
+
     if state.match.finished then
         local kind = config.autoReturnLobby and "lobby" or config.autoReplay and "replay" or config.autoNext and "next"
         if not kind or self.lastPostMatchAction == kind then return end
