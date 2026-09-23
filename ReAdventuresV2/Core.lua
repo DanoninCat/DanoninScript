@@ -1600,6 +1600,94 @@ function MacroLibrary:exportJson(id)
     return Serializer.encode(macro)
 end
 
+local MacroReplay = {}
+MacroReplay.__index = MacroReplay
+
+function MacroReplay.new()
+    return setmetatable({
+        running = false,
+        generation = 0,
+        macro = nil,
+        startedClock = nil,
+        currentIndex = 0,
+    }, MacroReplay)
+end
+
+function MacroReplay:start(macro, callback)
+    if self.running then
+        self:stop()
+    end
+
+    if type(macro) ~= "table" or type(macro.events) ~= "table" then
+        return false, "invalid macro"
+    end
+
+    self.running = true
+    self.generation = self.generation + 1
+    self.macro = deepCopy(macro)
+    self.startedClock = os.clock()
+    self.currentIndex = 0
+
+    local generation = self.generation
+    local events = deepCopy(macro.events)
+
+    task.spawn(function()
+        for index, event in ipairs(events) do
+            if not self.running or self.generation ~= generation then
+                break
+            end
+
+            local targetTime = math.max(0, tonumber(event.t) or 0)
+
+            while self.running and self.generation == generation do
+                local elapsed = os.clock() - self.startedClock
+                local remaining = targetTime - elapsed
+
+                if remaining <= 0 then
+                    break
+                end
+
+                task.wait(math.min(remaining, 0.05))
+            end
+
+            if not self.running or self.generation ~= generation then
+                break
+            end
+
+            self.currentIndex = index
+
+            if type(callback) == "function" then
+                pcall(callback, deepCopy(event), index, #events)
+            end
+        end
+
+        if self.running and self.generation == generation then
+            self.running = false
+            self.currentIndex = #events
+
+            if type(callback) == "function" then
+                pcall(callback, nil, nil, #events, true)
+            end
+        end
+    end)
+
+    return true
+end
+
+function MacroReplay:stop()
+    self.running = false
+    self.generation = self.generation + 1
+end
+
+function MacroReplay:getStatus()
+    return {
+        running = self.running,
+        currentIndex = self.currentIndex,
+        eventCount = self.macro and #self.macro.events or 0,
+        name = self.macro and self.macro.name or nil,
+    }
+end
+
 local Controller = {}
 Controller.__index = Controller
 
@@ -1613,6 +1701,9 @@ function Controller.new(options)
         tracker = tracker,
         recorder = recorder,
         macros = MacroLibrary.new(),
+        replay = MacroReplay.new(),
+        placementMarkers = {},
+        actionAdapter = nil,
         importedMacro = nil,
         webhookTransport = nil,
         webhookBound = false,
@@ -1662,6 +1753,8 @@ function Controller:Stop()
     if self.recorder.recording then
         self:StopRecording()
     end
+
+    self.replay:stop()
 
     for _, disconnect in ipairs(self.webhookDisconnectors) do
         safe(disconnect)
@@ -1750,6 +1843,127 @@ function Controller:GetEquippedUnits()
     end
 
     return result
+end
+
+function Controller:SetPlacementMarker(slot, cframe, unitName)
+    slot = tonumber(slot)
+
+    if not slot or slot < 1 or slot > 6 then
+        return false, "invalid slot"
+    end
+
+    if typeof(cframe) ~= "CFrame" then
+        return false, "invalid position"
+    end
+
+    self.placementMarkers[slot] = {
+        slot = slot,
+        unitName = tostring(unitName or ("Unit " .. tostring(slot))),
+        cframe = cframeToArray(cframe),
+        position = vectorToArray(cframe.Position),
+        savedAt = os.time(),
+    }
+
+    return true, deepCopy(self.placementMarkers[slot])
+end
+
+function Controller:GetPlacementMarkers()
+    return deepCopy(self.placementMarkers)
+end
+
+function Controller:ClearPlacementMarker(slot)
+    slot = tonumber(slot)
+
+    if slot then
+        self.placementMarkers[slot] = nil
+    else
+        table.clear(self.placementMarkers)
+    end
+
+    return true
+end
+
+function Controller:GetAutoStoryPlan()
+    local plan = deepCopy(self.autoStory)
+    plan.markers = deepCopy(self.placementMarkers)
+    return plan
+end
+
+function Controller:SetActionAdapter(callback)
+    assert(callback == nil or type(callback) == "function", "action adapter must be a function or nil")
+    self.actionAdapter = callback
+end
+
+function Controller:StartSelectedMacroReplay()
+    local macro = self.macros:get()
+
+    if not macro then
+        return false, "no macro selected"
+    end
+
+    local state = self.tracker:getSnapshot()
+    local macroArea = macro.map and macro.map.area or nil
+    local macroLevel = macro.map and macro.map.level or nil
+
+    if macroArea and state.map.area and macroArea ~= state.map.area then
+        return false, "wrong map"
+    end
+
+    if macroLevel and state.map.level and macroLevel ~= state.map.level then
+        return false, "wrong level"
+    end
+
+    return self.replay:start(macro, function(event, index, total, finished)
+        if finished then
+            self.tracker.events:emit("macroReplayFinished", {
+                macro = macro.name,
+                total = total,
+            })
+            return
+        end
+
+        local payload = {
+            macro = macro.name,
+            index = index,
+            total = total,
+            event = deepCopy(event),
+            marker = nil,
+        }
+
+        if event and event.type == "PLACE_DETECTED" then
+            local unit = event.data and event.data.unit or nil
+            local unitId = unit and (unit.unitId or unit.name) or nil
+            local visualName = getUnitDisplayName(unitId)
+
+            if visualName then
+                payload.unitName = visualName
+            end
+
+            for slot, marker in pairs(self.placementMarkers) do
+                local equipped = self:GetEquippedUnits()[slot]
+                if equipped and equipped.name == visualName then
+                    payload.marker = deepCopy(marker)
+                    payload.slot = slot
+                    break
+                end
+            end
+        end
+
+        self.tracker.events:emit("macroReplayEvent", payload)
+
+        if self.actionAdapter then
+            pcall(self.actionAdapter, deepCopy(payload))
+        end
+    end)
+end
+
+function Controller:StopMacroReplay()
+    self.replay:stop()
+    return true
+end
+
+function Controller:GetMacroReplayStatus()
+    return self.replay:getStatus()
 end
 
 function Controller:SetAutoStoryConfig(config)
@@ -2221,6 +2435,7 @@ Core.MapProfiles = MapProfiles
 Core.Serializer = Serializer
 Core.MacroRecorder = MacroRecorder
 Core.MacroLibrary = MacroLibrary
+Core.MacroReplay = MacroReplay
 Core.Controller = Controller
 
 function Core.new(options)
