@@ -361,21 +361,35 @@ function UI.AttachAutoStory(Window, app, Fluent)
     end)
 
     task.spawn(function()
+        local lastUnitsSignature = ""
+        local lastMarkersSignature = ""
+
         while app.running do
-            task.wait(2)
+            task.wait(5)
             if not app.running then break end
 
             local latestValues, latestMap = unitOptions(app)
+            local latestMarkerValues, latestMarkerToSlot, latestMarkerNames = markerOptions(app)
+
+            local unitsSignature = table.concat(latestValues, "\31")
+            local markersSignature = table.concat(latestMarkerValues, "\31")
+
             values = latestValues
             labelToSlot = latestMap
+            markerValues = latestMarkerValues
+            markerToSlot = latestMarkerToSlot
+            markerNames = latestMarkerNames
 
-            markerValues, markerToSlot, markerNames = markerOptions(app)
+            if unitsSignature ~= lastUnitsSignature or markersSignature ~= lastMarkersSignature then
+                lastUnitsSignature = unitsSignature
+                lastMarkersSignature = markersSignature
 
-            pcall(function()
-                place:SetValues(values)
-                upgrade:SetValues(values)
-                markerDropdown:SetValues(markerValues)
-            end)
+                pcall(function()
+                    place:SetValues(values)
+                    upgrade:SetValues(values)
+                    markerDropdown:SetValues(markerValues)
+                end)
+            end
         end
     end)
 
