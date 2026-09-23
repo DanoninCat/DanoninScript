@@ -45,13 +45,13 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(ok, str(path)+': '+str(err))
 
 
-    def test_auto_ready_votes_once_and_waits_for_state(self):
+    def test_auto_ready_rearms_for_same_server_round(self):
         self.lua.execute('''
             local app=Core.new(); app.running=true
             app.tracker.state.map.isLobby=false
             app.tracker.state.map.mapLoaded=true
             app.tracker.state.match.serverReady=true
-            app.tracker.state.match.started=true -- may already be true before the first wave
+            app.tracker.state.match.started=true
             app.tracker.state.match.wavesStarted=false
             app.tracker.state.match.finished=false
             app.tracker.state.match.votingFinished=false
@@ -59,12 +59,28 @@ class RuntimeTests(unittest.TestCase):
             local calls=0
             app:SetActionAdapter(function(a) assert(a.kind=="ready"); calls=calls+1; return true end)
             app:SetAutoStoryConfig({autoReady=true})
+
             clock=3
-            app:_automationStep(); assert(calls==1 and app.readySubmitted)
-            app:_automationStep(); assert(calls==1)
+            app:_automationStep()
+            assert(calls==1 and app.readySubmitted and app.readyWindowActive)
+            app:_automationStep()
+            assert(calls==1)
+
+            -- Current vote closes and waves run in the same server.
+            app.tracker.state.match.votingFinished=true
+            app.tracker.state.match.wavesStarted=true
             clock=6
-            app.tracker.state.match.voteCount=2
-            app:_automationStep(); assert(calls==1)
+            app:_automationStep()
+            assert(not app.readyWindowActive)
+
+            -- Replay/Next returns to Ready without a teleport. GameFinished can
+            -- still be stale here; the new vote window must win over it.
+            app.tracker.state.match.finished=true
+            app.tracker.state.match.votingFinished=false
+            app.tracker.state.match.wavesStarted=false
+            clock=9
+            app:_automationStep()
+            assert(calls==2 and app.readySubmitted and app.readyWindowActive)
         ''')
 
     def test_post_match_exclusivity(self):
