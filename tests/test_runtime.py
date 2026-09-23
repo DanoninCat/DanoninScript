@@ -190,6 +190,30 @@ class RuntimeTests(unittest.TestCase):
             assert(not ok and err:find("rejected"))
         ''')
 
+    def test_defeat_webhook_and_session_classification(self):
+        self.lua.execute('''
+            local app=Core.new()
+            app.session.wins=0
+            app.session.losses=1
+            local payload=app:BuildResultWebhook({
+                outcome="defeat",
+                mode="Expedition",
+                map="East Town",
+                difficulty="Hard",
+                duration="4:32",
+                player={username="Tester",level=208,currentExp=14577,requiredExp=16482},
+                rewards={{name="Expedition Coin",amount=19}},
+                timestamp=1786918716,
+            })
+            local d=payload.embeds[1].description
+            assert(string.find(d, "Defeat", 1, true))
+            assert(not string.find(d, "Loser", 1, true))
+            assert(string.find(d, "0 W", 1, true))
+            assert(string.find(d, "1 L", 1, true))
+            assert(string.find(d, "Expedition Coin", 1, true))
+            assert(string.find(d, "Anime Expeditions", 1, true))
+        ''')
+
     def test_webhook_environment_transport(self):
         self.lua.execute('''
             local app=Core.new(); app.webhook.url="https://example.invalid/webhook"
