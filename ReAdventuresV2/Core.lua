@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.2.1"
+Core.VERSION = "2.2.2"
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -2022,6 +2022,60 @@ function Controller:_matchingModel(unit, position)
     return nearest
 end
 
+function Controller:_readReadyUI()
+    if not LocalPlayer then
+        return nil
+    end
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local voteGui = playerGui and playerGui:FindFirstChild("VoteStart")
+    local holder = voteGui and voteGui:FindFirstChild("Holder")
+
+    if not voteGui or not holder then
+        return nil
+    end
+
+    if voteGui:IsA("ScreenGui") and voteGui.Enabled == false then
+        return nil
+    end
+
+    if holder:IsA("GuiObject") and holder.Visible == false then
+        return nil
+    end
+
+    local title = readText(holder:FindFirstChild("Title"))
+    local description = readText(holder:FindFirstChild("Description"))
+    local button = findPath(holder, "ButtonHolder", "Yes")
+    local buttonText = readText(findPath(button, "Main", "text"))
+    local locked = button and button:FindFirstChild("Locked")
+
+    if title ~= "Ready?" or buttonText ~= "Start" then
+        return nil
+    end
+
+    if not button or (button:IsA("GuiObject") and button.Visible == false) then
+        return nil
+    end
+
+    if locked and locked:IsA("GuiObject") and locked.Visible == true then
+        return nil
+    end
+
+    local votes, required
+    if type(description) == "string" then
+        local a, b = description:match("(%d+)%s*/%s*(%d+)")
+        votes = tonumber(a)
+        required = tonumber(b)
+    end
+
+    return {
+        visible = true,
+        votes = votes,
+        required = required,
+        complete = required ~= nil and required > 0 and votes ~= nil and votes >= required,
+    }
+end
+
 function Controller:_dispatch(action)
     if self.actionAdapter then return self.actionAdapter(action) end
     if action.kind == "ready" then
@@ -2045,29 +2099,29 @@ function Controller:_automationStep()
     if not self.running or state.map.isLobby then return end
     local config = self.autoStory
 
-    -- Replay and Next can start another round without teleporting to a new
-    -- server. Treat every newly opened VoteStart window as a fresh match
-    -- cycle, even if GameFinished is still stale from the previous result.
-    local readyWindow = state.match.serverReady == true
-        and state.map.mapLoaded ~= false
-        and not state.match.votingFinished
-        and not state.match.wavesStarted
+    -- The game's own VoteStart GUI is the authoritative Ready signal.
+    -- Replay and Next can reuse the same server and recreate/show this GUI
+    -- while Workspace values from the previous round are still stale.
+    local readyInfo = self:_readReadyUI()
+    local readyWindow = readyInfo ~= nil
 
     if readyWindow and not self.readyWindowActive then
         self.readyWindowActive = true
-        self.readySubmitted = false
+        self.readySubmitted = readyInfo.complete == true
         self.lastReadyAttempt = 0
         self.lastPostMatchAction = nil
     elseif not readyWindow then
         self.readyWindowActive = false
+        self.readySubmitted = false
+    elseif readyInfo.complete then
+        self.readySubmitted = true
     end
 
-    -- Ready is independent from placement/upgrade and may run while a macro
-    -- recorder is armed. A rejected early vote is silent and retried after
-    -- the debounce instead of surfacing an internal action warning.
+    -- Vote only while the visible Ready?/Start UI exists. A temporary server
+    -- rejection is expected during transitions and is retried silently.
     if config.autoReady and readyWindow and not self.readySubmitted then
         local now = os.clock()
-        if now - (self.lastReadyAttempt or 0) >= 2.5 then
+        if now - (self.lastReadyAttempt or 0) >= 1 then
             self.lastReadyAttempt = now
             local ok = self:_dispatch({kind = "ready"})
             if ok then
@@ -2079,9 +2133,8 @@ function Controller:_automationStep()
 
     if self.replay.running or self.recorder.recording then return end
 
-    -- A fresh Ready window is authoritative for a new same-server cycle.
-    -- Do not let a stale GameFinished value keep the previous result branch
-    -- active after Replay/Next has already returned to Ready.
+    -- The visible Ready GUI wins over a stale GameFinished value after
+    -- same-server Replay/Next transitions.
     if state.match.finished and not readyWindow then
         local kind = config.autoReturnLobby and "lobby" or config.autoReplay and "replay" or config.autoNext and "next"
         if not kind or self.lastPostMatchAction == kind then return end
