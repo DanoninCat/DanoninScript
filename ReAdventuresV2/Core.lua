@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.2.0"
+Core.VERSION = "2.2.1"
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -1759,6 +1759,7 @@ function Controller.new(options)
         lastPostMatchAction = nil,
         lastReadyAttempt = 0,
         readySubmitted = false,
+        readyWindowActive = false,
         importedMacro = nil,
         webhookTransport = nil,
         webhookBound = false,
@@ -2044,30 +2045,44 @@ function Controller:_automationStep()
     if not self.running or state.map.isLobby then return end
     local config = self.autoStory
 
-    -- Ready is independent from placement/upgrade and may run while a macro
-    -- recorder is armed before the first wave. Vote only when the server/map
-    -- are ready and this client has not already contributed a start vote.
-    if config.autoReady
-        and not self.readySubmitted
-        and not state.match.finished
+    -- Replay and Next can start another round without teleporting to a new
+    -- server. Treat every newly opened VoteStart window as a fresh match
+    -- cycle, even if GameFinished is still stale from the previous result.
+    local readyWindow = state.match.serverReady == true
+        and state.map.mapLoaded ~= false
         and not state.match.votingFinished
         and not state.match.wavesStarted
-        and state.match.serverReady == true
-        and state.map.mapLoaded ~= false
-    then
+
+    if readyWindow and not self.readyWindowActive then
+        self.readyWindowActive = true
+        self.readySubmitted = false
+        self.lastReadyAttempt = 0
+        self.lastPostMatchAction = nil
+    elseif not readyWindow then
+        self.readyWindowActive = false
+    end
+
+    -- Ready is independent from placement/upgrade and may run while a macro
+    -- recorder is armed. A rejected early vote is silent and retried after
+    -- the debounce instead of surfacing an internal action warning.
+    if config.autoReady and readyWindow and not self.readySubmitted then
         local now = os.clock()
         if now - (self.lastReadyAttempt or 0) >= 2.5 then
             self.lastReadyAttempt = now
-            local ok, err = self:_dispatch({kind = "ready"})
-            if not ok then error(err or "Auto Ready failed") end
-            self.readySubmitted = true
+            local ok = self:_dispatch({kind = "ready"})
+            if ok then
+                self.readySubmitted = true
+            end
             return
         end
     end
 
     if self.replay.running or self.recorder.recording then return end
 
-    if state.match.finished then
+    -- A fresh Ready window is authoritative for a new same-server cycle.
+    -- Do not let a stale GameFinished value keep the previous result branch
+    -- active after Replay/Next has already returned to Ready.
+    if state.match.finished and not readyWindow then
         local kind = config.autoReturnLobby and "lobby" or config.autoReplay and "replay" or config.autoNext and "next"
         if not kind or self.lastPostMatchAction == kind then return end
         local result = self:_readResult()
@@ -2075,7 +2090,18 @@ function Controller:_automationStep()
         -- Give the result handler time to read rewards before leaving.
         if not self.lastWebhookResultKey or self.webhookBusy then return end
         local ok, err = self:_dispatch({kind = kind})
-        if ok then self.lastPostMatchAction = kind else error(err or "Post-match action failed") end
+        if ok then
+            self.lastPostMatchAction = kind
+            -- Replay/Next may remain in this server. The next VoteStart window
+            -- will clear this again and submit a fresh Ready vote.
+            if kind == "replay" or kind == "next" then
+                self.readyWindowActive = false
+                self.readySubmitted = false
+                self.lastReadyAttempt = 0
+            end
+        else
+            error(err or "Post-match action failed")
+        end
         return
     end
     if state.match.phase ~= "PLAYING" and state.match.phase ~= "STARTING" then return end
