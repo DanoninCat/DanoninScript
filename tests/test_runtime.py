@@ -44,6 +44,28 @@ class RuntimeTests(unittest.TestCase):
             ok, err = self.lua.eval('function(s) local f,e=load(s);return f~=nil,e end')(path.read_text())
             self.assertTrue(ok, str(path)+': '+str(err))
 
+
+    def test_auto_ready_votes_once_and_waits_for_state(self):
+        self.lua.execute('''
+            local app=Core.new(); app.running=true
+            app.tracker.state.map.isLobby=false
+            app.tracker.state.map.mapLoaded=true
+            app.tracker.state.match.serverReady=true
+            app.tracker.state.match.started=false
+            app.tracker.state.match.finished=false
+            app.tracker.state.match.votingFinished=false
+            app.tracker.state.match.voteCount=0
+            local calls=0
+            app:SetActionAdapter(function(a) assert(a.kind=="ready"); calls=calls+1; return true end)
+            app:SetAutoStoryConfig({autoReady=true})
+            clock=3
+            app:_automationStep(); assert(calls==1)
+            app:_automationStep(); assert(calls==1)
+            clock=6
+            app.tracker.state.match.voteCount=1
+            app:_automationStep(); assert(calls==1)
+        ''')
+
     def test_post_match_exclusivity(self):
         self.lua.execute('''
             local app=Core.new()
