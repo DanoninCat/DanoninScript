@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.1.0"
+Core.VERSION = "2.1.1"
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -163,7 +163,16 @@ local function findPath(root, ...)
             return nil
         end
 
-        current = current:FindFirstChild(select(index, ...))
+        -- select(index, ...) returns ALL remaining varargs when used as the
+        -- last function argument. Store it first so FindFirstChild receives
+        -- only the child name; otherwise the next string is treated as the
+        -- recursive boolean and Roblox throws "Unable to cast string to bool".
+        local childName = select(index, ...)
+        if type(childName) ~= "string" or childName == "" then
+            return nil
+        end
+
+        current = current:FindFirstChild(childName)
     end
 
     return current
@@ -441,7 +450,6 @@ function StateTracker:_computePhase()
         self.events:emit("matchPhaseChanged", {
             from = previous,
             to = newPhase,
-            state = self:getSnapshot(),
         })
     end
 end
@@ -525,7 +533,6 @@ function StateTracker:_bindMatchState()
             self.events:emit("waveChanged", {
                 from = old,
                 to = self.state.match.wave,
-                state = self:getSnapshot(),
             })
         end
     end)
@@ -642,7 +649,6 @@ function StateTracker:_trackUnit(model, initial)
                         from = old,
                         to = current.upgrade,
                         unit = deepCopy(current),
-                        state = self:getSnapshot(),
                     })
                 end
             end))
@@ -670,7 +676,6 @@ function StateTracker:_trackUnit(model, initial)
         if not initial and snapshot.ownerUserId == self.state.player.userId then
             self.events:emit("unitAdded", {
                 unit = deepCopy(snapshot),
-                state = self:getSnapshot(),
             })
         end
     end)
@@ -709,7 +714,6 @@ function StateTracker:_removeUnit(model)
     if previous and previous.ownerUserId == self.state.player.userId then
         self.events:emit("unitRemoved", {
             unit = deepCopy(previous),
-            state = self:getSnapshot(),
         })
     end
 end
@@ -919,7 +923,6 @@ function StateTracker:_bindMoney()
             self.events:emit("moneyChanged", {
                 from = old,
                 to = value,
-                state = self:getSnapshot(),
             })
         end
     end
@@ -972,7 +975,6 @@ function StateTracker:_bindBaseLife()
                 from = old,
                 to = life,
                 max = maxLife,
-                state = self:getSnapshot(),
             })
         end
     end
@@ -1206,7 +1208,7 @@ function MacroRecorder.new(tracker, options)
     return setmetatable({
         tracker = tracker,
         options = {
-            snapshotInterval = tonumber(options.snapshotInterval) or 1,
+            snapshotInterval = tonumber(options.snapshotInterval) or 2,
             maxSnapshots = tonumber(options.maxSnapshots) or 7200,
         },
         recording = false,
@@ -1225,7 +1227,7 @@ function MacroRecorder:_now()
 end
 
 function MacroRecorder:_context()
-    local state = self.tracker:getSnapshot()
+    local state = self.tracker.state
 
     return {
         wave = state.match.wave,
@@ -1261,7 +1263,7 @@ function MacroRecorder:_addSnapshot()
         return
     end
 
-    local state = self.tracker:getSnapshot()
+    local state = self.tracker.state
     local units = {}
 
     for uuid, unit in pairs(state.units) do
@@ -1353,7 +1355,7 @@ function MacroRecorder:start(name)
     self.startedClock = os.clock()
     self.generation = self.generation + 1
 
-    local state = self.tracker:getSnapshot()
+    local state = self.tracker.state
 
     self.macro = {
         schema = "re-adventures-macro",
@@ -1930,7 +1932,9 @@ end
 -- Endpoint names are grounded in the supplied match dump. Server argument
 -- contracts must also be checked in a live game when its version changes.
 function Controller:_invoke(name, ...)
-    local endpoint = findPath(ReplicatedStorage, "endpoints", "client_to_server", name)
+    local endpoints = ReplicatedStorage:FindFirstChild("endpoints")
+    local clientToServer = endpoints and endpoints:FindFirstChild("client_to_server")
+    local endpoint = clientToServer and clientToServer:FindFirstChild(name)
     if not endpoint then return false, "Game action unavailable: " .. name end
     local args = table.pack(...)
     local ok, result = pcall(function()
@@ -1992,7 +1996,7 @@ function Controller:_dispatch(action)
 end
 
 function Controller:_automationStep()
-    local state = self:GetState()
+    local state = self.tracker.state
     if not self.running or state.map.isLobby or self.replay.running or self.recorder.recording then return end
     local config = self.autoStory
     if state.match.finished then
@@ -2058,7 +2062,7 @@ function Controller:_executeReplay(payload)
     local lastError = "Action was not confirmed by game state"
     local nextAttempt = 0
     while self.running and self.replay.running and self.replay.generation == generation and os.clock() < deadline do
-        local state = self:GetState()
+        local state = self.tracker.state
         if state.match.finished then return false, "Match ended during replay" end
         if state.match.phase == "PLAYING" or state.match.phase == "STARTING" then
             if not model or not model.Parent then model = self:_matchingModel(recorded, cf.Position) end
@@ -2112,7 +2116,7 @@ function Controller:StartSelectedMacroReplay()
         return false, "no macro selected"
     end
 
-    local state = self.tracker:getSnapshot()
+    local state = self.tracker.state
     local macroArea = macro.map and macro.map.area or nil
     local macroLevel = macro.map and macro.map.level or nil
 
@@ -2411,7 +2415,7 @@ function Controller:_readResult()
         end
     end
 
-    local state = self.tracker:getSnapshot()
+    local state = self.tracker.state
     local mapProfile = MapProfiles.resolve(state.map.area, state.map.level)
 
     return {
