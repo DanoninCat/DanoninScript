@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.1.1"
+Core.VERSION = "2.1.2"
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -553,6 +553,41 @@ function StateTracker:_bindMatchState()
             self:_computePhase()
         end)
     end
+
+    -- Match dumps confirm these server_to_client RemoteEvents. Treat them as
+    -- lightweight state signals so automation still tracks a match when one
+    -- of the mirrored Workspace Value objects is missing or updates late.
+    local endpoints = ReplicatedStorage:FindFirstChild("endpoints")
+    local serverToClient = endpoints and endpoints:FindFirstChild("server_to_client")
+
+    local function bindRemote(name, callback)
+        local remote = serverToClient and serverToClient:FindFirstChild(name)
+        if remote and remote:IsA("RemoteEvent") then
+            self:_connect(remote.OnClientEvent, callback)
+        end
+    end
+
+    bindRemote("wave_started", function()
+        self.state.match.started = true
+        self.state.match.wavesStarted = true
+        self.state.match.finished = false
+        self:_computePhase()
+    end)
+
+    bindRemote("game_finished", function()
+        self.state.match.finished = true
+        self:_computePhase()
+    end)
+
+    bindRemote("replay_started", function()
+        self.state.match.finished = false
+        self.state.match.started = true
+        self.state.match.wavesStarted = false
+        self.state.match.isLastWave = false
+        self.state.match.voteCount = 0
+        self.state.match.votingFinished = false
+        self:_computePhase()
+    end)
 end
 
 function StateTracker:_unitSnapshot(model)
