@@ -5,12 +5,19 @@
 local ENV = (getgenv and getgenv()) or _G
 local STATE_KEY = "__CAT_EMPIRE_REMOTE_LOGGER_STATE"
 local HOOK_KEY = "__CAT_EMPIRE_REMOTE_LOGGER_HOOKED"
+local LOGGER_VERSION = 2
 
-if ENV[STATE_KEY] and ENV[STATE_KEY].api then
-    ENV[STATE_KEY].enabled = true
-    print("[RemoteLogger] Already installed; logging resumed.")
-    print("[RemoteLogger] File:", ENV[STATE_KEY].filePath or "(memory only)")
-    return ENV[STATE_KEY].api
+local previousState = ENV[STATE_KEY]
+if previousState and previousState.api and previousState.version == LOGGER_VERSION then
+    previousState.enabled = true
+    print("[RemoteLogger] V" .. tostring(LOGGER_VERSION) .. " already installed; logging resumed.")
+    print("[RemoteLogger] File:", previousState.filePath or "(memory only)")
+    return previousState.api
+elseif previousState then
+    -- Disable the previous in-memory logger. Existing metamethod hooks are
+    -- left intact but become silent; V2 installs direct method hooks below.
+    previousState.enabled = false
+    print("[RemoteLogger] Upgrading logger in the current server...")
 end
 
 local Players = game:GetService("Players")
@@ -44,6 +51,7 @@ local getnamecallmethodFn = globalFunction("getnamecallmethod")
 local newcclosureFn = globalFunction("newcclosure")
 
 local state = {
+    version = LOGGER_VERSION,
     enabled = true,
     startedAt = os.time(),
     sequence = 0,
@@ -521,6 +529,7 @@ end
 
 function API:Status()
     return {
+        version = state.version,
         enabled = state.enabled,
         entries = #state.lines,
         dropped = state.dropped,
@@ -658,7 +667,7 @@ if type(hookfunctionFn) == "function" then
     state.directHooks.invokeServer = okInvoke == true
 end
 
-print("[RemoteLogger] Lightweight logger started.")
+print("[RemoteLogger] Lightweight logger V" .. tostring(LOGGER_VERSION) .. " started.")
 print("[RemoteLogger] Output:", state.filePath or "memory/clipboard only")
 print("[RemoteLogger] Outgoing capture: __namecall=true"
     .. " | FireServer hook=" .. tostring(state.directHooks.fireServer)
