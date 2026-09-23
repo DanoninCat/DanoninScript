@@ -13,7 +13,7 @@ Match `138271828389486` and lobby `94823097601547` share the payload.
 - Unit removal is recorded as an observation, never interpreted as a sell action: removal may mean death or round cleanup.
 - Auto Story pauses during recording and replay to avoid competing actions. Stop replay interrupts pending retries.
 - Macros persist at `CatEmpire/ReAdventures/macros.json` when file APIs are available. Otherwise Export provides a portable copy (clipboard when available, console fallback).
-- Webhooks use the environment's HTTP request capability when available, otherwise Roblox HttpService. HTTP errors are reported. Autosave subscribes to controller events without replacing feature callbacks.
+- Webhooks use only the visible `ResultsUI.Holder` as the authoritative Victory/Defeat result, preventing stale hidden titles from a previous round from corrupting session W/L counts. Defeat renders as `Defeat`, and Expedition results support the supplied Expedition Coin presentation. HTTP errors are reported. Autosave subscribes to controller events without replacing feature callbacks.
 - Re-execution stops the previous app; closing Fluent stops background automation.
 
 Markers are session-local and must be set for the current map. The script must be loaded in the destination server after teleporting; this change does not install teleport auto-execution. Start recording before placing units; units already present at recording start are not new placement events.
