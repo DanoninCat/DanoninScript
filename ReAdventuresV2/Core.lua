@@ -2181,7 +2181,6 @@ function Controller:_handleFinishedMatch()
         tostring(result.outcome),
         tostring(result.level),
         tostring(result.duration),
-        tostring(result.timestamp),
     }, "|")
 
     if self.lastWebhookResultKey == resultKey then
