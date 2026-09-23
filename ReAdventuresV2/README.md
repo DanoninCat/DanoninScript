@@ -5,7 +5,8 @@ Match `138271828389486` and lobby `94823097601547` share the payload.
 
 ## Features
 
-- Auto Place: select equipped units, select a Marker Unit and click **Place Marker**, then click a valid map position. Each selected slot has one marker. Enable Auto Place to maintain a placement at that marker. Server placement rules still apply.
+- Auto Ready: automatically submits the match start vote once the server/map are ready. One submission is tracked per round, including when another player voted first.
+- Auto Place: select equipped units, select a Marker Unit and click **Place Marker**, then click a valid map position. Each selected slot has one compact floor X marker with a small side label. Enable Auto Place to maintain a placement at that marker. Server placement rules still apply.
 - Auto Upgrade: upgrades owned units matching selected equipped slots.
 - After Match: mutually exclusive Next, Replay or Return Lobby. Next is only attempted after a victory. Result capture and webhook submission precede the action.
 - Macros: record local-player placements/upgrades and passive state events; save, select, rename, delete, import and export. Replay uses recorded coordinates and resolves equipped units against the current session. It waits for state confirmation and stops with an error if an action cannot complete within 60 seconds. Ambiguous unit matches fail explicitly.
@@ -34,12 +35,13 @@ python -m pip install lupa
 python -m unittest discover -s tests -v
 ```
 
-Offline tests cover syntax, source/payload equality, preservation of other loader entries, selected-slot placement and money checks, automation exclusion, post-match action gating, replay cancellation/errors/confirmation, endpoint argument forwarding, macro refresh events and HTTP success/failure handling.
+Offline tests cover syntax, source/payload equality, preservation of other loader entries, Auto Ready submission/debounce, selected-slot placement and money checks, automation exclusion, post-match action gating, replay cancellation/errors/confirmation, endpoint argument forwarding, macro refresh events and HTTP success/failure handling.
 
 **Live validation remains required.** The supplied Namek dump confirms endpoint names/classes and the equipped-unit UUID attribute, but does not capture invocation arguments or server implementations. The adapter currently uses these contracts, which need confirmation in the current game:
 
 | Action | Endpoint | Arguments |
 | --- | --- | --- |
+| Ready | `vote_start` | none |
 | Place | `spawn_unit` | equipped UUID, CFrame |
 | Upgrade | `upgrade_unit_ingame` | owned unit Model |
 | Next | `set_game_finished_vote` | `"next_story"` |
