@@ -690,9 +690,18 @@ function UI.Attach(Window, app, Fluent)
     app.uiDisconnectors = app.uiDisconnectors or {}
     local lastError, lastErrorTime
     table.insert(app.uiDisconnectors, app:On("actionError", function(payload)
-        if payload.message ~= lastError or os.clock() - (lastErrorTime or 0) >= 10 then
-            lastError, lastErrorTime = payload.message, os.clock()
-            notify(Fluent, payload.message)
+        local message = tostring(payload and payload.message or "")
+
+        -- RemoteFunctions can legitimately reject an action while the game is
+        -- transitioning between result/ready states. Keep those internal
+        -- retries out of the user-facing notification stream.
+        if message:find("Game rejected action:", 1, true) then
+            return
+        end
+
+        if message ~= lastError or os.clock() - (lastErrorTime or 0) >= 10 then
+            lastError, lastErrorTime = message, os.clock()
+            notify(Fluent, message)
         end
     end))
     return {
