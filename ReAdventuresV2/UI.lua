@@ -123,30 +123,47 @@ local function drawMarker(slot, cframe, name)
         old:Destroy()
     end
 
-    local marker = Instance.new("Part")
+    local marker = Instance.new("Model")
     marker.Name = "Slot_" .. tostring(slot)
-    marker.Anchored = true
-    marker.CanCollide = false
-    marker.CanTouch = false
-    marker.CanQuery = false
-    marker.Shape = Enum.PartType.Ball
-    marker.Size = Vector3.new(1.4, 1.4, 1.4)
-    marker.Transparency = 0.35
-    marker.CFrame = cframe
     marker.Parent = folder
+
+    local ground = CFrame.new(cframe.Position + Vector3.new(0, 0.035, 0))
+
+    local function arm(angle)
+        local part = Instance.new("Part")
+        part.Name = "X"
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanTouch = false
+        part.CanQuery = false
+        part.CastShadow = false
+        part.Material = Enum.Material.Neon
+        part.Size = Vector3.new(1.05, 0.045, 0.105)
+        part.Transparency = 0.1
+        part.CFrame = ground * CFrame.Angles(0, math.rad(angle), 0)
+        part.Parent = marker
+        return part
+    end
+
+    local anchor = arm(45)
+    arm(-45)
 
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "Label"
     billboard.AlwaysOnTop = true
-    billboard.Size = UDim2.fromOffset(120, 30)
-    billboard.StudsOffset = Vector3.new(0, 1.8, 0)
-    billboard.Parent = marker
+    billboard.Size = UDim2.fromOffset(108, 20)
+    billboard.StudsOffsetWorldSpace = Vector3.new(1.65, 0.72, 0)
+    billboard.Parent = anchor
 
     local text = Instance.new("TextLabel")
     text.BackgroundTransparency = 1
     text.Size = UDim2.fromScale(1, 1)
+    text.Font = Enum.Font.GothamMedium
     text.Text = tostring(name or ("Slot " .. tostring(slot)))
-    text.TextScaled = true
+    text.TextSize = 12
+    text.TextScaled = false
+    text.TextXAlignment = Enum.TextXAlignment.Left
+    text.TextStrokeTransparency = 0.55
     text.Parent = billboard
 
     return marker
@@ -159,6 +176,19 @@ function UI.AttachAutoStory(Window, app, Fluent)
         Title = "Auto Story",
         Icon = "play",
     })
+
+    Tab:AddSection("Match")
+
+    local autoReady = Tab:AddToggle("RE_AutoReady", {
+        Title = "Auto Ready",
+        Default = false,
+    })
+
+    autoReady:OnChanged(function(value)
+        app:SetAutoStoryConfig({
+            autoReady = value,
+        })
+    end)
 
     Tab:AddSection("Units")
 
