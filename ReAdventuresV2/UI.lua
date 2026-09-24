@@ -426,6 +426,99 @@ function UI.AttachAutoStory(Window, app, Fluent)
     return Tab
 end
 
+function UI.AttachChallengers(Window, app, Fluent)
+    local config = app:GetChallengerConfig()
+
+    local Tab = Window:AddTab({
+        Title = "Challengers",
+        Icon = "target",
+    })
+
+    Tab:AddSection("Automation")
+
+    local kind = Tab:AddDropdown("RE_ChallengerType", {
+        Title = "Challenger Type",
+        Values = {"Normal", "Daily"},
+        Default = config.kind or "Normal",
+    })
+
+    kind:OnChanged(function(value)
+        app:SetChallengerConfig({
+            kind = value,
+        })
+    end)
+
+    local enabled = Tab:AddToggle("RE_ChallengerEnabled", {
+        Title = "Auto Challengers",
+        Default = config.enabled == true,
+    })
+
+    enabled:OnChanged(function(value)
+        app:SetChallengerConfig({
+            enabled = value,
+        })
+
+        if value then
+            notify(Fluent, "Auto Challengers Enabled")
+        end
+    end)
+
+    local autoMacro = Tab:AddToggle("RE_ChallengerAutoMacro", {
+        Title = "Auto Load Macro by Map",
+        Default = config.autoLoadMacro ~= false,
+    })
+
+    autoMacro:OnChanged(function(value)
+        app:SetChallengerConfig({
+            autoLoadMacro = value,
+        })
+    end)
+
+    local autoReturn = Tab:AddToggle("RE_ChallengerReturnLobby", {
+        Title = "Auto Return Lobby",
+        Default = config.autoReturnLobby ~= false,
+    })
+
+    autoReturn:OnChanged(function(value)
+        app:SetChallengerConfig({
+            autoReturnLobby = value,
+        })
+    end)
+
+    Tab:AddButton({
+        Title = "Join Challenger Now",
+        Callback = function()
+            local ok, err = app:RunChallengerStep(true)
+            if ok then
+                notify(Fluent, "Joining " .. tostring(app:GetChallengerConfig().kind) .. " Challenger")
+            else
+                notify(Fluent, tostring(err or "Join Failed"))
+            end
+        end,
+    })
+
+    Tab:AddSection("Map Macro")
+
+    Tab:AddButton({
+        Title = "Load Macro for Current Map",
+        Callback = function()
+            local ok, err = app:AutoLoadCurrentMapMacro()
+            if ok then
+                notify(Fluent, "Map Macro Loaded")
+            else
+                notify(Fluent, tostring(err or "No matching macro"))
+            end
+        end,
+    })
+
+    table.insert(app.uiDisconnectors, app:On("mapMacroLoaded", function(payload)
+        local level = payload and payload.level or "map"
+        notify(Fluent, "Loaded macro for " .. tostring(level))
+    end))
+
+    return Tab
+end
+
 function UI.AttachMacros(Window, app, Fluent)
     local Options = Fluent.Options
     local state = {
@@ -685,6 +778,57 @@ function UI.AttachWebhook(Window, app, Fluent)
     return Tab
 end
 
+function UI.AttachRuntimeSettings(Tab, app, Fluent)
+    if not Tab then return nil end
+
+    local config = app:GetRuntimeConfig()
+
+    Tab:AddSection("Runtime Automation")
+
+    local antiAfk = Tab:AddToggle("RE_AntiAFK", {
+        Title = "Anti-AFK",
+        Default = config.antiAfk == true,
+    })
+
+    antiAfk:OnChanged(function(value)
+        app:SetRuntimeConfig({
+            antiAfk = value,
+        })
+    end)
+
+    local reconnect = Tab:AddToggle("RE_AutoReconnect", {
+        Title = "Auto Reconnect",
+        Default = config.autoReconnect == true,
+    })
+
+    reconnect:OnChanged(function(value)
+        app:SetRuntimeConfig({
+            autoReconnect = value,
+        })
+    end)
+
+    local execute = Tab:AddToggle("RE_AutoExecute", {
+        Title = "Auto Execute Script",
+        Default = config.autoExecute == true,
+    })
+
+    execute:OnChanged(function(value)
+        app:SetRuntimeConfig({
+            autoExecute = value,
+        })
+
+        if value then
+            notify(Fluent, "Auto Execute queued for teleports")
+        end
+    end)
+
+    return {
+        AntiAFK = antiAfk,
+        AutoReconnect = reconnect,
+        AutoExecute = execute,
+    }
+end
+
 function UI.Attach(Window, app, Fluent)
     app.uiConnections = app.uiConnections or {}
     app.uiDisconnectors = app.uiDisconnectors or {}
@@ -706,6 +850,7 @@ function UI.Attach(Window, app, Fluent)
     end))
     return {
         AutoStory = UI.AttachAutoStory(Window, app, Fluent),
+        Challengers = UI.AttachChallengers(Window, app, Fluent),
         Macros = UI.AttachMacros(Window, app, Fluent),
         Webhook = UI.AttachWebhook(Window, app, Fluent),
     }
