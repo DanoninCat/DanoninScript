@@ -8,6 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
+local CoreGui = game:GetService("CoreGui")
 local VirtualUser = game:GetService("VirtualUser")
 
 local LocalPlayer = Players.LocalPlayer
@@ -1842,11 +1843,54 @@ function Controller:Start()
     if LocalPlayer then
         table.insert(self.runtimeConnections, LocalPlayer.Idled:Connect(function()
             if not self.runtimeSettings.antiAfk then return end
+
+            local env = (getgenv and getgenv()) or _G
+            local getConnections = rawget(env, "getconnections")
+            if type(getConnections) == "function" then
+                pcall(function()
+                    for _, connection in ipairs(getConnections(LocalPlayer.Idled)) do
+                        if type(connection.Disable) == "function" then
+                            connection:Disable()
+                        elseif type(connection.Disconnect) == "function" then
+                            connection:Disconnect()
+                        end
+                    end
+                end)
+            end
+
             pcall(function()
                 VirtualUser:CaptureController()
                 VirtualUser:ClickButton2(Vector2.new(0, 0))
             end)
         end))
+    end
+
+    local function requestReconnect(reason)
+        if not self.runtimeSettings.autoReconnect or self.reconnectQueued then return end
+        self.reconnectQueued = true
+
+        self.tracker.events:emit("reconnectTriggered", {
+            reason = tostring(reason or "Disconnected"),
+        })
+
+        task.delay(1.25, function()
+            if not self.running then return end
+
+            if self.runtimeSettings.autoExecute then
+                self:_queueAutoExecute()
+            end
+
+            local ok, err = pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
+
+            if not ok then
+                self.reconnectQueued = false
+                self.tracker.events:emit("actionError", {
+                    message = "Auto Reconnect failed: " .. tostring(err),
+                })
+            end
+        end)
     end
 
     local errorSignal = safe(function()
@@ -1870,23 +1914,38 @@ function Controller:Start()
                 or lower:find("error code: 279", 1, true)
 
             if not reconnectable then return end
+            requestReconnect(message)
+        end))
+    end
 
-            self.reconnectQueued = true
-            task.delay(1.5, function()
-                if not self.running then return end
-                if self.runtimeSettings.autoExecute then
-                    self:_queueAutoExecute()
-                end
+    -- Roblox's disconnect screen is normally an ErrorPrompt under
+    -- CoreGui.RobloxPromptGui.promptOverlay. This is more reliable than
+    -- GuiService.ErrorMessageChanged on executors where that signal is silent.
+    local promptOverlay = safe(function()
+        local promptGui = CoreGui:FindFirstChild("RobloxPromptGui")
+        return promptGui and promptGui:FindFirstChild("promptOverlay")
+    end)
 
-                local ok, err = pcall(function()
-                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
-                end)
+    if promptOverlay then
+        table.insert(self.runtimeConnections, promptOverlay.ChildAdded:Connect(function(child)
+            task.delay(0.1, function()
+                if not self.runtimeSettings.autoReconnect then return end
+                local name = tostring(child and child.Name or ""):lower()
+                local title = child and child:FindFirstChild("ErrorTitle", true)
+                local messageArea = child and child:FindFirstChild("ErrorMessage", true)
+                local text = tostring(readText(title) or "") .. " " .. tostring(readText(messageArea) or "")
+                local lower = text:lower()
 
-                if not ok then
-                    self.reconnectQueued = false
-                    self.tracker.events:emit("actionError", {
-                        message = "Auto Reconnect failed: " .. tostring(err),
-                    })
+                if name:find("errorprompt", 1, true)
+                    or lower:find("disconnected", 1, true)
+                    or lower:find("disconnect", 1, true)
+                    or lower:find("desconect", 1, true)
+                    or lower:find("connection", 1, true)
+                    or lower:find("conex", 1, true)
+                    or lower:find("idle", 1, true)
+                    or lower:find("inatividade", 1, true)
+                then
+                    requestReconnect(text ~= " " and text or child.Name)
                 end
             end)
         end))
@@ -2328,9 +2387,15 @@ function Controller:_activateChallengeSurface(surface)
     if scope then
         if type(firePrompt) == "function" then
             for _, obj in ipairs(scope:GetDescendants()) do
-                if obj:IsA("ProximityPrompt") then
+                if obj:IsA("ProximityPrompt") and obj.Enabled then
                     local ok = pcall(firePrompt, obj)
-                    if ok then return true end
+                    if ok then
+                        self.tracker.events:emit("challengerPortalActivated", {
+                            method = "ProximityPrompt",
+                            target = fullName(obj),
+                        })
+                        return true
+                    end
                 end
             end
         end
@@ -2339,48 +2404,81 @@ function Controller:_activateChallengeSurface(surface)
             for _, obj in ipairs(scope:GetDescendants()) do
                 if obj:IsA("ClickDetector") then
                     local ok = pcall(fireClick, obj)
-                    if ok then return true end
+                    if ok then
+                        self.tracker.events:emit("challengerPortalActivated", {
+                            method = "ClickDetector",
+                            target = fullName(obj),
+                        })
+                        return true
+                    end
                 end
             end
         end
     end
 
-    local touchTarget = adornee
-    local bestScore = -1
-
+    -- The lobby dump shows the actual Story/Challenge entrances use a Door
+    -- BasePart with TouchInterest. "Teleport" is only the destination marker,
+    -- so never prefer it as the trigger.
+    local touchTarget
     if scope then
         for _, obj in ipairs(scope:GetDescendants()) do
             if obj:IsA("BasePart") then
-                local lower = obj.Name:lower()
-                local score = 0
-                if lower:find("teleport", 1, true) then score += 8 end
-                if lower:find("portal", 1, true) then score += 7 end
-                if lower:find("trigger", 1, true) then score += 6 end
-                if lower:find("touch", 1, true) then score += 5 end
-                if lower:find("hitbox", 1, true) then score += 5 end
-                if lower:find("door", 1, true) then score += 3 end
-                if score > bestScore then
-                    bestScore = score
+                local hasTouch = obj:FindFirstChildOfClass("TouchTransmitter") ~= nil
+                    or obj:FindFirstChild("TouchInterest") ~= nil
+
+                if hasTouch then
                     touchTarget = obj
+                    break
                 end
             end
         end
+    end
+
+    if not touchTarget then
+        touchTarget = adornee
     end
 
     if type(fireTouch) == "function" and touchTarget then
         local ok = pcall(function()
             fireTouch(root, touchTarget, 0)
-            task.wait(0.1)
+            task.wait(0.15)
             fireTouch(root, touchTarget, 1)
+            task.wait(0.15)
+            fireTouch(root, touchTarget, 0)
         end)
-        if ok then return true end
+
+        if ok then
+            self.tracker.events:emit("challengerPortalActivated", {
+                method = "TouchInterest",
+                target = fullName(touchTarget),
+            })
+            return true
+        end
     end
 
+    -- Fallback for executors without firetouchinterest: physically overlap the
+    -- HumanoidRootPart with the actual touch trigger for a short interval.
+    local previous = root.CFrame
     local ok, err = pcall(function()
-        root.CFrame = touchTarget.CFrame * CFrame.new(0, 2.5, 0)
+        root.CFrame = touchTarget.CFrame
+        task.wait(0.35)
+        root.CFrame = touchTarget.CFrame * CFrame.new(0, 0, 0.1)
+        task.wait(0.35)
     end)
 
-    return ok, ok and nil or tostring(err)
+    if ok then
+        self.tracker.events:emit("challengerPortalActivated", {
+            method = "CharacterTouch",
+            target = fullName(touchTarget),
+        })
+        return true
+    end
+
+    pcall(function()
+        root.CFrame = previous
+    end)
+
+    return false, tostring(err)
 end
 
 function Controller:RunChallengerStep(force)
