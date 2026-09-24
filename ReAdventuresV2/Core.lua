@@ -6,16 +6,17 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
-local PathfindingService = game:GetService("PathfindingService")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local CoreGui = game:GetService("CoreGui")
+local CollectionService = game:GetService("CollectionService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
 
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.3.1"
+Core.VERSION = "2.4.0"
 Core.LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/re-adventures-v2-core/Loader/Loader.lua", true))()]]
 
 local function safe(fn, fallback)
@@ -1777,17 +1778,25 @@ function Controller.new(options)
         lastWebhookResultKey = nil,
         runtimeConnections = {},
         reconnectQueued = false,
+        autoExecuteQueued = false,
         lastChallengeAttempt = 0,
         lastChallengeNotice = 0,
-        challengeWalking = false,
+        challengePendingType = nil,
+        challengePendingAt = 0,
+        challengeJoinCooldownUntil = 0,
         autoMapMacroStartedFor = nil,
+        lastInfiniteSellWave = nil,
         session = {
             wins = 0,
             losses = 0,
         },
         challenger = {
             enabled = false,
-            kind = "Normal",
+            types = {
+                Normal = true,
+                Daily = false,
+            },
+            priority = "Normal",
             autoLoadMacro = true,
             autoReturnLobby = true,
         },
@@ -1805,6 +1814,18 @@ function Controller.new(options)
             autoNext = false,
             autoReplay = false,
             autoReturnLobby = false,
+        },
+        autoInfinite = {
+            enabled = false,
+            autoReady = false,
+            autoPlace = false,
+            placeSlots = {},
+            autoUpgrade = false,
+            upgradeSlots = {},
+            autoReplay = false,
+            autoReturnLobby = false,
+            autoSellAll = false,
+            sellWave = 50,
         },
         webhook = {
             enabled = false,
@@ -1828,6 +1849,7 @@ function Controller:Start()
                 self.lastPostMatchAction = nil
                 self.lastReadyAttempt = 0
                 self.readySubmitted = false
+                self.lastInfiniteSellWave = nil
             elseif payload.to == "FINISHED" then
                 self.lastReadyAttempt = 0
                 self.readySubmitted = false
@@ -2252,6 +2274,10 @@ function Controller:_executorFunction(...)
 end
 
 function Controller:_queueAutoExecute()
+    if self.autoExecuteQueued then
+        return true, "already queued"
+    end
+
     local queueFn = self:_executorFunction("queue_on_teleport", "queueonteleport")
     if type(queueFn) ~= "function" then
         return false, "queue_on_teleport unavailable"
@@ -2262,6 +2288,7 @@ function Controller:_queueAutoExecute()
         return false, tostring(err)
     end
 
+    self.autoExecuteQueued = true
     return true
 end
 
@@ -2294,19 +2321,42 @@ end
 function Controller:SetChallengerConfig(config)
     assert(type(config) == "table", "Challenger config must be a table")
 
-    if config.kind ~= nil then
-        local kind = tostring(config.kind)
-        self.challenger.kind = kind == "Daily" and "Daily" or "Normal"
+    if type(config.types) == "table" then
+        local nextTypes = {
+            Normal = false,
+            Daily = false,
+        }
+
+        for key, value in pairs(config.types) do
+            if key == "Normal" or key == "Daily" then
+                nextTypes[key] = value == true
+            elseif type(value) == "string" and (value == "Normal" or value == "Daily") then
+                nextTypes[value] = true
+            end
+        end
+
+        self.challenger.types = nextTypes
+    elseif config.kind ~= nil then
+        -- Backward compatibility with the previous single-select setting.
+        local kind = tostring(config.kind) == "Daily" and "Daily" or "Normal"
+        self.challenger.types = {
+            Normal = kind == "Normal",
+            Daily = kind == "Daily",
+        }
+        self.challenger.priority = kind
+    end
+
+    if config.priority ~= nil then
+        local priority = tostring(config.priority)
+        if priority == "Normal" or priority == "Daily" then
+            self.challenger.priority = priority
+        end
     end
 
     for _, key in ipairs({"enabled", "autoLoadMacro", "autoReturnLobby"}) do
         if config[key] ~= nil then
             self.challenger[key] = config[key] == true
         end
-    end
-
-    if config.enabled == true and self.runtimeSettings.autoExecute then
-        self:_queueAutoExecute()
     end
 
     self.tracker.events:emit("challengerConfigChanged", deepCopy(self.challenger))
@@ -2317,36 +2367,39 @@ function Controller:GetChallengerConfig()
     return deepCopy(self.challenger)
 end
 
-function Controller:_challengeSurfaceTitle()
-    return self.challenger.kind == "Daily" and "DAILY CHALLENGE" or "CURRENT CHALLENGE"
+local function normalizedGuiText(value)
+    if type(value) ~= "string" then return "" end
+    return value
+        :gsub("<.->", "")
+        :gsub("^%s+", "")
+        :gsub("%s+$", "")
+        :lower()
 end
 
-function Controller:_findChallengeSurface()
+function Controller:_readChallengeBoard(kind)
     if not LocalPlayer then return nil end
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if not playerGui then return nil end
 
-    local target = self:_challengeSurfaceTitle()
-    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    local best, bestDistance
+    local wantedTitle = kind == "Daily" and "daily challenge" or "current challenge"
+    local best
 
-    for _, item in ipairs(playerGui:GetDescendants()) do
-        if item:IsA("SurfaceGui") and item.Enabled ~= false then
-            local title = item:FindFirstChild("LevelTitle", true)
-            local text = readText(title)
-            text = type(text) == "string" and text:match("^%s*(.-)%s*$"):upper() or nil
+    for _, surface in ipairs(playerGui:GetDescendants()) do
+        if surface:IsA("SurfaceGui") and surface.Enabled ~= false then
+            local title = surface:FindFirstChild("LevelTitle", true)
+            if normalizedGuiText(readText(title)) == wantedTitle then
+                local levelInfo = surface:FindFirstChild("LevelInfo", true)
+                local data = {
+                    kind = kind,
+                    surface = surface,
+                    mapName = normalizedGuiText(readText(levelInfo and levelInfo:FindFirstChild("MapName"))),
+                    levelName = normalizedGuiText(readText(levelInfo and levelInfo:FindFirstChild("LevelName"))),
+                    difficulty = normalizedGuiText(readText(levelInfo and levelInfo:FindFirstChild("Difficulty"))),
+                }
 
-            if text == target and (not title:IsA("GuiObject") or title.Visible ~= false) then
-                local adornee = safe(function() return item.Adornee end)
-                local distance = math.huge
-
-                if root and adornee and adornee:IsA("BasePart") then
-                    distance = (root.Position - adornee.Position).Magnitude
-                end
-
-                if not best or distance < bestDistance then
-                    best = item
-                    bestDistance = distance
+                if data.mapName ~= "" or data.levelName ~= "" or data.difficulty ~= "" then
+                    best = data
+                    break
                 end
             end
         end
@@ -2355,146 +2408,276 @@ function Controller:_findChallengeSurface()
     return best
 end
 
-function Controller:_challengeScope(surface)
-    local adornee = surface and safe(function() return surface.Adornee end)
-    if not adornee then return nil, nil end
+function Controller:_doorMetadata(door)
+    if not door or not door:IsA("BasePart") then return nil end
+    local surface = door:FindFirstChild("Surface")
+        or door:FindFirstChildWhichIsA("SurfaceGui")
 
-    local scope = adornee.Parent
-    for _ = 1, 3 do
-        if not scope or scope == Workspace then break end
-        if scope:IsA("Model") then break end
-        scope = scope.Parent
+    if not surface then
+        surface = door:FindFirstChild("Surface", true)
     end
 
-    return scope or adornee.Parent, adornee
+    return {
+        door = door,
+        mapName = normalizedGuiText(readText(surface and surface:FindFirstChild("MapName", true))),
+        levelName = normalizedGuiText(readText(surface and surface:FindFirstChild("LevelName", true))),
+        difficulty = normalizedGuiText(readText(surface and surface:FindFirstChild("Difficulty", true))),
+        state = normalizedGuiText(readText(surface and surface:FindFirstChild("State", true))),
+    }
 end
 
-function Controller:_walkCharacterTo(target)
+function Controller:_dailyTaggedDoor()
+    local tagged = CollectionService:GetTagged("_daily_challenge_lobby_models")
+
+    for _, model in ipairs(tagged) do
+        if model and model.Parent then
+            local fallback
+
+            for _, obj in ipairs(model:GetDescendants()) do
+                if obj:IsA("BasePart") then
+                    local lower = obj.Name:lower()
+                    if lower == "door" then
+                        return obj
+                    end
+                    fallback = fallback or obj
+                end
+            end
+
+            if model:IsA("Model") and model.PrimaryPart then
+                return model.PrimaryPart
+            end
+
+            if fallback then
+                return fallback
+            end
+        end
+    end
+
+    -- Dump-confirmed fallback path if CollectionService tagging is unavailable.
+    local challenges = Workspace:FindFirstChild("_CHALLENGES")
+    local daily = challenges and challenges:FindFirstChild("DailyChallenge")
+
+    if daily then
+        for _, obj in ipairs(daily:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Name:lower() == "door" then
+                return obj
+            end
+        end
+    end
+
+    return nil
+end
+
+function Controller:_findChallengeDoor(kind)
+    local board = self:_readChallengeBoard(kind)
+
+    if kind == "Daily" then
+        local tagged = self:_dailyTaggedDoor()
+        if tagged then
+            return tagged, board
+        end
+    end
+
+    local lobbies = Workspace:FindFirstChild("_LOBBIES")
+    local story = lobbies and lobbies:FindFirstChild("Story")
+    if not story then
+        return nil, board
+    end
+
+    local best, bestScore
+    local dailyBoard = kind == "Normal" and self:_readChallengeBoard("Daily") or nil
+
+    for _, obj in ipairs(story:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Name:lower() == "door" then
+            local meta = self:_doorMetadata(obj)
+
+            if meta then
+                local score = 0
+                if board then
+                    if board.mapName ~= "" and meta.mapName == board.mapName then score += 8 end
+                    if board.levelName ~= "" and meta.levelName == board.levelName then score += 5 end
+                    if board.difficulty ~= "" and meta.difficulty == board.difficulty then score += 10 end
+                end
+
+                local isPlainStory = meta.difficulty == ""
+                    or meta.difficulty == "normal"
+                    or meta.difficulty == "hard"
+
+                local isDailyMatch = dailyBoard
+                    and dailyBoard.mapName ~= ""
+                    and meta.mapName == dailyBoard.mapName
+                    and (dailyBoard.levelName == "" or meta.levelName == dailyBoard.levelName)
+                    and (dailyBoard.difficulty == "" or meta.difficulty == dailyBoard.difficulty)
+
+                if kind == "Normal" and not isPlainStory and not isDailyMatch then
+                    score += 2
+                elseif kind == "Daily" and isDailyMatch then
+                    score += 20
+                end
+
+                if score > 0 and (not best or score > bestScore) then
+                    best = obj
+                    bestScore = score
+                end
+            end
+        end
+    end
+
+    return best, board
+end
+
+function Controller:_teleportIntoChallengeDoor(door, kind)
     if not LocalPlayer or not LocalPlayer.Character then
         return false, "character unavailable"
     end
 
-    local character = LocalPlayer.Character
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local root = character:FindFirstChild("HumanoidRootPart")
-
-    if not humanoid or not root then
+    local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then
         return false, "character unavailable"
     end
 
-    if not target or not target:IsA("BasePart") then
-        return false, "invalid walk target"
+    if not door or not door:IsA("BasePart") then
+        return false, "challenge door unavailable"
     end
 
-    local function moveToPoint(position, timeout)
-        humanoid:MoveTo(position)
-        local deadline = os.clock() + (timeout or 5)
+    local ok, err = pcall(function()
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
 
-        while self.running
-            and humanoid.Parent
-            and root.Parent
-            and os.clock() < deadline
-        do
-            if (root.Position - position).Magnitude <= 3.5 then
-                return true
-            end
-            task.wait(0.1)
-        end
-
-        return (root.Position - position).Magnitude <= 5
-    end
-
-    local path = PathfindingService:CreatePath({
-        AgentRadius = 2,
-        AgentHeight = 5,
-        AgentCanJump = true,
-        AgentCanClimb = true,
-        WaypointSpacing = 4,
-    })
-
-    local computed = pcall(function()
-        path:ComputeAsync(root.Position, target.Position)
+        -- Put the character immediately inside the actual Door trigger rather
+        -- than teleporting to the reward board or a destination marker.
+        root.CFrame = door.CFrame * CFrame.new(0, 0, math.max(0.35, door.Size.Z * 0.15))
+        task.wait(0.12)
+        root.CFrame = door.CFrame
+        task.wait(0.35)
     end)
 
-    if computed and path.Status == Enum.PathStatus.Success then
-        local waypoints = path:GetWaypoints()
-
-        for index, waypoint in ipairs(waypoints) do
-            if index > 1 then
-                if waypoint.Action == Enum.PathWaypointAction.Jump then
-                    humanoid.Jump = true
-                end
-
-                if not moveToPoint(waypoint.Position, 4) then
-                    break
-                end
-            end
-        end
+    if not ok then
+        return false, tostring(err)
     end
 
-    -- Final approach is still ordinary Humanoid movement. Walking into the
-    -- actual Door/TouchInterest lets the game's own touched pipeline handle
-    -- the lobby join exactly like a player entering the portal.
-    local reached = moveToPoint(target.Position, 6)
-
-    if reached then
-        task.wait(0.75)
-    end
-
-    return reached, reached and nil or "could not reach challenge portal"
-end
-
-function Controller:_activateChallengeSurface(surface)
-    if not surface then return false, "challenge portal not found" end
-    if self.challengeWalking then return false, "already walking to challenger" end
-
-    local scope, adornee = self:_challengeScope(surface)
-    if not adornee or not adornee:IsA("BasePart") then
-        return false, "challenge portal has no world target"
-    end
-
-    -- The lobby dumps show that the entrance itself is a Door with a
-    -- TouchInterest. The object named Teleport is a destination marker, not
-    -- the interaction target. Prefer the real Door/touch trigger.
-    local touchTarget
-    local fallbackDoor
-
-    if scope then
-        for _, obj in ipairs(scope:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                local lower = obj.Name:lower()
-
-                if lower == "door" and not fallbackDoor then
-                    fallbackDoor = obj
-                end
-
-                local hasTouch = obj:FindFirstChildOfClass("TouchTransmitter") ~= nil
-                    or obj:FindFirstChild("TouchInterest") ~= nil
-
-                if hasTouch then
-                    if lower == "door" then
-                        touchTarget = obj
-                        break
-                    elseif not touchTarget then
-                        touchTarget = obj
-                    end
-                end
-            end
-        end
-    end
-
-    touchTarget = touchTarget or fallbackDoor or adornee
-
-    self.challengeWalking = true
     self.tracker.events:emit("challengerPortalActivated", {
-        method = "Walking",
-        target = fullName(touchTarget),
+        method = "DoorTeleport",
+        kind = kind,
+        target = fullName(door),
     })
 
-    local ok, err = self:_walkCharacterTo(touchTarget)
-    self.challengeWalking = false
+    return true
+end
 
-    return ok, err
+function Controller:_matchmakingVisible()
+    if not LocalPlayer then return nil end
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local gui = playerGui and playerGui:FindFirstChild("MatchmakingUI")
+    if not gui then return nil end
+    if gui:IsA("ScreenGui") and gui.Enabled == false then return nil end
+    return gui
+end
+
+function Controller:_buttonText(button)
+    if not button then return "" end
+    local chunks = {}
+
+    local own = readText(button)
+    if own and own ~= "" then table.insert(chunks, own) end
+
+    for _, child in ipairs(button:GetDescendants()) do
+        local text = readText(child)
+        if text and text ~= "" then
+            table.insert(chunks, text)
+        end
+    end
+
+    return normalizedGuiText(table.concat(chunks, " "))
+end
+
+function Controller:_activatePlayHere()
+    local gui = self:_matchmakingVisible()
+    if not gui then
+        return false, "waiting for matchmaking choice"
+    end
+
+    local exact
+    local candidates = {}
+
+    for _, item in ipairs(gui:GetDescendants()) do
+        if item:IsA("GuiButton") and item.Visible and item.Active ~= false then
+            local text = self:_buttonText(item)
+            local compact = text:gsub("%s+", "")
+
+            if compact:find("playhere", 1, true) then
+                exact = item
+                break
+            end
+
+            local size = item.AbsoluteSize
+            local area = size.X * size.Y
+            if area >= 7000 then
+                table.insert(candidates, item)
+            end
+        end
+    end
+
+    local button = exact
+
+    if not button and #candidates > 0 then
+        -- The popup shown by Daily has Play Here on the left and Find Match on
+        -- the right. Exclude any candidate explicitly labelled Find Match,
+        -- then pick the left-most large action button.
+        local filtered = {}
+        for _, candidate in ipairs(candidates) do
+            local text = self:_buttonText(candidate)
+            if not text:find("find match", 1, true)
+                and not text:find("matchmaking", 1, true)
+            then
+                table.insert(filtered, candidate)
+            end
+        end
+
+        candidates = #filtered > 0 and filtered or candidates
+
+        table.sort(candidates, function(a, b)
+            return a.AbsolutePosition.X < b.AbsolutePosition.X
+        end)
+
+        button = candidates[1]
+    end
+
+    if not button then
+        return false, "Play Here button not found"
+    end
+
+    local ok = pcall(function()
+        button:Activate()
+    end)
+
+    if not ok then
+        local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
+        ok = pcall(function()
+            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
+            task.wait(0.05)
+            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
+        end)
+    end
+
+    if not ok then
+        return false, "could not activate Play Here"
+    end
+
+    self.tracker.events:emit("dailyPlayHereActivated", {})
+    return true
+end
+
+function Controller:_challengeOrder()
+    local selected = self.challenger.types or {}
+    local priority = self.challenger.priority == "Daily" and "Daily" or "Normal"
+    local other = priority == "Daily" and "Normal" or "Daily"
+    local order = {}
+
+    if selected[priority] then table.insert(order, priority) end
+    if selected[other] then table.insert(order, other) end
+
+    return order
 end
 
 function Controller:RunChallengerStep(force)
@@ -2508,33 +2691,73 @@ function Controller:RunChallengerStep(force)
     end
 
     local now = os.clock()
-    if not force and now - (self.lastChallengeAttempt or 0) < 3 then
+
+    if self.challengePendingType == "Daily" then
+        local clicked, clickErr = self:_activatePlayHere()
+        if clicked then
+            self.challengePendingType = nil
+            self.challengeJoinCooldownUntil = now + 8
+            return true
+        end
+
+        if now - (self.challengePendingAt or 0) < 8 then
+            return false, clickErr
+        end
+
+        self.challengePendingType = nil
+    end
+
+    if not force and now < (self.challengeJoinCooldownUntil or 0) then
         return false, "waiting"
     end
+
+    if not force and now - (self.lastChallengeAttempt or 0) < 2 then
+        return false, "waiting"
+    end
+
     self.lastChallengeAttempt = now
 
-    if self.runtimeSettings.autoExecute then
-        self:_queueAutoExecute()
+    local order = self:_challengeOrder()
+    if #order == 0 then
+        return false, "select at least one Challenger type"
     end
 
-    local surface = self:_findChallengeSurface()
-    if not surface then
-        if now - (self.lastChallengeNotice or 0) >= 15 then
-            self.lastChallengeNotice = now
-            self.tracker.events:emit("actionError", {
-                message = self.challenger.kind .. " Challenger portal not found",
-            })
+    local lastError = "challenge door not found"
+
+    for _, kind in ipairs(order) do
+        local door = self:_findChallengeDoor(kind)
+
+        if door then
+            local ok, err = self:_teleportIntoChallengeDoor(door, kind)
+
+            if ok then
+                self.tracker.events:emit("challengerJoinAttempt", {
+                    kind = kind,
+                })
+
+                if kind == "Daily" then
+                    self.challengePendingType = "Daily"
+                    self.challengePendingAt = os.clock()
+                    self.challengeJoinCooldownUntil = os.clock() + 1
+                else
+                    self.challengeJoinCooldownUntil = os.clock() + 8
+                end
+
+                return true
+            end
+
+            lastError = err or lastError
         end
-        return false, "challenge portal not found"
     end
 
-    local ok, err = self:_activateChallengeSurface(surface)
-    if ok then
-        self.tracker.events:emit("challengerJoinAttempt", {
-            kind = self.challenger.kind,
+    if now - (self.lastChallengeNotice or 0) >= 15 then
+        self.lastChallengeNotice = now
+        self.tracker.events:emit("actionError", {
+            message = tostring(lastError),
         })
     end
-    return ok, err
+
+    return false, lastError
 end
 
 function Controller:_findMacroForCurrentMap()
@@ -2617,6 +2840,8 @@ function Controller:_dispatch(action)
         return self:_invoke("spawn_unit", action.unit.uuid, action.cframe)
     elseif action.kind == "upgrade" then
         return self:_invoke("upgrade_unit_ingame", action.model)
+    elseif action.kind == "sell" then
+        return self:_invoke("sell_unit_ingame", action.model)
     elseif action.kind == "next" then
         return self:_invoke("set_game_finished_vote", "next_story")
     elseif action.kind == "replay" then
@@ -2644,7 +2869,9 @@ function Controller:_automationStep()
 
     self:_autoLoadMapMacroStep()
 
-    local config = self.autoStory
+    local mode = detectMode(state.map.level)
+    local infiniteActive = mode == "Infinite" and self.autoInfinite.enabled
+    local config = infiniteActive and self.autoInfinite or self.autoStory
 
     -- The game's own VoteStart GUI is the authoritative Ready signal.
     -- Replay and Next can reuse the same server and recreate/show this GUI
@@ -2685,7 +2912,9 @@ function Controller:_automationStep()
     if state.match.finished and not readyWindow then
         local shouldReturnLobby = config.autoReturnLobby
             or (self.challenger.enabled and self.challenger.autoReturnLobby)
-        local kind = shouldReturnLobby and "lobby" or config.autoReplay and "replay" or config.autoNext and "next"
+        local kind = shouldReturnLobby and "lobby"
+            or config.autoReplay and "replay"
+            or (not infiniteActive and config.autoNext) and "next"
         if not kind or self.lastPostMatchAction == kind then return end
         local result = self:_readResult()
         if not result or (kind == "next" and result.outcome ~= "victory") then return end
@@ -2707,6 +2936,34 @@ function Controller:_automationStep()
         return
     end
     if state.match.phase ~= "PLAYING" and state.match.phase ~= "STARTING" then return end
+
+    if infiniteActive
+        and config.autoSellAll
+        and state.match.phase == "PLAYING"
+        and tonumber(state.match.wave)
+        and state.match.wave >= (tonumber(config.sellWave) or 50)
+    then
+        local models = self:_ownModels()
+
+        for _, model in ipairs(models) do
+            local ok, err = self:_dispatch({
+                kind = "sell",
+                model = model,
+            })
+
+            if not ok then
+                self.tracker.events:emit("actionError", {
+                    message = "Sell All failed: " .. tostring(err),
+                })
+            end
+
+            task.wait(0.08)
+        end
+
+        self.lastInfiniteSellWave = state.match.wave
+        return
+    end
+
     local equipped = self:GetEquippedUnits()
     if config.autoPlace then
         for _, slot in ipairs(config.placeSlots) do
@@ -2908,6 +3165,36 @@ end
 
 function Controller:GetAutoStoryConfig()
     return deepCopy(self.autoStory)
+end
+
+function Controller:SetAutoInfiniteConfig(config)
+    assert(type(config) == "table", "Auto Infinite config must be a table")
+
+    for key, value in pairs(config) do
+        if key == "placeSlots" or key == "upgradeSlots" then
+            if type(value) == "table" then
+                self.autoInfinite[key] = deepCopy(value)
+            end
+        elseif key == "sellWave" then
+            local wave = math.floor(tonumber(value) or self.autoInfinite.sellWave or 50)
+            self.autoInfinite.sellWave = math.max(1, wave)
+        elseif self.autoInfinite[key] ~= nil then
+            self.autoInfinite[key] = value == true
+        end
+    end
+
+    if config.autoReplay == true then
+        self.autoInfinite.autoReturnLobby = false
+    elseif config.autoReturnLobby == true then
+        self.autoInfinite.autoReplay = false
+    end
+
+    self.tracker.events:emit("autoInfiniteConfigChanged", deepCopy(self.autoInfinite))
+    return deepCopy(self.autoInfinite)
+end
+
+function Controller:GetAutoInfiniteConfig()
+    return deepCopy(self.autoInfinite)
 end
 
 function Controller:SetWebhookConfig(config)
@@ -3151,30 +3438,27 @@ function Controller:_readResult(forcedOutcome, allowHidden)
     local mapProfile = MapProfiles.resolve(state.map.area, state.map.level)
     local mode = detectMode(state.map.level)
 
-    if self.challenger.enabled then
-        mode = self.challenger.kind == "Daily" and "Daily Challenger" or "Challenger"
-    else
-        local challengeDifficulty = tostring(difficulty or ""):lower()
-        local challengeNames = {
-            ["high cost"] = true,
-            ["short range"] = true,
-            ["short range ii"] = true,
-            ["fast enemies"] = true,
-            ["regen enemies"] = true,
-            ["tank enemies"] = true,
-            ["shield enemies"] = true,
-            ["triple cost"] = true,
-            ["hyper-regen enemies"] = true,
-            ["steel-plated enemies"] = true,
-            ["godspeed enemies"] = true,
-            ["flying enemies"] = true,
-            ["armored enemies"] = true,
-            ["mini-range"] = true,
-            ["burst enemies"] = true,
-        }
-        if mode == "Story" and challengeNames[challengeDifficulty] then
-            mode = "Challenger"
-        end
+    local challengeDifficulty = tostring(difficulty or ""):lower()
+    local challengeNames = {
+        ["high cost"] = true,
+        ["short range"] = true,
+        ["short range ii"] = true,
+        ["fast enemies"] = true,
+        ["regen enemies"] = true,
+        ["tank enemies"] = true,
+        ["shield enemies"] = true,
+        ["triple cost"] = true,
+        ["hyper-regen enemies"] = true,
+        ["steel-plated enemies"] = true,
+        ["godspeed enemies"] = true,
+        ["flying enemies"] = true,
+        ["armored enemies"] = true,
+        ["mini-range"] = true,
+        ["burst enemies"] = true,
+    }
+
+    if mode == "Story" and challengeNames[challengeDifficulty] then
+        mode = "Challenger"
     end
 
     return {
