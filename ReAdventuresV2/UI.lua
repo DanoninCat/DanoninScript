@@ -504,6 +504,17 @@ function UI.AttachChallengers(Window, app, Fluent)
         end
     end)
 
+    local autoReady = Tab:AddToggle("RE_ChallengerAutoReady", {
+        Title = "Auto Start / Ready",
+        Default = config.autoReady ~= false,
+    })
+
+    autoReady:OnChanged(function(value)
+        app:SetChallengerConfig({
+            autoReady = value,
+        })
+    end)
+
     local autoMacro = Tab:AddToggle("RE_ChallengerAutoMacro", {
         Title = "Auto Load Macro by Map",
         Default = config.autoLoadMacro ~= false,
@@ -584,17 +595,6 @@ function UI.AttachInfinite(Window, app, Fluent)
     })
 
     Tab:AddSection("Match")
-
-    local enabled = Tab:AddToggle("RE_InfiniteEnabled", {
-        Title = "Enable Infinite Automation",
-        Default = config.enabled == true,
-    })
-
-    enabled:OnChanged(function(value)
-        app:SetAutoInfiniteConfig({
-            enabled = value,
-        })
-    end)
 
     local autoReady = Tab:AddToggle("RE_InfiniteAutoReady", {
         Title = "Auto Ready",
