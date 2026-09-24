@@ -1784,6 +1784,7 @@ function Controller.new(options)
         challengePendingType = nil,
         challengePendingAt = 0,
         challengeJoinCooldownUntil = 0,
+        lastChallengeType = nil,
         autoMapMacroStartedFor = nil,
         lastInfiniteSellWave = nil,
         session = {
@@ -2674,6 +2675,16 @@ function Controller:_challengeOrder()
     local other = priority == "Daily" and "Normal" or "Daily"
     local order = {}
 
+    -- Priority decides which selected type is attempted first. Once one type
+    -- has successfully started, alternate to the other selected type on the
+    -- next lobby return instead of starving it forever.
+    if selected.Normal and selected.Daily and self.lastChallengeType then
+        local nextType = self.lastChallengeType == "Daily" and "Normal" or "Daily"
+        table.insert(order, nextType)
+        table.insert(order, self.lastChallengeType)
+        return order
+    end
+
     if selected[priority] then table.insert(order, priority) end
     if selected[other] then table.insert(order, other) end
 
@@ -2696,6 +2707,7 @@ function Controller:RunChallengerStep(force)
         local clicked, clickErr = self:_activatePlayHere()
         if clicked then
             self.challengePendingType = nil
+            self.lastChallengeType = "Daily"
             self.challengeJoinCooldownUntil = now + 8
             return true
         end
@@ -2740,6 +2752,7 @@ function Controller:RunChallengerStep(force)
                     self.challengePendingAt = os.clock()
                     self.challengeJoinCooldownUntil = os.clock() + 1
                 else
+                    self.lastChallengeType = "Normal"
                     self.challengeJoinCooldownUntil = os.clock() + 8
                 end
 
@@ -3706,9 +3719,7 @@ function Controller:_handleFinishedMatch()
                 local mapProfile = MapProfiles.resolve(state.map.area, state.map.level)
                 result = {
                     outcome = "defeat",
-                    mode = self.challenger.enabled
-                        and (self.challenger.kind == "Daily" and "Daily Challenger" or "Challenger")
-                        or detectMode(state.map.level),
+                    mode = detectMode(state.map.level),
                     map = mapProfile.displayName,
                     thumbnail = mapProfile.thumbnail,
                     act = "Act ?",
