@@ -516,6 +516,15 @@ function UI.AttachChallengers(Window, app, Fluent)
         notify(Fluent, "Loaded macro for " .. tostring(level))
     end))
 
+    table.insert(app.uiDisconnectors, app:On("challengerPortalActivated", function(payload)
+        local method = payload and payload.method or "trigger"
+        notify(Fluent, "Challenger portal activated via " .. tostring(method))
+    end))
+
+    table.insert(app.uiDisconnectors, app:On("reconnectTriggered", function(payload)
+        notify(Fluent, "Auto Reconnect: " .. tostring(payload and payload.reason or "disconnect"))
+    end))
+
     return Tab
 end
 
