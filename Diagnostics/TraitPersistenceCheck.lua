@@ -56,25 +56,49 @@ local function normalizeTraits(traits)
     return out
 end
 
-local gc = getgcFn(true)
 local selectedUuid
 local collection
+local collectionGetUnit
+local collectionUnit
 
-for _, obj in ipairs(gc) do
-    if type(obj) == "table" then
-        local uuid = raw(obj, "applying_unit_uuid")
-        local name = raw(obj, "_ui_instance_name")
-        if name == "trait_reroll_ui" and type(uuid) == "string" and uuid ~= "" then
-            selectedUuid = uuid
+local function scanRuntime(targetUuid)
+    local gc = getgcFn(true)
+
+    for _, obj in ipairs(gc) do
+        if type(obj) == "table" then
+            local uuid = raw(obj, "applying_unit_uuid")
+            local name = raw(obj, "_ui_instance_name")
+            if name == "trait_reroll_ui" and type(uuid) == "string" and uuid ~= "" then
+                selectedUuid = uuid
+            end
         end
+    end
 
-        local getUnit = raw(obj, "get_unit_by_uuid")
-        local data = raw(obj, "collection_profile_data")
-        if type(getUnit) == "function" and type(data) == "table" then
-            collection = obj
+    if type(targetUuid) ~= "string" or targetUuid == "" then
+        return
+    end
+
+    for _, obj in ipairs(gc) do
+        if type(obj) == "table" then
+            local getUnit = raw(obj, "get_unit_by_uuid")
+            if type(getUnit) == "function" then
+                local ok, unit = pcall(getUnit, obj, targetUuid)
+                if ok and type(unit) == "table" then
+                    local unitUuid = raw(unit, "uuid")
+                    if unitUuid == nil or tostring(unitUuid) == targetUuid then
+                        collection = obj
+                        collectionGetUnit = getUnit
+                        collectionUnit = unit
+                        return
+                    end
+                end
+            end
         end
     end
 end
+
+-- First pass discovers a currently selected UUID, if Trait Reroll is open.
+scanRuntime(nil)
 
 local baseline
 if readfileFn and (not isfileFn or isfileFn(baselinePath)) then
@@ -91,11 +115,20 @@ local targetUuid = selectedUuid or (baseline and baseline.uuid)
 assert(type(targetUuid) == "string" and targetUuid ~= "",
     "Select the unit in Trait Reroll on the first run, or keep the baseline file for post-rejoin check.")
 
-assert(collection, "Collection object not found")
+-- Session/collection can appear a little after the player reaches the lobby.
+local deadline = os.clock() + 30
+repeat
+    scanRuntime(targetUuid)
+    if collection and collectionUnit then
+        break
+    end
+    task.wait(0.5)
+until os.clock() >= deadline
 
-local getUnit = raw(collection, "get_unit_by_uuid")
-local ok, unit = pcall(getUnit, collection, targetUuid)
-assert(ok and type(unit) == "table", "Unit record not found for UUID " .. tostring(targetUuid))
+assert(collection and collectionGetUnit and collectionUnit,
+    "Collection/unit not found after waiting 30s for UUID " .. tostring(targetUuid))
+
+local unit = collectionUnit
 
 local current = {
     uuid = targetUuid,
