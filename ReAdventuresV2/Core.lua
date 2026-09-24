@@ -6,6 +6,7 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local PathfindingService = game:GetService("PathfindingService")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local CoreGui = game:GetService("CoreGui")
@@ -14,7 +15,7 @@ local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.3.0"
+Core.VERSION = "2.3.1"
 Core.LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/re-adventures-v2-core/Loader/Loader.lua", true))()]]
 
 local function safe(fn, fallback)
@@ -1778,6 +1779,7 @@ function Controller.new(options)
         reconnectQueued = false,
         lastChallengeAttempt = 0,
         lastChallengeNotice = 0,
+        challengeWalking = false,
         autoMapMacroStartedFor = nil,
         session = {
             wins = 0,
@@ -2367,118 +2369,132 @@ function Controller:_challengeScope(surface)
     return scope or adornee.Parent, adornee
 end
 
-function Controller:_activateChallengeSurface(surface)
-    if not surface then return false, "challenge portal not found" end
-    if not LocalPlayer or not LocalPlayer.Character then return false, "character unavailable" end
-
-    local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not root then return false, "character unavailable" end
-
-    local scope, adornee = self:_challengeScope(surface)
-    if not adornee or not adornee:IsA("BasePart") then
-        return false, "challenge portal has no world target"
+function Controller:_walkCharacterTo(target)
+    if not LocalPlayer or not LocalPlayer.Character then
+        return false, "character unavailable"
     end
 
-    local env = (getgenv and getgenv()) or _G
-    local firePrompt = rawget(env, "fireproximityprompt")
-    local fireClick = rawget(env, "fireclickdetector")
-    local fireTouch = rawget(env, "firetouchinterest")
+    local character = LocalPlayer.Character
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
 
-    if scope then
-        if type(firePrompt) == "function" then
-            for _, obj in ipairs(scope:GetDescendants()) do
-                if obj:IsA("ProximityPrompt") and obj.Enabled then
-                    local ok = pcall(firePrompt, obj)
-                    if ok then
-                        self.tracker.events:emit("challengerPortalActivated", {
-                            method = "ProximityPrompt",
-                            target = fullName(obj),
-                        })
-                        return true
-                    end
-                end
-            end
-        end
-
-        if type(fireClick) == "function" then
-            for _, obj in ipairs(scope:GetDescendants()) do
-                if obj:IsA("ClickDetector") then
-                    local ok = pcall(fireClick, obj)
-                    if ok then
-                        self.tracker.events:emit("challengerPortalActivated", {
-                            method = "ClickDetector",
-                            target = fullName(obj),
-                        })
-                        return true
-                    end
-                end
-            end
-        end
+    if not humanoid or not root then
+        return false, "character unavailable"
     end
 
-    -- The lobby dump shows the actual Story/Challenge entrances use a Door
-    -- BasePart with TouchInterest. "Teleport" is only the destination marker,
-    -- so never prefer it as the trigger.
-    local touchTarget
-    if scope then
-        for _, obj in ipairs(scope:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                local hasTouch = obj:FindFirstChildOfClass("TouchTransmitter") ~= nil
-                    or obj:FindFirstChild("TouchInterest") ~= nil
+    if not target or not target:IsA("BasePart") then
+        return false, "invalid walk target"
+    end
 
-                if hasTouch then
-                    touchTarget = obj
+    local function moveToPoint(position, timeout)
+        humanoid:MoveTo(position)
+        local deadline = os.clock() + (timeout or 5)
+
+        while self.running
+            and humanoid.Parent
+            and root.Parent
+            and os.clock() < deadline
+        do
+            if (root.Position - position).Magnitude <= 3.5 then
+                return true
+            end
+            task.wait(0.1)
+        end
+
+        return (root.Position - position).Magnitude <= 5
+    end
+
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentCanClimb = true,
+        WaypointSpacing = 4,
+    })
+
+    local computed = pcall(function()
+        path:ComputeAsync(root.Position, target.Position)
+    end)
+
+    if computed and path.Status == Enum.PathStatus.Success then
+        local waypoints = path:GetWaypoints()
+
+        for index, waypoint in ipairs(waypoints) do
+            if index > 1 then
+                if waypoint.Action == Enum.PathWaypointAction.Jump then
+                    humanoid.Jump = true
+                end
+
+                if not moveToPoint(waypoint.Position, 4) then
                     break
                 end
             end
         end
     end
 
-    if not touchTarget then
-        touchTarget = adornee
+    -- Final approach is still ordinary Humanoid movement. Walking into the
+    -- actual Door/TouchInterest lets the game's own touched pipeline handle
+    -- the lobby join exactly like a player entering the portal.
+    local reached = moveToPoint(target.Position, 6)
+
+    if reached then
+        task.wait(0.75)
     end
 
-    if type(fireTouch) == "function" and touchTarget then
-        local ok = pcall(function()
-            fireTouch(root, touchTarget, 0)
-            task.wait(0.15)
-            fireTouch(root, touchTarget, 1)
-            task.wait(0.15)
-            fireTouch(root, touchTarget, 0)
-        end)
+    return reached, reached and nil or "could not reach challenge portal"
+end
 
-        if ok then
-            self.tracker.events:emit("challengerPortalActivated", {
-                method = "TouchInterest",
-                target = fullName(touchTarget),
-            })
-            return true
+function Controller:_activateChallengeSurface(surface)
+    if not surface then return false, "challenge portal not found" end
+    if self.challengeWalking then return false, "already walking to challenger" end
+
+    local scope, adornee = self:_challengeScope(surface)
+    if not adornee or not adornee:IsA("BasePart") then
+        return false, "challenge portal has no world target"
+    end
+
+    -- The lobby dumps show that the entrance itself is a Door with a
+    -- TouchInterest. The object named Teleport is a destination marker, not
+    -- the interaction target. Prefer the real Door/touch trigger.
+    local touchTarget
+    local fallbackDoor
+
+    if scope then
+        for _, obj in ipairs(scope:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                local lower = obj.Name:lower()
+
+                if lower == "door" and not fallbackDoor then
+                    fallbackDoor = obj
+                end
+
+                local hasTouch = obj:FindFirstChildOfClass("TouchTransmitter") ~= nil
+                    or obj:FindFirstChild("TouchInterest") ~= nil
+
+                if hasTouch then
+                    if lower == "door" then
+                        touchTarget = obj
+                        break
+                    elseif not touchTarget then
+                        touchTarget = obj
+                    end
+                end
+            end
         end
     end
 
-    -- Fallback for executors without firetouchinterest: physically overlap the
-    -- HumanoidRootPart with the actual touch trigger for a short interval.
-    local previous = root.CFrame
-    local ok, err = pcall(function()
-        root.CFrame = touchTarget.CFrame
-        task.wait(0.35)
-        root.CFrame = touchTarget.CFrame * CFrame.new(0, 0, 0.1)
-        task.wait(0.35)
-    end)
+    touchTarget = touchTarget or fallbackDoor or adornee
 
-    if ok then
-        self.tracker.events:emit("challengerPortalActivated", {
-            method = "CharacterTouch",
-            target = fullName(touchTarget),
-        })
-        return true
-    end
+    self.challengeWalking = true
+    self.tracker.events:emit("challengerPortalActivated", {
+        method = "Walking",
+        target = fullName(touchTarget),
+    })
 
-    pcall(function()
-        root.CFrame = previous
-    end)
+    local ok, err = self:_walkCharacterTo(touchTarget)
+    self.challengeWalking = false
 
-    return false, tostring(err)
+    return ok, err
 end
 
 function Controller:RunChallengerStep(force)
