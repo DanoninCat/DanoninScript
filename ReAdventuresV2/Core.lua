@@ -16,7 +16,7 @@ local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.4.0"
+Core.VERSION = "2.4.1"
 Core.LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/re-adventures-v2-core/Loader/Loader.lua", true))()]]
 
 local function safe(fn, fallback)
@@ -1787,6 +1787,7 @@ function Controller.new(options)
         lastChallengeType = nil,
         autoMapMacroStartedFor = nil,
         lastInfiniteSellWave = nil,
+        upgradeCursor = 1,
         session = {
             wins = 0,
             losses = 0,
@@ -1798,6 +1799,7 @@ function Controller.new(options)
                 Daily = false,
             },
             priority = "Normal",
+            autoReady = true,
             autoLoadMacro = true,
             autoReturnLobby = true,
         },
@@ -1817,7 +1819,7 @@ function Controller.new(options)
             autoReturnLobby = false,
         },
         autoInfinite = {
-            enabled = false,
+            enabled = false, -- legacy compatibility; Infinite options are independent.
             autoReady = false,
             autoPlace = false,
             placeSlots = {},
@@ -2354,7 +2356,7 @@ function Controller:SetChallengerConfig(config)
         end
     end
 
-    for _, key in ipairs({"enabled", "autoLoadMacro", "autoReturnLobby"}) do
+    for _, key in ipairs({"enabled", "autoReady", "autoLoadMacro", "autoReturnLobby"}) do
         if config[key] ~= nil then
             self.challenger[key] = config[key] == true
         end
@@ -2592,6 +2594,23 @@ function Controller:_buttonText(button)
     return normalizedGuiText(table.concat(chunks, " "))
 end
 
+function Controller:_guiActuallyVisible(guiObject)
+    if not guiObject or not guiObject:IsA("GuiObject") then return false end
+
+    local current = guiObject
+    while current do
+        if current:IsA("GuiObject") and current.Visible == false then
+            return false
+        end
+        if current:IsA("ScreenGui") then
+            return current.Enabled ~= false
+        end
+        current = current.Parent
+    end
+
+    return true
+end
+
 function Controller:_activatePlayHere()
     local gui = self:_matchmakingVisible()
     if not gui then
@@ -2602,7 +2621,10 @@ function Controller:_activatePlayHere()
     local candidates = {}
 
     for _, item in ipairs(gui:GetDescendants()) do
-        if item:IsA("GuiButton") and item.Visible and item.Active ~= false then
+        if item:IsA("GuiButton")
+            and item.Active ~= false
+            and self:_guiActuallyVisible(item)
+        then
             local text = self:_buttonText(item)
             local compact = text:gsub("%s+", "")
 
@@ -2613,7 +2635,7 @@ function Controller:_activatePlayHere()
 
             local size = item.AbsoluteSize
             local area = size.X * size.Y
-            if area >= 7000 then
+            if area >= 5000 then
                 table.insert(candidates, item)
             end
         end
@@ -2622,9 +2644,9 @@ function Controller:_activatePlayHere()
     local button = exact
 
     if not button and #candidates > 0 then
-        -- The popup shown by Daily has Play Here on the left and Find Match on
-        -- the right. Exclude any candidate explicitly labelled Find Match,
-        -- then pick the left-most large action button.
+        -- Daily's popup has Play Here on the left and Find Match on the right.
+        -- Prefer a large visible left-side button and explicitly reject anything
+        -- whose descendants identify it as Find Match / matchmaking.
         local filtered = {}
         for _, candidate in ipairs(candidates) do
             local text = self:_buttonText(candidate)
@@ -2637,8 +2659,12 @@ function Controller:_activatePlayHere()
 
         candidates = #filtered > 0 and filtered or candidates
 
-        table.sort(candidates, function(a, b)
-            return a.AbsolutePosition.X < b.AbsolutePosition.X
+        table.sort(candidates, function(left, right)
+            if math.abs(left.AbsolutePosition.X - right.AbsolutePosition.X) > 2 then
+                return left.AbsolutePosition.X < right.AbsolutePosition.X
+            end
+            return (left.AbsoluteSize.X * left.AbsoluteSize.Y)
+                > (right.AbsoluteSize.X * right.AbsoluteSize.Y)
         end)
 
         button = candidates[1]
@@ -2648,24 +2674,39 @@ function Controller:_activatePlayHere()
         return false, "Play Here button not found"
     end
 
-    local ok = pcall(function()
-        button:Activate()
+    local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
+    local clicked = pcall(function()
+        -- Use real UI input first. This follows the same MouseButton path as a
+        -- player click instead of depending on GuiButton:Activate semantics.
+        VirtualInputManager:SendMouseMoveEvent(center.X, center.Y, game)
+        task.wait(0.04)
+        VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
+        task.wait(0.07)
+        VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
     end)
 
-    if not ok then
-        local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
-        ok = pcall(function()
-            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
-            task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
+    task.wait(0.35)
+
+    if not clicked then
+        clicked = pcall(function()
+            button:Activate()
+        end)
+    elseif self:_matchmakingVisible() and self:_guiActuallyVisible(button) then
+        -- Some executors report the synthetic event successfully even when the
+        -- game's button callback did not consume it. One Activate fallback is
+        -- safe and avoids repeated click spam.
+        pcall(function()
+            button:Activate()
         end)
     end
 
-    if not ok then
+    if not clicked then
         return false, "could not activate Play Here"
     end
 
-    self.tracker.events:emit("dailyPlayHereActivated", {})
+    self.tracker.events:emit("dailyPlayHereActivated", {
+        target = fullName(button),
+    })
     return true
 end
 
@@ -2883,7 +2924,7 @@ function Controller:_automationStep()
     self:_autoLoadMapMacroStep()
 
     local mode = detectMode(state.map.level)
-    local infiniteActive = mode == "Infinite" and self.autoInfinite.enabled
+    local infiniteActive = mode == "Infinite"
     local config = infiniteActive and self.autoInfinite or self.autoStory
 
     -- The game's own VoteStart GUI is the authoritative Ready signal.
@@ -2906,7 +2947,10 @@ function Controller:_automationStep()
 
     -- Vote only while the visible Ready?/Start UI exists. A temporary server
     -- rejection is expected during transitions and is retried silently.
-    if config.autoReady and readyWindow and not self.readySubmitted then
+    local shouldAutoReady = config.autoReady
+        or (self.challenger.enabled and self.challenger.autoReady)
+
+    if shouldAutoReady and readyWindow and not self.readySubmitted then
         local now = os.clock()
         if now - (self.lastReadyAttempt or 0) >= 1 then
             self.lastReadyAttempt = now
@@ -2918,7 +2962,8 @@ function Controller:_automationStep()
         end
     end
 
-    if self.replay.running or self.recorder.recording then return end
+    if self.recorder.recording then return end
+    if self.replay.running and not infiniteActive then return end
 
     -- The visible Ready GUI wins over a stale GameFinished value after
     -- same-server Replay/Next transitions.
@@ -2993,19 +3038,47 @@ function Controller:_automationStep()
         end
     end
     if config.autoUpgrade then
-        for _, model in ipairs(self:_ownModels()) do
-            if not self.running then return end
-            local stats = model:FindFirstChild("_stats")
-            local id, uuid = getValue(stats, "id") or model.Name, getValue(stats, "uuid")
-            for _, slot in ipairs(config.upgradeSlots) do
-                local unit = equipped[slot]
-                local level = tonumber(getValue(stats, "upgrade")) or 0
-                local maximum = tonumber(getValue(stats, "max_upgrade"))
-                if unit and unit.equipped and (uuid == unit.uuid or id == unit.unitId) and (not maximum or maximum <= 0 or level < maximum) then
-                    local ok, err = self:_dispatch({kind = "upgrade", model = model, slot = slot})
-                    if not ok then error(err or "Upgrade failed") end
-                    task.wait(0.25)
-                    break
+        local models = self:_ownModels()
+        local count = #models
+
+        if count > 0 then
+            local startIndex = math.max(1, math.min(tonumber(self.upgradeCursor) or 1, count))
+
+            for offset = 0, count - 1 do
+                if not self.running then return end
+
+                local index = ((startIndex + offset - 1) % count) + 1
+                local model = models[index]
+                local stats = model:FindFirstChild("_stats")
+                local id, uuid = getValue(stats, "id") or model.Name, getValue(stats, "uuid")
+
+                for _, slot in ipairs(config.upgradeSlots) do
+                    local unit = equipped[slot]
+                    local level = tonumber(getValue(stats, "upgrade")) or 0
+                    local maximum = tonumber(getValue(stats, "max_upgrade"))
+
+                    if unit
+                        and unit.equipped
+                        and (uuid == unit.uuid or id == unit.unitId)
+                        and (not maximum or maximum <= 0 or level < maximum)
+                    then
+                        local ok, err = self:_dispatch({
+                            kind = "upgrade",
+                            model = model,
+                            slot = slot,
+                        })
+
+                        if ok then
+                            self.upgradeCursor = (index % count) + 1
+                            return -- one server-side upgrade per tick
+                        end
+
+                        if err then
+                            self.tracker.events:emit("actionError", {
+                                message = "Upgrade failed: " .. tostring(err),
+                            })
+                        end
+                    end
                 end
             end
         end
