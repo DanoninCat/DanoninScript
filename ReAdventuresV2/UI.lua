@@ -436,15 +436,56 @@ function UI.AttachChallengers(Window, app, Fluent)
 
     Tab:AddSection("Automation")
 
-    local kind = Tab:AddDropdown("RE_ChallengerType", {
-        Title = "Challenger Type",
+    local selectedTypes = {
+        Normal = config.types and config.types.Normal == true or false,
+        Daily = config.types and config.types.Daily == true or false,
+    }
+
+    if not selectedTypes.Normal and not selectedTypes.Daily then
+        selectedTypes.Normal = true
+    end
+
+    local types = Tab:AddDropdown("RE_ChallengerTypes", {
+        Title = "Challenger Types",
         Values = {"Normal", "Daily"},
-        Default = config.kind or "Normal",
+        Multi = true,
+        Default = selectedTypes,
     })
 
-    kind:OnChanged(function(value)
+    types:OnChanged(function(value)
+        local nextTypes = {
+            Normal = false,
+            Daily = false,
+        }
+
+        if type(value) == "table" then
+            for key, item in pairs(value) do
+                if type(key) == "string" then
+                    if (key == "Normal" or key == "Daily") and item == true then
+                        nextTypes[key] = true
+                    end
+                elseif type(item) == "string" and (item == "Normal" or item == "Daily") then
+                    nextTypes[item] = true
+                end
+            end
+        elseif value == "Normal" or value == "Daily" then
+            nextTypes[value] = true
+        end
+
         app:SetChallengerConfig({
-            kind = value,
+            types = nextTypes,
+        })
+    end)
+
+    local priority = Tab:AddDropdown("RE_ChallengerPriority", {
+        Title = "Priority",
+        Values = {"Normal", "Daily"},
+        Default = config.priority or "Normal",
+    })
+
+    priority:OnChanged(function(value)
+        app:SetChallengerConfig({
+            priority = value,
         })
     end)
 
@@ -490,7 +531,7 @@ function UI.AttachChallengers(Window, app, Fluent)
         Callback = function()
             local ok, err = app:RunChallengerStep(true)
             if ok then
-                notify(Fluent, "Joining " .. tostring(app:GetChallengerConfig().kind) .. " Challenger")
+                notify(Fluent, "Challenger entry started")
             else
                 notify(Fluent, tostring(err or "Join Failed"))
             end
@@ -518,12 +559,270 @@ function UI.AttachChallengers(Window, app, Fluent)
 
     table.insert(app.uiDisconnectors, app:On("challengerPortalActivated", function(payload)
         local method = payload and payload.method or "trigger"
-        notify(Fluent, "Challenger portal activated via " .. tostring(method))
+        local kind = payload and payload.kind or "Challenger"
+        notify(Fluent, tostring(kind) .. " via " .. tostring(method))
+    end))
+
+    table.insert(app.uiDisconnectors, app:On("dailyPlayHereActivated", function()
+        notify(Fluent, "Daily: Play Here")
     end))
 
     table.insert(app.uiDisconnectors, app:On("reconnectTriggered", function(payload)
         notify(Fluent, "Auto Reconnect: " .. tostring(payload and payload.reason or "disconnect"))
     end))
+
+    return Tab
+end
+
+function UI.AttachInfinite(Window, app, Fluent)
+    local Options = Fluent.Options
+    local config = app:GetAutoInfiniteConfig()
+
+    local Tab = Window:AddTab({
+        Title = "Infinite",
+        Icon = "infinity",
+    })
+
+    Tab:AddSection("Match")
+
+    local enabled = Tab:AddToggle("RE_InfiniteEnabled", {
+        Title = "Enable Infinite Automation",
+        Default = config.enabled == true,
+    })
+
+    enabled:OnChanged(function(value)
+        app:SetAutoInfiniteConfig({
+            enabled = value,
+        })
+    end)
+
+    local autoReady = Tab:AddToggle("RE_InfiniteAutoReady", {
+        Title = "Auto Ready",
+        Default = config.autoReady == true,
+    })
+
+    autoReady:OnChanged(function(value)
+        app:SetAutoInfiniteConfig({
+            autoReady = value,
+        })
+    end)
+
+    Tab:AddSection("Units")
+
+    local values, labelToSlot = unitOptions(app)
+
+    local autoPlace = Tab:AddToggle("RE_InfiniteAutoPlaceEnabled", {
+        Title = "Auto Place Units",
+        Default = config.autoPlace == true,
+    })
+
+    autoPlace:OnChanged(function(value)
+        app:SetAutoInfiniteConfig({
+            autoPlace = value,
+        })
+    end)
+
+    local place = Tab:AddDropdown("RE_InfiniteAutoPlaceUnits", {
+        Title = "Place Units",
+        Values = values,
+        Multi = true,
+        Default = {},
+    })
+
+    place:OnChanged(function(value)
+        app:SetAutoInfiniteConfig({
+            placeSlots = selectedSlots(value, labelToSlot),
+        })
+    end)
+
+    local autoUpgrade = Tab:AddToggle("RE_InfiniteAutoUpgradeEnabled", {
+        Title = "Auto Upgrade Units",
+        Default = config.autoUpgrade == true,
+    })
+
+    autoUpgrade:OnChanged(function(value)
+        app:SetAutoInfiniteConfig({
+            autoUpgrade = value,
+        })
+    end)
+
+    local upgrade = Tab:AddDropdown("RE_InfiniteAutoUpgradeUnits", {
+        Title = "Upgrade Units",
+        Values = values,
+        Multi = true,
+        Default = {},
+    })
+
+    upgrade:OnChanged(function(value)
+        app:SetAutoInfiniteConfig({
+            upgradeSlots = selectedSlots(value, labelToSlot),
+        })
+    end)
+
+    Tab:AddSection("Placement Marker")
+
+    local markerValues, markerToSlot, markerNames = markerOptions(app)
+    local markerDropdown = Tab:AddDropdown("RE_InfiniteMarkerUnit", {
+        Title = "Marker Unit",
+        Values = markerValues,
+        Default = markerValues[1],
+    })
+
+    local markerArmed = false
+    local mouse = Players.LocalPlayer and Players.LocalPlayer:GetMouse()
+
+    Tab:AddButton({
+        Title = "Place Marker",
+        Callback = function()
+            local selected = Options.RE_InfiniteMarkerUnit and Options.RE_InfiniteMarkerUnit.Value
+            local slot = markerToSlot[selected]
+
+            if not slot then
+                notify(Fluent, "Select Unit")
+                return
+            end
+
+            markerArmed = true
+            notify(Fluent, "Click Map")
+        end,
+    })
+
+    Tab:AddButton({
+        Title = "Clear Markers",
+        Callback = function()
+            markerArmed = false
+            app:ClearPlacementMarker()
+
+            local folder = Workspace:FindFirstChild("RE_PlacementMarkers")
+            if folder then
+                folder:Destroy()
+            end
+
+            notify(Fluent, "Markers Cleared")
+        end,
+    })
+
+    if mouse then
+        table.insert(app.uiConnections, mouse.Button1Down:Connect(function()
+            if not markerArmed then return end
+            markerArmed = false
+
+            local selected = Options.RE_InfiniteMarkerUnit and Options.RE_InfiniteMarkerUnit.Value
+            local slot = markerToSlot[selected]
+            local hit = mouse.Hit
+
+            if not slot or not hit then return end
+
+            local name = markerNames[selected] or selected
+            local ok = app:SetPlacementMarker(slot, hit, name)
+
+            if ok then
+                drawMarker(slot, hit, name)
+                notify(Fluent, "Marker Saved")
+            end
+        end))
+    end
+
+    Tab:AddSection("End Infinite")
+
+    local sellAll = Tab:AddToggle("RE_InfiniteSellAll", {
+        Title = "Sell All Units at Wave",
+        Default = config.autoSellAll == true,
+    })
+
+    sellAll:OnChanged(function(value)
+        app:SetAutoInfiniteConfig({
+            autoSellAll = value,
+        })
+    end)
+
+    local sellWave = Tab:AddInput("RE_InfiniteSellWave", {
+        Title = "Sell Wave",
+        Default = tostring(config.sellWave or 50),
+        Placeholder = "50",
+        Numeric = true,
+    })
+
+    sellWave:OnChanged(function(value)
+        app:SetAutoInfiniteConfig({
+            sellWave = tonumber(value) or 50,
+        })
+    end)
+
+    Tab:AddSection("After Match")
+
+    local syncingPostMatch = false
+
+    local autoReplay = Tab:AddToggle("RE_InfiniteAutoReplay", {
+        Title = "Auto Replay",
+        Default = config.autoReplay == true,
+    })
+
+    local autoLobby = Tab:AddToggle("RE_InfiniteReturnLobby", {
+        Title = "Auto Return Lobby",
+        Default = config.autoReturnLobby == true,
+    })
+
+    autoReplay:OnChanged(function(value)
+        if syncingPostMatch then return end
+
+        if value and Options.RE_InfiniteReturnLobby and Options.RE_InfiniteReturnLobby.Value == true then
+            syncingPostMatch = true
+            pcall(function() Options.RE_InfiniteReturnLobby:SetValue(false) end)
+            syncingPostMatch = false
+        end
+
+        app:SetAutoInfiniteConfig({
+            autoReplay = value,
+        })
+    end)
+
+    autoLobby:OnChanged(function(value)
+        if syncingPostMatch then return end
+
+        if value and Options.RE_InfiniteAutoReplay and Options.RE_InfiniteAutoReplay.Value == true then
+            syncingPostMatch = true
+            pcall(function() Options.RE_InfiniteAutoReplay:SetValue(false) end)
+            syncingPostMatch = false
+        end
+
+        app:SetAutoInfiniteConfig({
+            autoReturnLobby = value,
+        })
+    end)
+
+    task.spawn(function()
+        local lastUnitsSignature = ""
+        local lastMarkersSignature = ""
+
+        while app.running do
+            task.wait(5)
+            if not app.running then break end
+
+            local latestValues, latestMap = unitOptions(app)
+            local latestMarkerValues, latestMarkerToSlot, latestMarkerNames = markerOptions(app)
+
+            local unitsSignature = table.concat(latestValues, "\31")
+            local markersSignature = table.concat(latestMarkerValues, "\31")
+
+            values = latestValues
+            labelToSlot = latestMap
+            markerValues = latestMarkerValues
+            markerToSlot = latestMarkerToSlot
+            markerNames = latestMarkerNames
+
+            if unitsSignature ~= lastUnitsSignature or markersSignature ~= lastMarkersSignature then
+                lastUnitsSignature = unitsSignature
+                lastMarkersSignature = markersSignature
+
+                pcall(function()
+                    place:SetValues(values)
+                    upgrade:SetValues(values)
+                    markerDropdown:SetValues(markerValues)
+                end)
+            end
+        end
+    end)
 
     return Tab
 end
@@ -859,6 +1158,7 @@ function UI.Attach(Window, app, Fluent)
     end))
     return {
         AutoStory = UI.AttachAutoStory(Window, app, Fluent),
+        Infinite = UI.AttachInfinite(Window, app, Fluent),
         Challengers = UI.AttachChallengers(Window, app, Fluent),
         Macros = UI.AttachMacros(Window, app, Fluent),
         Webhook = UI.AttachWebhook(Window, app, Fluent),
