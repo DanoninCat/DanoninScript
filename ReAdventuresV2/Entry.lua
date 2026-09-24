@@ -5,14 +5,22 @@ return function(Core, UI)
 
     local env = (getgenv and getgenv()) or _G
 
-    -- queue_on_teleport may retain multiple queued copies from older builds.
-    -- Only one Loader instance is allowed to initialize per Roblox JobId.
+    -- Old queue_on_teleport registrations can all fetch the newest Loader.
+    -- Never recycle a healthy interface just because another queued copy fired.
+    local active = env.__RE_ADVENTURES_V2
+    if active and active.App and active.App.running then
+        return active
+    end
+
+    -- Protect the initialization window before env.__RE_ADVENTURES_V2 exists.
+    -- Once the active app is published, the guard above becomes permanent for
+    -- the current JobId and late queued copies simply return it.
     local boot = env.__RE_ADVENTURES_BOOT
     if boot
         and boot.jobId == game.JobId
-        and os.clock() - (tonumber(boot.at) or 0) < 10
+        and os.clock() - (tonumber(boot.at) or 0) < 60
     then
-        return env.__RE_ADVENTURES_V2
+        return active
     end
 
     env.__RE_ADVENTURES_BOOT = {
@@ -20,7 +28,7 @@ return function(Core, UI)
         at = os.clock(),
     }
 
-    local previous = env.__RE_ADVENTURES_V2
+    local previous = active
     if previous then
         if previous.App then previous.App:Stop() end
         if previous.Fluent and previous.Fluent.Destroy then pcall(function() previous.Fluent:Destroy() end) end
@@ -131,6 +139,8 @@ return function(Core, UI)
             Icon = "settings",
         })
 
+        -- Append runtime controls to the interface's existing Settings tab.
+        -- Do not create or replace a second test Settings interface.
         UI.AttachRuntimeSettings(Settings, app, Fluent)
 
         SaveManager:SetLibrary(Fluent)
@@ -229,6 +239,8 @@ return function(Core, UI)
                 priority = Fluent.Options.RE_ChallengerPriority
                     and Fluent.Options.RE_ChallengerPriority.Value
                     or "Normal",
+                autoReady = not Fluent.Options.RE_ChallengerAutoReady
+                    or Fluent.Options.RE_ChallengerAutoReady.Value == true,
                 autoLoadMacro = not Fluent.Options.RE_ChallengerAutoMacro
                     or Fluent.Options.RE_ChallengerAutoMacro.Value == true,
                 autoReturnLobby = not Fluent.Options.RE_ChallengerReturnLobby
@@ -236,8 +248,6 @@ return function(Core, UI)
             })
 
             app:SetAutoInfiniteConfig({
-                enabled = Fluent.Options.RE_InfiniteEnabled
-                    and Fluent.Options.RE_InfiniteEnabled.Value == true,
                 autoReady = Fluent.Options.RE_InfiniteAutoReady
                     and Fluent.Options.RE_InfiniteAutoReady.Value == true,
                 autoPlace = Fluent.Options.RE_InfiniteAutoPlaceEnabled
