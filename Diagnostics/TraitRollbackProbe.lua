@@ -36,6 +36,14 @@ local function fullName(v)
     return ok and name or tostring(v)
 end
 
+local function safeRaw(tbl, key)
+    local ok, value = pcall(rawget, tbl, key)
+    if ok then
+        return value
+    end
+    return nil
+end
+
 local function primitive(v)
     local t = typeof(v)
     if t == "nil" or t == "boolean" or t == "number" or t == "string" then
@@ -132,26 +140,34 @@ for _, obj in ipairs(gc) do
     if type(obj) == "table" and not seenTables[obj] then
         seenTables[obj] = true
 
+        local applyingUnitUuid = safeRaw(obj, "applying_unit_uuid")
+        local currentReroll = safeRaw(obj, "current_reroll_in_progress")
+        local tokenButton = safeRaw(obj, "TokenRerollButton")
+        local screenGUI = safeRaw(obj, "screenGUI")
+        local selectedItemId = safeRaw(obj, "selected_item_id")
+        local isOpen = safeRaw(obj, "IsOpen")
+        local session = safeRaw(obj, "session")
+
         local looksLikeTraitController =
-            obj.applying_unit_uuid ~= nil
-            or obj.current_reroll_in_progress ~= nil
-            or obj.TokenRerollButton ~= nil
-            or (traitGui ~= nil and obj.screenGUI == traitGui)
+            applyingUnitUuid ~= nil
+            or currentReroll ~= nil
+            or tokenButton ~= nil
+            or (traitGui ~= nil and screenGUI == traitGui)
 
         if looksLikeTraitController then
             local entry = {
-                applying_unit_uuid = primitive(obj.applying_unit_uuid),
-                selected_item_id = primitive(obj.selected_item_id),
-                current_reroll_in_progress = primitive(obj.current_reroll_in_progress),
-                isOpen = primitive(obj.IsOpen),
-                screenGUI = primitive(obj.screenGUI),
-                hasSession = type(obj.session) == "table",
+                applying_unit_uuid = primitive(applyingUnitUuid),
+                selected_item_id = primitive(selectedItemId),
+                current_reroll_in_progress = primitive(currentReroll),
+                isOpen = primitive(isOpen),
+                screenGUI = primitive(screenGUI),
+                hasSession = type(session) == "table",
                 fields = shallowTable(obj, 100),
             }
             table.insert(report.traitControllers, entry)
 
-            if type(obj.applying_unit_uuid) == "string" and obj.applying_unit_uuid ~= "" then
-                report.selectedUuid = obj.applying_unit_uuid
+            if type(applyingUnitUuid) == "string" and applyingUnitUuid ~= "" then
+                report.selectedUuid = applyingUnitUuid
             end
         end
     end
@@ -162,8 +178,10 @@ local selectedUuid = report.selectedUuid
 -- Phase 2: locate collection/session-like tables and inspect the selected UUID record.
 for _, obj in ipairs(gc) do
     if type(obj) == "table" then
-        local hasGet = type(rawget(obj, "get_unit_by_uuid")) == "function"
-        local hasChange = type(rawget(obj, "change_traits")) == "function"
+        local getUnitByUuid = safeRaw(obj, "get_unit_by_uuid")
+        local changeTraits = safeRaw(obj, "change_traits")
+        local hasGet = type(getUnitByUuid) == "function"
+        local hasChange = type(changeTraits) == "function"
 
         if hasGet or hasChange then
             local entry = {
@@ -173,7 +191,7 @@ for _, obj in ipairs(gc) do
             }
 
             if selectedUuid and hasGet then
-                local ok, record = pcall(obj.get_unit_by_uuid, obj, selectedUuid)
+                local ok, record = pcall(getUnitByUuid, obj, selectedUuid)
                 entry.lookupOk = ok
                 if ok and type(record) == "table" then
                     entry.unitRecord = shallowTable(record, 120)
