@@ -1849,42 +1849,48 @@ function Controller:Start()
         end))
     end
 
-    table.insert(self.runtimeConnections, GuiService.ErrorMessageChanged:Connect(function(message)
-        if not self.runtimeSettings.autoReconnect or self.reconnectQueued then return end
-        local lower = tostring(message or ""):lower()
-        if lower == "" then return end
+    local errorSignal = safe(function()
+        return GuiService.ErrorMessageChanged
+    end)
 
-        local reconnectable = lower:find("disconnect", 1, true)
-            or lower:find("desconect", 1, true)
-            or lower:find("connection", 1, true)
-            or lower:find("conex", 1, true)
-            or lower:find("idle", 1, true)
-            or lower:find("inatividade", 1, true)
-            or lower:find("error code: 267", 1, true)
-            or lower:find("error code: 277", 1, true)
-            or lower:find("error code: 279", 1, true)
+    if errorSignal then
+        table.insert(self.runtimeConnections, errorSignal:Connect(function(message)
+            if not self.runtimeSettings.autoReconnect or self.reconnectQueued then return end
+            local lower = tostring(message or ""):lower()
+            if lower == "" then return end
 
-        if not reconnectable then return end
+            local reconnectable = lower:find("disconnect", 1, true)
+                or lower:find("desconect", 1, true)
+                or lower:find("connection", 1, true)
+                or lower:find("conex", 1, true)
+                or lower:find("idle", 1, true)
+                or lower:find("inatividade", 1, true)
+                or lower:find("error code: 267", 1, true)
+                or lower:find("error code: 277", 1, true)
+                or lower:find("error code: 279", 1, true)
 
-        self.reconnectQueued = true
-        task.delay(1.5, function()
-            if not self.running then return end
-            if self.runtimeSettings.autoExecute then
-                self:_queueAutoExecute()
-            end
+            if not reconnectable then return end
 
-            local ok, err = pcall(function()
-                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            self.reconnectQueued = true
+            task.delay(1.5, function()
+                if not self.running then return end
+                if self.runtimeSettings.autoExecute then
+                    self:_queueAutoExecute()
+                end
+
+                local ok, err = pcall(function()
+                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                end)
+
+                if not ok then
+                    self.reconnectQueued = false
+                    self.tracker.events:emit("actionError", {
+                        message = "Auto Reconnect failed: " .. tostring(err),
+                    })
+                end
             end)
-
-            if not ok then
-                self.reconnectQueued = false
-                self.tracker.events:emit("actionError", {
-                    message = "Auto Reconnect failed: " .. tostring(err),
-                })
-            end
-        end)
-    end))
+        end))
+    end
 
     local snapshot = self.tracker:start()
     task.spawn(function()
@@ -3274,11 +3280,19 @@ function Controller:_handleFinishedMatch()
 
     -- Some defeat transitions render more slowly than victory. Keep polling
     -- the authoritative visible Holder long enough for the result UI to settle.
-    for _ = 1, 40 do
+    for attempt = 1, 40 do
         if not self.running or self.generation ~= generation then return false, "stopped" end
         result, lastReadError = self:_readResult()
 
         if result then
+            break
+        end
+
+        -- Defeat is also confirmed by the tracked base reaching zero. Do not
+        -- wait the full result timeout when the defeat GUI is late/partial.
+        local baseLife = tonumber(self.tracker.state.player.baseLife)
+        if attempt >= 6 and baseLife and baseLife <= 0 then
+            result = self:_readResult("defeat", true)
             break
         end
 
