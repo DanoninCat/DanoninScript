@@ -4,6 +4,22 @@ return function(Core, UI)
     end
 
     local env = (getgenv and getgenv()) or _G
+
+    -- queue_on_teleport may retain multiple queued copies from older builds.
+    -- Only one Loader instance is allowed to initialize per Roblox JobId.
+    local boot = env.__RE_ADVENTURES_BOOT
+    if boot
+        and boot.jobId == game.JobId
+        and os.clock() - (tonumber(boot.at) or 0) < 10
+    then
+        return env.__RE_ADVENTURES_V2
+    end
+
+    env.__RE_ADVENTURES_BOOT = {
+        jobId = game.JobId,
+        at = os.clock(),
+    }
+
     local previous = env.__RE_ADVENTURES_V2
     if previous then
         if previous.App then previous.App:Stop() end
@@ -150,6 +166,7 @@ return function(Core, UI)
         table.insert(app.uiDisconnectors, app:On("challengerConfigChanged", queueAutoSave))
         table.insert(app.uiDisconnectors, app:On("runtimeConfigChanged", queueAutoSave))
         table.insert(app.uiDisconnectors, app:On("autoStoryConfigChanged", queueAutoSave))
+        table.insert(app.uiDisconnectors, app:On("autoInfiniteConfigChanged", queueAutoSave))
 
         pcall(function()
             SaveManager:LoadAutoloadConfig()
@@ -160,6 +177,35 @@ return function(Core, UI)
         end)
 
         task.delay(0.35, function()
+            local function multiValue(option, allowed, fallback)
+                local out = {}
+                for _, name in ipairs(allowed) do out[name] = false end
+
+                local value = option and option.Value
+                if type(value) == "table" then
+                    for key, item in pairs(value) do
+                        if type(key) == "string" and out[key] ~= nil then
+                            out[key] = item == true
+                        elseif type(item) == "string" and out[item] ~= nil then
+                            out[item] = true
+                        end
+                    end
+                elseif type(value) == "string" and out[value] ~= nil then
+                    out[value] = true
+                end
+
+                local any = false
+                for _, enabledValue in pairs(out) do
+                    if enabledValue then any = true break end
+                end
+
+                if not any and fallback and out[fallback] ~= nil then
+                    out[fallback] = true
+                end
+
+                return out
+            end
+
             local url = Fluent.Options.RE_WebhookURL
                 and Fluent.Options.RE_WebhookURL.Value
                 or ""
@@ -175,13 +221,38 @@ return function(Core, UI)
             app:SetChallengerConfig({
                 enabled = Fluent.Options.RE_ChallengerEnabled
                     and Fluent.Options.RE_ChallengerEnabled.Value == true,
-                kind = Fluent.Options.RE_ChallengerType
-                    and Fluent.Options.RE_ChallengerType.Value
+                types = multiValue(
+                    Fluent.Options.RE_ChallengerTypes,
+                    {"Normal", "Daily"},
+                    "Normal"
+                ),
+                priority = Fluent.Options.RE_ChallengerPriority
+                    and Fluent.Options.RE_ChallengerPriority.Value
                     or "Normal",
                 autoLoadMacro = not Fluent.Options.RE_ChallengerAutoMacro
                     or Fluent.Options.RE_ChallengerAutoMacro.Value == true,
                 autoReturnLobby = not Fluent.Options.RE_ChallengerReturnLobby
                     or Fluent.Options.RE_ChallengerReturnLobby.Value == true,
+            })
+
+            app:SetAutoInfiniteConfig({
+                enabled = Fluent.Options.RE_InfiniteEnabled
+                    and Fluent.Options.RE_InfiniteEnabled.Value == true,
+                autoReady = Fluent.Options.RE_InfiniteAutoReady
+                    and Fluent.Options.RE_InfiniteAutoReady.Value == true,
+                autoPlace = Fluent.Options.RE_InfiniteAutoPlaceEnabled
+                    and Fluent.Options.RE_InfiniteAutoPlaceEnabled.Value == true,
+                autoUpgrade = Fluent.Options.RE_InfiniteAutoUpgradeEnabled
+                    and Fluent.Options.RE_InfiniteAutoUpgradeEnabled.Value == true,
+                autoSellAll = Fluent.Options.RE_InfiniteSellAll
+                    and Fluent.Options.RE_InfiniteSellAll.Value == true,
+                sellWave = Fluent.Options.RE_InfiniteSellWave
+                    and tonumber(Fluent.Options.RE_InfiniteSellWave.Value)
+                    or 50,
+                autoReplay = Fluent.Options.RE_InfiniteAutoReplay
+                    and Fluent.Options.RE_InfiniteAutoReplay.Value == true,
+                autoReturnLobby = Fluent.Options.RE_InfiniteReturnLobby
+                    and Fluent.Options.RE_InfiniteReturnLobby.Value == true,
             })
 
             app:SetRuntimeConfig({
@@ -206,6 +277,7 @@ return function(Core, UI)
         Fluent = Fluent,
         Window = Window,
         AutoStory = areas.AutoStory,
+        Infinite = areas.Infinite,
         Challengers = areas.Challengers,
         Macros = areas.Macros,
         Webhook = areas.Webhook,
