@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.2.3"
+Core.VERSION = "2.2.4"
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -2511,14 +2511,22 @@ function Controller:_readResult()
     end
 
     local titleLabel = holder:FindFirstChild("Title")
-    if titleLabel and titleLabel:IsA("GuiObject") and titleLabel.Visible == false then
-        return nil, "result title hidden"
-    end
 
+    -- Holder visibility is the stale-result guard. Do not also require
+    -- Title.Visible: the defeat layout can keep the title object hidden while
+    -- still updating its Text to DEFEAT. Requiring both caused real defeats
+    -- to be ignored even though the result window itself was active.
     local title = readText(titleLabel)
-    title = type(title) == "string"
-        and title:match("^%s*(.-)%s*$"):upper()
-        or nil
+    if type(title) == "string" then
+        -- Be tolerant of RichText/punctuation/spacing without accepting stale
+        -- text from a hidden Holder.
+        title = title
+            :gsub("<.->", "")
+            :gsub("[^%a]", "")
+            :upper()
+    else
+        title = nil
+    end
 
     local outcome
     if title == "VICTORY" then
@@ -2797,14 +2805,17 @@ end
 function Controller:_handleFinishedMatch()
     local generation = self.generation
     local result
+    local lastReadError
 
     -- game_finished can arrive before ResultsUI replaces the previous cached
     -- title. Let the visible result frame settle before the first read.
     task.wait(0.35)
 
-    for _ = 1, 20 do
+    -- Some defeat transitions render more slowly than victory. Keep polling
+    -- the authoritative visible Holder long enough for the result UI to settle.
+    for _ = 1, 40 do
         if not self.running or self.generation ~= generation then return false, "stopped" end
-        result = self:_readResult()
+        result, lastReadError = self:_readResult()
 
         if result then
             break
@@ -2814,7 +2825,9 @@ function Controller:_handleFinishedMatch()
     end
 
     if not result then
-        return false, "result unavailable"
+        local message = "Result detection failed: " .. tostring(lastReadError or "result unavailable")
+        self.tracker.events:emit("actionError", {message = message})
+        return false, message
     end
 
     local resultKey = table.concat({
