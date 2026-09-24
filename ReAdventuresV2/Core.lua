@@ -6,11 +6,15 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local TeleportService = game:GetService("TeleportService")
+local GuiService = game:GetService("GuiService")
+local VirtualUser = game:GetService("VirtualUser")
 
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.2.4"
+Core.VERSION = "2.3.0"
+Core.LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/re-adventures-v2-core/Loader/Loader.lua", true))()]]
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -1769,9 +1773,25 @@ function Controller.new(options)
         webhookBound = false,
         webhookDisconnectors = {},
         lastWebhookResultKey = nil,
+        runtimeConnections = {},
+        reconnectQueued = false,
+        lastChallengeAttempt = 0,
+        lastChallengeNotice = 0,
+        autoMapMacroStartedFor = nil,
         session = {
             wins = 0,
             losses = 0,
+        },
+        challenger = {
+            enabled = false,
+            kind = "Normal",
+            autoLoadMacro = true,
+            autoReturnLobby = true,
+        },
+        runtimeSettings = {
+            antiAfk = false,
+            autoReconnect = false,
+            autoExecute = false,
         },
         autoStory = {
             autoReady = false,
@@ -1815,6 +1835,57 @@ function Controller:Start()
         end))
     end
 
+    table.insert(self.runtimeConnections, self.tracker:on("mapChanged", function()
+        self.autoMapMacroStartedFor = nil
+    end))
+
+    if LocalPlayer then
+        table.insert(self.runtimeConnections, LocalPlayer.Idled:Connect(function()
+            if not self.runtimeSettings.antiAfk then return end
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:ClickButton2(Vector2.new(0, 0))
+            end)
+        end))
+    end
+
+    table.insert(self.runtimeConnections, GuiService.ErrorMessageChanged:Connect(function(message)
+        if not self.runtimeSettings.autoReconnect or self.reconnectQueued then return end
+        local lower = tostring(message or ""):lower()
+        if lower == "" then return end
+
+        local reconnectable = lower:find("disconnect", 1, true)
+            or lower:find("desconect", 1, true)
+            or lower:find("connection", 1, true)
+            or lower:find("conex", 1, true)
+            or lower:find("idle", 1, true)
+            or lower:find("inatividade", 1, true)
+            or lower:find("error code: 267", 1, true)
+            or lower:find("error code: 277", 1, true)
+            or lower:find("error code: 279", 1, true)
+
+        if not reconnectable then return end
+
+        self.reconnectQueued = true
+        task.delay(1.5, function()
+            if not self.running then return end
+            if self.runtimeSettings.autoExecute then
+                self:_queueAutoExecute()
+            end
+
+            local ok, err = pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
+
+            if not ok then
+                self.reconnectQueued = false
+                self.tracker.events:emit("actionError", {
+                    message = "Auto Reconnect failed: " .. tostring(err),
+                })
+            end
+        end)
+    end))
+
     local snapshot = self.tracker:start()
     task.spawn(function()
         while self.running and self.generation == generation do
@@ -1843,6 +1914,15 @@ function Controller:Stop()
     end
     table.clear(self.webhookDisconnectors)
     self.webhookBound = false
+
+    for _, connection in ipairs(self.runtimeConnections or {}) do
+        if typeof(connection) == "RBXScriptConnection" then
+            safe(function() connection:Disconnect() end)
+        elseif type(connection) == "function" then
+            safe(connection)
+        end
+    end
+    table.clear(self.runtimeConnections)
 
     for _, connection in ipairs(self.uiConnections or {}) do connection:Disconnect() end
     for _, disconnect in ipairs(self.uiDisconnectors or {}) do disconnect() end
@@ -2080,6 +2160,335 @@ function Controller:_readReadyUI()
     }
 end
 
+function Controller:_executorFunction(...)
+    local env = (getgenv and getgenv()) or _G
+
+    for index = 1, select("#", ...) do
+        local name = select(index, ...)
+        local value = rawget(env, name)
+        if type(value) == "function" then
+            return value
+        end
+    end
+
+    local syn = rawget(env, "syn")
+    if type(syn) == "table" and type(syn.queue_on_teleport) == "function" then
+        return syn.queue_on_teleport
+    end
+
+    local fluxus = rawget(env, "fluxus")
+    if type(fluxus) == "table" and type(fluxus.queue_on_teleport) == "function" then
+        return fluxus.queue_on_teleport
+    end
+
+    return nil
+end
+
+function Controller:_queueAutoExecute()
+    local queueFn = self:_executorFunction("queue_on_teleport", "queueonteleport")
+    if type(queueFn) ~= "function" then
+        return false, "queue_on_teleport unavailable"
+    end
+
+    local ok, err = pcall(queueFn, Core.LOADER_COMMAND)
+    if not ok then
+        return false, tostring(err)
+    end
+
+    return true
+end
+
+function Controller:SetRuntimeConfig(config)
+    assert(type(config) == "table", "Runtime config must be a table")
+
+    for key, value in pairs(config) do
+        if self.runtimeSettings[key] ~= nil then
+            self.runtimeSettings[key] = value == true
+        end
+    end
+
+    if config.autoExecute == true then
+        local ok, err = self:_queueAutoExecute()
+        if not ok then
+            self.tracker.events:emit("actionError", {
+                message = "Auto Execute unavailable: " .. tostring(err),
+            })
+        end
+    end
+
+    self.tracker.events:emit("runtimeConfigChanged", deepCopy(self.runtimeSettings))
+    return deepCopy(self.runtimeSettings)
+end
+
+function Controller:GetRuntimeConfig()
+    return deepCopy(self.runtimeSettings)
+end
+
+function Controller:SetChallengerConfig(config)
+    assert(type(config) == "table", "Challenger config must be a table")
+
+    if config.kind ~= nil then
+        local kind = tostring(config.kind)
+        self.challenger.kind = kind == "Daily" and "Daily" or "Normal"
+    end
+
+    for _, key in ipairs({"enabled", "autoLoadMacro", "autoReturnLobby"}) do
+        if config[key] ~= nil then
+            self.challenger[key] = config[key] == true
+        end
+    end
+
+    if config.enabled == true and self.runtimeSettings.autoExecute then
+        self:_queueAutoExecute()
+    end
+
+    self.tracker.events:emit("challengerConfigChanged", deepCopy(self.challenger))
+    return deepCopy(self.challenger)
+end
+
+function Controller:GetChallengerConfig()
+    return deepCopy(self.challenger)
+end
+
+function Controller:_challengeSurfaceTitle()
+    return self.challenger.kind == "Daily" and "DAILY CHALLENGE" or "CURRENT CHALLENGE"
+end
+
+function Controller:_findChallengeSurface()
+    if not LocalPlayer then return nil end
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not playerGui then return nil end
+
+    local target = self:_challengeSurfaceTitle()
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local best, bestDistance
+
+    for _, item in ipairs(playerGui:GetDescendants()) do
+        if item:IsA("SurfaceGui") and item.Enabled ~= false then
+            local title = item:FindFirstChild("LevelTitle", true)
+            local text = readText(title)
+            text = type(text) == "string" and text:match("^%s*(.-)%s*$"):upper() or nil
+
+            if text == target and (not title:IsA("GuiObject") or title.Visible ~= false) then
+                local adornee = safe(function() return item.Adornee end)
+                local distance = math.huge
+
+                if root and adornee and adornee:IsA("BasePart") then
+                    distance = (root.Position - adornee.Position).Magnitude
+                end
+
+                if not best or distance < bestDistance then
+                    best = item
+                    bestDistance = distance
+                end
+            end
+        end
+    end
+
+    return best
+end
+
+function Controller:_challengeScope(surface)
+    local adornee = surface and safe(function() return surface.Adornee end)
+    if not adornee then return nil, nil end
+
+    local scope = adornee.Parent
+    for _ = 1, 3 do
+        if not scope or scope == Workspace then break end
+        if scope:IsA("Model") then break end
+        scope = scope.Parent
+    end
+
+    return scope or adornee.Parent, adornee
+end
+
+function Controller:_activateChallengeSurface(surface)
+    if not surface then return false, "challenge portal not found" end
+    if not LocalPlayer or not LocalPlayer.Character then return false, "character unavailable" end
+
+    local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return false, "character unavailable" end
+
+    local scope, adornee = self:_challengeScope(surface)
+    if not adornee or not adornee:IsA("BasePart") then
+        return false, "challenge portal has no world target"
+    end
+
+    local env = (getgenv and getgenv()) or _G
+    local firePrompt = rawget(env, "fireproximityprompt")
+    local fireClick = rawget(env, "fireclickdetector")
+    local fireTouch = rawget(env, "firetouchinterest")
+
+    if scope then
+        if type(firePrompt) == "function" then
+            for _, obj in ipairs(scope:GetDescendants()) do
+                if obj:IsA("ProximityPrompt") then
+                    local ok = pcall(firePrompt, obj)
+                    if ok then return true end
+                end
+            end
+        end
+
+        if type(fireClick) == "function" then
+            for _, obj in ipairs(scope:GetDescendants()) do
+                if obj:IsA("ClickDetector") then
+                    local ok = pcall(fireClick, obj)
+                    if ok then return true end
+                end
+            end
+        end
+    end
+
+    local touchTarget = adornee
+    local bestScore = -1
+
+    if scope then
+        for _, obj in ipairs(scope:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                local lower = obj.Name:lower()
+                local score = 0
+                if lower:find("teleport", 1, true) then score += 8 end
+                if lower:find("portal", 1, true) then score += 7 end
+                if lower:find("trigger", 1, true) then score += 6 end
+                if lower:find("touch", 1, true) then score += 5 end
+                if lower:find("hitbox", 1, true) then score += 5 end
+                if lower:find("door", 1, true) then score += 3 end
+                if score > bestScore then
+                    bestScore = score
+                    touchTarget = obj
+                end
+            end
+        end
+    end
+
+    if type(fireTouch) == "function" and touchTarget then
+        local ok = pcall(function()
+            fireTouch(root, touchTarget, 0)
+            task.wait(0.1)
+            fireTouch(root, touchTarget, 1)
+        end)
+        if ok then return true end
+    end
+
+    local ok, err = pcall(function()
+        root.CFrame = touchTarget.CFrame * CFrame.new(0, 2.5, 0)
+    end)
+
+    return ok, ok and nil or tostring(err)
+end
+
+function Controller:RunChallengerStep(force)
+    if not self.challenger.enabled and not force then
+        return false, "Auto Challengers disabled"
+    end
+
+    local isLobby = game.PlaceId == 94823097601547 or self.tracker.state.map.isLobby == true
+    if not isLobby then
+        return false, "not in lobby"
+    end
+
+    local now = os.clock()
+    if not force and now - (self.lastChallengeAttempt or 0) < 3 then
+        return false, "waiting"
+    end
+    self.lastChallengeAttempt = now
+
+    if self.runtimeSettings.autoExecute then
+        self:_queueAutoExecute()
+    end
+
+    local surface = self:_findChallengeSurface()
+    if not surface then
+        if now - (self.lastChallengeNotice or 0) >= 15 then
+            self.lastChallengeNotice = now
+            self.tracker.events:emit("actionError", {
+                message = self.challenger.kind .. " Challenger portal not found",
+            })
+        end
+        return false, "challenge portal not found"
+    end
+
+    local ok, err = self:_activateChallengeSurface(surface)
+    if ok then
+        self.tracker.events:emit("challengerJoinAttempt", {
+            kind = self.challenger.kind,
+        })
+    end
+    return ok, err
+end
+
+function Controller:_findMacroForCurrentMap()
+    local state = self.tracker.state
+    local area = state.map.area
+    local level = state.map.level
+    local items = self.macros:list()
+
+    for index = #items, 1, -1 do
+        local item = items[index]
+        if level and item.level == level and (not area or not item.area or item.area == area) then
+            return item.id
+        end
+    end
+
+    for index = #items, 1, -1 do
+        local item = items[index]
+        if area and item.area == area then
+            return item.id
+        end
+    end
+
+    return nil
+end
+
+function Controller:AutoLoadCurrentMapMacro()
+    if self.recorder.recording or self.replay.running then
+        return false, "macro busy"
+    end
+
+    local state = self.tracker.state
+    local level = state.map.level
+    local area = state.map.area
+    if not level and not area then
+        return false, "map not ready"
+    end
+
+    local id = self:_findMacroForCurrentMap()
+    if not id then
+        return false, "no saved macro for this map"
+    end
+
+    local ok, err = self:SelectMacro(id)
+    if not ok then return false, err end
+
+    local started, replayErr = self:StartSelectedMacroReplay()
+    if started then
+        self.autoMapMacroStartedFor = tostring(area or "") .. "|" .. tostring(level or "")
+        self.tracker.events:emit("mapMacroLoaded", {
+            id = id,
+            area = area,
+            level = level,
+        })
+    end
+
+    return started, replayErr
+end
+
+function Controller:_autoLoadMapMacroStep()
+    if not self.challenger.enabled or not self.challenger.autoLoadMacro then return end
+    if self.recorder.recording or self.replay.running then return end
+
+    local state = self.tracker.state
+    if state.match.phase ~= "STARTING" and state.match.phase ~= "PLAYING" then return end
+
+    local key = tostring(state.map.area or "") .. "|" .. tostring(state.map.level or "")
+    if key == "|" or self.autoMapMacroStartedFor == key then return end
+
+    local ok = self:AutoLoadCurrentMapMacro()
+    if ok then
+        self.autoMapMacroStartedFor = key
+    end
+end
+
 function Controller:_dispatch(action)
     if self.actionAdapter then return self.actionAdapter(action) end
     if action.kind == "ready" then
@@ -2093,6 +2502,9 @@ function Controller:_dispatch(action)
     elseif action.kind == "replay" then
         return self:_invoke("set_game_finished_vote", "replay")
     elseif action.kind == "lobby" then
+        if self.runtimeSettings.autoExecute then
+            self:_queueAutoExecute()
+        end
         return self:_invoke("teleport_back_to_lobby")
     end
     return false, "Unsupported action"
@@ -2100,7 +2512,18 @@ end
 
 function Controller:_automationStep()
     local state = self.tracker.state
-    if not self.running or state.map.isLobby then return end
+    if not self.running then return end
+
+    local isLobby = game.PlaceId == 94823097601547 or state.map.isLobby == true
+    if isLobby then
+        if self.challenger.enabled then
+            self:RunChallengerStep(false)
+        end
+        return
+    end
+
+    self:_autoLoadMapMacroStep()
+
     local config = self.autoStory
 
     -- The game's own VoteStart GUI is the authoritative Ready signal.
@@ -2140,7 +2563,9 @@ function Controller:_automationStep()
     -- The visible Ready GUI wins over a stale GameFinished value after
     -- same-server Replay/Next transitions.
     if state.match.finished and not readyWindow then
-        local kind = config.autoReturnLobby and "lobby" or config.autoReplay and "replay" or config.autoNext and "next"
+        local shouldReturnLobby = config.autoReturnLobby
+            or (self.challenger.enabled and self.challenger.autoReturnLobby)
+        local kind = shouldReturnLobby and "lobby" or config.autoReplay and "replay" or config.autoNext and "next"
         if not kind or self.lastPostMatchAction == kind then return end
         local result = self:_readResult()
         if not result or (kind == "next" and result.outcome ~= "victory") then return end
@@ -2357,6 +2782,7 @@ function Controller:SetAutoStoryConfig(config)
         self.autoStory.autoReplay = false
     end
 
+    self.tracker.events:emit("autoStoryConfigChanged", deepCopy(self.autoStory))
     return deepCopy(self.autoStory)
 end
 
@@ -2486,7 +2912,7 @@ function Controller:SetWebhookTransport(callback)
     self.webhookTransport = callback
 end
 
-function Controller:_readResult()
+function Controller:_readResult(forcedOutcome, allowHidden)
     if not LocalPlayer then
         return nil, "player unavailable"
     end
@@ -2502,12 +2928,14 @@ function Controller:_readResult()
     -- ResultsUI keeps the previous Title text cached while Holder is hidden.
     -- Never classify a match from that stale text: only the visible results
     -- window is authoritative for Victory/Defeat.
-    if resultsUI:IsA("ScreenGui") and resultsUI.Enabled == false then
-        return nil, "results hidden"
-    end
+    if not allowHidden then
+        if resultsUI:IsA("ScreenGui") and resultsUI.Enabled == false then
+            return nil, "results hidden"
+        end
 
-    if holder:IsA("GuiObject") and holder.Visible == false then
-        return nil, "results hidden"
+        if holder:IsA("GuiObject") and holder.Visible == false then
+            return nil, "results hidden"
+        end
     end
 
     local titleLabel = holder:FindFirstChild("Title")
@@ -2528,13 +2956,15 @@ function Controller:_readResult()
         title = nil
     end
 
-    local outcome
-    if title == "VICTORY" then
-        outcome = "victory"
-    elseif title == "DEFEAT" then
-        outcome = "defeat"
-    else
-        return nil, "result not ready"
+    local outcome = forcedOutcome
+    if outcome ~= "victory" and outcome ~= "defeat" then
+        if title == "VICTORY" then
+            outcome = "victory"
+        elseif title == "DEFEAT" then
+            outcome = "defeat"
+        else
+            return nil, "result not ready"
+        end
     end
 
     local levelName = readText(holder:FindFirstChild("LevelName")) or "Act ?"
@@ -2564,22 +2994,26 @@ function Controller:_readResult()
 
     if scrolling then
         for _, child in ipairs(scrolling:GetChildren()) do
-            if child:IsA("Frame")
+            if child:IsA("GuiObject")
                 and child.Visible
                 and child.Name ~= "Configuration"
             then
                 local amountLabel = findPath(child, "Main", "Amount")
+                    or child:FindFirstChild("Amount", true)
                 local amountText = readText(amountLabel)
                 local amount = parseNumber(amountText)
 
                 if amount and amount > 0 then
-                    if child.Name == "XPReward" then
-                        xpAmount = amount
+                    local lowerName = child.Name:lower()
+                    if child.Name == "XPReward" or lowerName:find("xp", 1, true) then
+                        xpAmount = math.max(xpAmount, amount)
                     else
+                        local topLabel = child:FindFirstChild("Top", true)
                         local rewardName = normalizeRewardName(
                             child:GetAttribute("reward_name")
                             or child:GetAttribute("resource")
                             or child:GetAttribute("item_id")
+                            or readText(topLabel)
                             or child.Name
                         )
 
@@ -2595,10 +3029,37 @@ function Controller:_readResult()
 
     local state = self.tracker.state
     local mapProfile = MapProfiles.resolve(state.map.area, state.map.level)
+    local mode = detectMode(state.map.level)
+
+    if self.challenger.enabled then
+        mode = self.challenger.kind == "Daily" and "Daily Challenger" or "Challenger"
+    else
+        local challengeDifficulty = tostring(difficulty or ""):lower()
+        local challengeNames = {
+            ["high cost"] = true,
+            ["short range"] = true,
+            ["short range ii"] = true,
+            ["fast enemies"] = true,
+            ["regen enemies"] = true,
+            ["tank enemies"] = true,
+            ["shield enemies"] = true,
+            ["triple cost"] = true,
+            ["hyper-regen enemies"] = true,
+            ["steel-plated enemies"] = true,
+            ["godspeed enemies"] = true,
+            ["flying enemies"] = true,
+            ["armored enemies"] = true,
+            ["mini-range"] = true,
+            ["burst enemies"] = true,
+        }
+        if mode == "Story" and challengeNames[challengeDifficulty] then
+            mode = "Challenger"
+        end
+    end
 
     return {
         outcome = outcome,
-        mode = detectMode(state.map.level),
+        mode = mode,
         map = mapProfile.displayName,
         thumbnail = mapProfile.thumbnail,
         act = levelName,
@@ -2822,6 +3283,40 @@ function Controller:_handleFinishedMatch()
         end
 
         task.wait(0.5)
+    end
+
+    if not result then
+        local state = self.tracker.state
+        if tonumber(state.player.baseLife) and tonumber(state.player.baseLife) <= 0 then
+            result = self:_readResult("defeat", true)
+
+            if not result then
+                local mapProfile = MapProfiles.resolve(state.map.area, state.map.level)
+                result = {
+                    outcome = "defeat",
+                    mode = self.challenger.enabled
+                        and (self.challenger.kind == "Daily" and "Daily Challenger" or "Challenger")
+                        or detectMode(state.map.level),
+                    map = mapProfile.displayName,
+                    thumbnail = mapProfile.thumbnail,
+                    act = "Act ?",
+                    difficulty = "Unknown",
+                    duration = "0:00",
+                    player = {
+                        username = LocalPlayer and LocalPlayer.Name or "Unknown",
+                        level = 0,
+                        currentExp = 0,
+                        requiredExp = 0,
+                    },
+                    playerExp = 0,
+                    unitExp = 0,
+                    rewards = {},
+                    timestamp = os.time(),
+                    area = state.map.area,
+                    level = state.map.level,
+                }
+            end
+        end
     end
 
     if not result then
