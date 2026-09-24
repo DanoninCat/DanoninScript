@@ -115,6 +115,8 @@ return function(Core, UI)
             Icon = "settings",
         })
 
+        UI.AttachRuntimeSettings(Settings, app, Fluent)
+
         SaveManager:SetLibrary(Fluent)
         InterfaceManager:SetLibrary(Fluent)
         SaveManager:IgnoreThemeSettings()
@@ -145,6 +147,9 @@ return function(Core, UI)
         -- Fluent OnChanged replaces the previous callback; subscribe to the
         -- controller event so autosave cannot disconnect the actual feature.
         table.insert(app.uiDisconnectors, app:On("webhookConfigChanged", queueAutoSave))
+        table.insert(app.uiDisconnectors, app:On("challengerConfigChanged", queueAutoSave))
+        table.insert(app.uiDisconnectors, app:On("runtimeConfigChanged", queueAutoSave))
+        table.insert(app.uiDisconnectors, app:On("autoStoryConfigChanged", queueAutoSave))
 
         pcall(function()
             SaveManager:LoadAutoloadConfig()
@@ -167,6 +172,27 @@ return function(Core, UI)
                 enabled = enabled,
             })
 
+            app:SetChallengerConfig({
+                enabled = Fluent.Options.RE_ChallengerEnabled
+                    and Fluent.Options.RE_ChallengerEnabled.Value == true,
+                kind = Fluent.Options.RE_ChallengerType
+                    and Fluent.Options.RE_ChallengerType.Value
+                    or "Normal",
+                autoLoadMacro = not Fluent.Options.RE_ChallengerAutoMacro
+                    or Fluent.Options.RE_ChallengerAutoMacro.Value == true,
+                autoReturnLobby = not Fluent.Options.RE_ChallengerReturnLobby
+                    or Fluent.Options.RE_ChallengerReturnLobby.Value == true,
+            })
+
+            app:SetRuntimeConfig({
+                antiAfk = Fluent.Options.RE_AntiAFK
+                    and Fluent.Options.RE_AntiAFK.Value == true,
+                autoReconnect = Fluent.Options.RE_AutoReconnect
+                    and Fluent.Options.RE_AutoReconnect.Value == true,
+                autoExecute = Fluent.Options.RE_AutoExecute
+                    and Fluent.Options.RE_AutoExecute.Value == true,
+            })
+
             autoSaveReady = true
         end)
     end
@@ -180,6 +206,7 @@ return function(Core, UI)
         Fluent = Fluent,
         Window = Window,
         AutoStory = areas.AutoStory,
+        Challengers = areas.Challengers,
         Macros = areas.Macros,
         Webhook = areas.Webhook,
         Settings = Settings,
