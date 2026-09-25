@@ -149,8 +149,19 @@ return function(Core, UI)
         SaveManager:SetIgnoreIndexes({"RE_MacroAutoPlay", "RE_MacroImport"})
         InterfaceManager:SetFolder("CatEmpire/ReAdventures")
         SaveManager:SetFolder("CatEmpire/ReAdventures/configs")
-        InterfaceManager:BuildInterfaceSection(Settings)
-        SaveManager:BuildConfigSection(Settings)
+
+        -- The Loader embeds Fluent but downloads InterfaceManager at runtime.
+        -- Building the external manager's UI against a different Fluent version
+        -- can stop after Runtime Automation. Load its saved values, then render
+        -- the original controls with the already-running embedded Fluent API.
+        pcall(function()
+            InterfaceManager:LoadSettings()
+        end)
+        UI.AttachInterfaceSettings(Settings, Fluent, InterfaceManager)
+
+        pcall(function()
+            SaveManager:BuildConfigSection(Settings)
+        end)
 
         local autoSaveReady = false
         local autoSaveQueued = false
