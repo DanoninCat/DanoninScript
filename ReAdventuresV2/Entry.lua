@@ -59,22 +59,12 @@ return function(Core, UI)
         return
     end
 
-    local SaveManager
-    local InterfaceManager
-
-    pcall(function()
-        SaveManager = loadstring(game:HttpGet(
-            "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua",
-            true
-        ))()
-    end)
-
-    pcall(function()
-        InterfaceManager = loadstring(game:HttpGet(
-            "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua",
-            true
-        ))()
-    end)
+    -- Use the managers bundled with the exact FluentPro build embedded by
+    -- Loader/Loader.lua. Loading the public vanilla Fluent managers here
+    -- replaces the richer FluentPro Settings surface and can also drift out of
+    -- API compatibility with the embedded UI.
+    local SaveManager = Fluent.SaveManager
+    local InterfaceManager = Fluent.InterfaceManager
 
     local app = Core.new({
         recorder = {
@@ -151,22 +141,20 @@ return function(Core, UI)
         SaveManager:SetLibrary(Fluent)
         InterfaceManager:SetLibrary(Fluent)
         SaveManager:IgnoreThemeSettings()
-        SaveManager:SetIgnoreIndexes({"RE_MacroAutoPlay", "RE_MacroImport"})
+        SaveManager:SetIgnoreIndexes({
+            "RE_MacroAutoPlay",
+            "RE_MacroImport",
+            "DisableBGToggle",
+            "InterfaceFont",
+        })
         InterfaceManager:SetFolder("CatEmpire/ReAdventures")
         SaveManager:SetFolder("CatEmpire/ReAdventures/configs")
 
-        -- The Loader embeds Fluent but downloads InterfaceManager at runtime.
-        -- Building the external manager's UI against a different Fluent version
-        -- can stop after Runtime Automation. Load its saved values, then render
-        -- the original controls with the already-running embedded Fluent API.
-        pcall(function()
-            InterfaceManager:LoadSettings()
-        end)
-        UI.AttachInterfaceSettings(Settings, Fluent, InterfaceManager)
-
-        pcall(function()
-            SaveManager:BuildConfigSection(Settings)
-        end)
+        -- This is the original FluentPro 1.5.7 Settings builder embedded in
+        -- the Loader. It restores Theme, Animated Window, Transparency,
+        -- Disable Background, Acrylic, Font Manager and Minimize Bind.
+        InterfaceManager:BuildInterfaceSection(Settings)
+        SaveManager:BuildConfigSection(Settings)
 
         local autoSaveReady = false
         local autoSaveQueued = false
