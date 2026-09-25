@@ -316,6 +316,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('item.Name == "PlaySolo"',core)
         self.assertIn('if self.challengePendingType then',core)
         self.assertIn('/main/Loader/Loader.lua',core)
+        self.assertIn('local sameVersion = active',entry)
+        self.assertIn('if sameVersion and active.App and active.App.running then',entry)
 
     def test_loader_matches_sources_and_preserves_other_payloads(self):
         spec=importlib.util.spec_from_file_location('builder',ROOT/'tools/build_loader.py')
