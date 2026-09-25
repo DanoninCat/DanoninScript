@@ -574,8 +574,9 @@ function UI.AttachChallengers(Window, app, Fluent)
         notify(Fluent, tostring(kind) .. " via " .. tostring(method))
     end))
 
-    table.insert(app.uiDisconnectors, app:On("dailyPlayHereActivated", function()
-        notify(Fluent, "Daily: Play Here")
+    table.insert(app.uiDisconnectors, app:On("challengerPlayHereActivated", function(payload)
+        local kind = payload and payload.kind or "Challenger"
+        notify(Fluent, tostring(kind) .. ": Play Here")
     end))
 
     table.insert(app.uiDisconnectors, app:On("reconnectTriggered", function(payload)
@@ -1084,6 +1085,112 @@ function UI.AttachWebhook(Window, app, Fluent)
     end)
 
     return Tab
+end
+
+function UI.AttachInterfaceSettings(Tab, Fluent, InterfaceManager)
+    if not Tab or not Fluent then return nil end
+
+    local settings = InterfaceManager and InterfaceManager.Settings or {}
+    settings.Theme = settings.Theme or "Dark"
+    if settings.Acrylic == nil then settings.Acrylic = true end
+    if settings.Transparency == nil then settings.Transparency = true end
+    settings.MenuKeybind = settings.MenuKeybind or "LeftControl"
+
+    local function saveInterface()
+        if InterfaceManager and type(InterfaceManager.SaveSettings) == "function" then
+            pcall(function()
+                InterfaceManager:SaveSettings()
+            end)
+        end
+    end
+
+    local themes = {}
+    if type(Fluent.Themes) == "table" then
+        for _, name in ipairs(Fluent.Themes) do
+            table.insert(themes, name)
+        end
+    end
+
+    if #themes == 0 then
+        themes = {"Dark", "Darker", "Light", "Aqua", "Amethyst", "Rose"}
+    end
+
+    Tab:AddSection("Interface")
+
+    local controls = {}
+
+    pcall(function()
+        local theme = Tab:AddDropdown("InterfaceTheme", {
+            Title = "Theme",
+            Description = "Changes the interface theme.",
+            Values = themes,
+            Default = settings.Theme,
+        })
+
+        theme:OnChanged(function(value)
+            settings.Theme = value
+            pcall(function() Fluent:SetTheme(value) end)
+            saveInterface()
+        end)
+
+        controls.Theme = theme
+    end)
+
+    if Fluent.UseAcrylic ~= false then
+        pcall(function()
+            local acrylic = Tab:AddToggle("AcrylicToggle", {
+                Title = "Acrylic",
+                Description = "Blurred background.",
+                Default = settings.Acrylic == true,
+            })
+
+            acrylic:OnChanged(function(value)
+                settings.Acrylic = value == true
+                pcall(function() Fluent:ToggleAcrylic(value == true) end)
+                saveInterface()
+            end)
+
+            controls.Acrylic = acrylic
+        end)
+    end
+
+    pcall(function()
+        local transparency = Tab:AddToggle("TransparentToggle", {
+            Title = "Transparency",
+            Description = "Makes the interface transparent.",
+            Default = settings.Transparency == true,
+        })
+
+        transparency:OnChanged(function(value)
+            settings.Transparency = value == true
+            pcall(function() Fluent:ToggleTransparency(value == true) end)
+            saveInterface()
+        end)
+
+        controls.Transparency = transparency
+    end)
+
+    pcall(function()
+        local keybind = Tab:AddKeybind("MenuKeybind", {
+            Title = "Minimize Bind",
+            Default = settings.MenuKeybind,
+        })
+
+        keybind:OnChanged(function()
+            settings.MenuKeybind = keybind.Value
+            Fluent.MinimizeKeybind = keybind
+            saveInterface()
+        end)
+
+        Fluent.MinimizeKeybind = keybind
+        controls.MenuKeybind = keybind
+    end)
+
+    pcall(function() Fluent:SetTheme(settings.Theme) end)
+    pcall(function() Fluent:ToggleAcrylic(settings.Acrylic == true) end)
+    pcall(function() Fluent:ToggleTransparency(settings.Transparency == true) end)
+
+    return controls
 end
 
 function UI.AttachRuntimeSettings(Tab, app, Fluent)
