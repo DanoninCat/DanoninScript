@@ -1115,12 +1115,12 @@ function UI.AttachInterfaceSettings(Tab, Fluent, InterfaceManager)
         themes = {"Dark", "Darker", "Light", "Aqua", "Amethyst", "Rose"}
     end
 
-    Tab:AddSection("Interface")
+    local interfaceSection = Tab:AddSection("Interface")
 
     local controls = {}
 
     pcall(function()
-        local theme = Tab:AddDropdown("InterfaceTheme", {
+        local theme = interfaceSection:AddDropdown("InterfaceTheme", {
             Title = "Theme",
             Description = "Changes the interface theme.",
             Values = themes,
@@ -1138,7 +1138,7 @@ function UI.AttachInterfaceSettings(Tab, Fluent, InterfaceManager)
 
     if Fluent.UseAcrylic ~= false then
         pcall(function()
-            local acrylic = Tab:AddToggle("AcrylicToggle", {
+            local acrylic = interfaceSection:AddToggle("AcrylicToggle", {
                 Title = "Acrylic",
                 Description = "Blurred background.",
                 Default = settings.Acrylic == true,
@@ -1155,7 +1155,7 @@ function UI.AttachInterfaceSettings(Tab, Fluent, InterfaceManager)
     end
 
     pcall(function()
-        local transparency = Tab:AddToggle("TransparentToggle", {
+        local transparency = interfaceSection:AddToggle("TransparentToggle", {
             Title = "Transparency",
             Description = "Makes the interface transparent.",
             Default = settings.Transparency == true,
@@ -1171,7 +1171,7 @@ function UI.AttachInterfaceSettings(Tab, Fluent, InterfaceManager)
     end)
 
     pcall(function()
-        local keybind = Tab:AddKeybind("MenuKeybind", {
+        local keybind = interfaceSection:AddKeybind("MenuKeybind", {
             Title = "Minimize Bind",
             Default = settings.MenuKeybind,
         })
