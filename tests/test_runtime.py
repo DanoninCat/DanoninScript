@@ -235,6 +235,88 @@ class RuntimeTests(unittest.TestCase):
             app:RenameMacro(id,"renamed");app:DeleteMacro(id);drain();assert(changes==3)
         ''')
 
+
+    def test_challenger_normal_waits_for_native_play_here(self):
+        self.lua.execute('''
+            game.PlaceId=94823097601547
+            local app=Core.new(); app.running=true
+            app.tracker.state.map.isLobby=true
+            app:SetChallengerConfig({
+                enabled=true,
+                types={Normal=true,Daily=false},
+                priority="Normal",
+            })
+
+            function app:_findChallengeDoor(kind)
+                assert(kind=="Normal")
+                return {door=true}
+            end
+
+            function app:_teleportIntoChallengeDoor(door,kind)
+                assert(door.door and kind=="Normal")
+                return true
+            end
+
+            local clicks=0
+            function app:_activatePlayHere(kind)
+                assert(kind=="Normal")
+                clicks=clicks+1
+                if clicks < 2 then return false,"waiting for matchmaking choice" end
+                return true
+            end
+
+            clock=10
+            assert(app:RunChallengerStep(false))
+            assert(app.challengePendingType=="Normal")
+            assert(app.lastChallengeType==nil)
+
+            clock=11
+            local ok=app:RunChallengerStep(false)
+            assert(not ok and app.challengePendingType=="Normal")
+
+            clock=12
+            assert(app:RunChallengerStep(false))
+            assert(app.challengePendingType==nil)
+            assert(app.lastChallengeType=="Normal")
+        ''')
+
+    def test_challenger_auto_ready_uses_vote_start_window(self):
+        self.lua.execute('''
+            game.PlaceId=138271828389486
+            local app=Core.new(); app.running=true
+            app.tracker.state.map.isLobby=false
+            app.tracker.state.match.finished=false
+            app:SetChallengerConfig({enabled=true,autoReady=true})
+
+            function app:_readReadyUI()
+                return {visible=true,votes=0,required=1,complete=false}
+            end
+
+            local calls=0
+            app:SetActionAdapter(function(action)
+                assert(action.kind=="ready")
+                calls=calls+1
+                return true
+            end)
+
+            clock=2
+            app:_automationStep()
+            assert(calls==1 and app.readySubmitted)
+        ''')
+
+    def test_settings_and_matchmaking_regression_guards(self):
+        ui=(ROOT/'ReAdventuresV2/UI.lua').read_text()
+        entry=(ROOT/'ReAdventuresV2/Entry.lua').read_text()
+        core=(ROOT/'ReAdventuresV2/Core.lua').read_text()
+        self.assertIn('AddDropdown("InterfaceTheme"',ui)
+        self.assertIn('AddToggle("AcrylicToggle"',ui)
+        self.assertIn('AddToggle("TransparentToggle"',ui)
+        self.assertIn('AddKeybind("MenuKeybind"',ui)
+        self.assertNotIn('InterfaceManager:BuildInterfaceSection(Settings)',entry)
+        self.assertIn('item.Name == "PlaySolo"',core)
+        self.assertIn('if self.challengePendingType then',core)
+        self.assertIn('/main/Loader/Loader.lua',core)
+
     def test_loader_matches_sources_and_preserves_other_payloads(self):
         spec=importlib.util.spec_from_file_location('builder',ROOT/'tools/build_loader.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
