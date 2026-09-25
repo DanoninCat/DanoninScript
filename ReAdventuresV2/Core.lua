@@ -16,8 +16,8 @@ local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.4.1"
-Core.LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/re-adventures-v2-core/Loader/Loader.lua", true))()]]
+Core.VERSION = "2.4.2"
+Core.LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Loader/Loader.lua", true))()]]
 
 local function safe(fn, fallback)
     local ok, value = pcall(fn)
@@ -2571,10 +2571,42 @@ end
 function Controller:_matchmakingVisible()
     if not LocalPlayer then return nil end
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    local gui = playerGui and playerGui:FindFirstChild("MatchmakingUI")
-    if not gui then return nil end
-    if gui:IsA("ScreenGui") and gui.Enabled == false then return nil end
-    return gui
+    if not playerGui then return nil end
+
+    local direct = playerGui:FindFirstChild("MatchmakingUI")
+    if direct then
+        if direct:IsA("ScreenGui") and direct.Enabled == false then
+            direct = nil
+        else
+            return direct
+        end
+    end
+
+    -- The game dump shows the native choice as
+    -- NotificationWindows/.../MatchmakingPrompt with a PlaySolo button.
+    -- Search by the concrete button instead of assuming a top-level ScreenGui;
+    -- ignore the 1x1 PopupTemplate copy and only accept an actually rendered one.
+    for _, item in ipairs(playerGui:GetDescendants()) do
+        if item:IsA("GuiButton")
+            and item.Name == "PlaySolo"
+            and item.Active ~= false
+            and self:_guiActuallyVisible(item)
+        then
+            local size = item.AbsoluteSize
+            if size.X * size.Y >= 500 then
+                local current = item
+                while current and current ~= playerGui do
+                    if current.Name == "MatchmakingPrompt" then
+                        return current
+                    end
+                    current = current.Parent
+                end
+                return item.Parent
+            end
+        end
+    end
+
+    return nil
 end
 
 function Controller:_buttonText(button)
@@ -2611,43 +2643,54 @@ function Controller:_guiActuallyVisible(guiObject)
     return true
 end
 
-function Controller:_activatePlayHere()
+function Controller:_activatePlayHere(kind)
     local gui = self:_matchmakingVisible()
     if not gui then
         return false, "waiting for matchmaking choice"
     end
 
-    local exact
+    local button
+    local named = gui:FindFirstChild("PlaySolo", true)
+
+    if named
+        and named:IsA("GuiButton")
+        and named.Active ~= false
+        and self:_guiActuallyVisible(named)
+    then
+        local size = named.AbsoluteSize
+        if size.X * size.Y >= 500 then
+            button = named
+        end
+    end
+
     local candidates = {}
 
-    for _, item in ipairs(gui:GetDescendants()) do
-        if item:IsA("GuiButton")
-            and item.Active ~= false
-            and self:_guiActuallyVisible(item)
-        then
-            local text = self:_buttonText(item)
-            local compact = text:gsub("%s+", "")
+    if not button then
+        for _, item in ipairs(gui:GetDescendants()) do
+            if item:IsA("GuiButton")
+                and item.Active ~= false
+                and self:_guiActuallyVisible(item)
+            then
+                local size = item.AbsoluteSize
+                local area = size.X * size.Y
+                local text = self:_buttonText(item)
+                local compact = text:gsub("%s+", "")
 
-            if compact:find("playhere", 1, true) then
-                exact = item
-                break
-            end
+                if area >= 500 and compact:find("playhere", 1, true) then
+                    button = item
+                    break
+                end
 
-            local size = item.AbsoluteSize
-            local area = size.X * size.Y
-            if area >= 5000 then
-                table.insert(candidates, item)
+                if area >= 5000 then
+                    table.insert(candidates, item)
+                end
             end
         end
     end
 
-    local button = exact
-
     if not button and #candidates > 0 then
-        -- Daily's popup has Play Here on the left and Find Match on the right.
-        -- Prefer a large visible left-side button and explicitly reject anything
-        -- whose descendants identify it as Find Match / matchmaking.
         local filtered = {}
+
         for _, candidate in ipairs(candidates) do
             local text = self:_buttonText(candidate)
             if not text:find("find match", 1, true)
@@ -2676,8 +2719,6 @@ function Controller:_activatePlayHere()
 
     local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
     local clicked = pcall(function()
-        -- Use real UI input first. This follows the same MouseButton path as a
-        -- player click instead of depending on GuiButton:Activate semantics.
         VirtualInputManager:SendMouseMoveEvent(center.X, center.Y, game)
         task.wait(0.04)
         VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
@@ -2687,26 +2728,29 @@ function Controller:_activatePlayHere()
 
     task.wait(0.35)
 
-    if not clicked then
-        clicked = pcall(function()
+    if self:_matchmakingVisible() then
+        local activated = pcall(function()
             button:Activate()
         end)
-    elseif self:_matchmakingVisible() and self:_guiActuallyVisible(button) then
-        -- Some executors report the synthetic event successfully even when the
-        -- game's button callback did not consume it. One Activate fallback is
-        -- safe and avoids repeated click spam.
-        pcall(function()
-            button:Activate()
-        end)
+        clicked = clicked or activated
+        task.wait(0.35)
     end
 
     if not clicked then
         return false, "could not activate Play Here"
     end
 
-    self.tracker.events:emit("dailyPlayHereActivated", {
+    -- Do not mark the Challenger as started just because the executor accepted
+    -- a synthetic input call. The native prompt must actually be consumed.
+    if self:_matchmakingVisible() then
+        return false, "Play Here did not close matchmaking prompt"
+    end
+
+    self.tracker.events:emit("challengerPlayHereActivated", {
+        kind = kind,
         target = fullName(button),
     })
+
     return true
 end
 
@@ -2733,7 +2777,7 @@ function Controller:_challengeOrder()
 end
 
 function Controller:RunChallengerStep(force)
-    if not self.challenger.enabled and not force then
+    if not self.challenger.enabled and not force and not self.challengePendingType then
         return false, "Auto Challengers disabled"
     end
 
@@ -2744,20 +2788,27 @@ function Controller:RunChallengerStep(force)
 
     local now = os.clock()
 
-    if self.challengePendingType == "Daily" then
-        local clicked, clickErr = self:_activatePlayHere()
+    -- Both Normal and Daily open the native MatchmakingPrompt after touching
+    -- their door. Do not consider the door step complete until Play Here was
+    -- consumed; this is the native path that owns request_join_lobby/start flow.
+    if self.challengePendingType then
+        local pendingType = self.challengePendingType
+        local clicked, clickErr = self:_activatePlayHere(pendingType)
+
         if clicked then
             self.challengePendingType = nil
-            self.lastChallengeType = "Daily"
+            self.challengePendingAt = nil
+            self.lastChallengeType = pendingType
             self.challengeJoinCooldownUntil = now + 8
             return true
         end
 
-        if now - (self.challengePendingAt or 0) < 8 then
+        if now - (self.challengePendingAt or 0) < 10 then
             return false, clickErr
         end
 
         self.challengePendingType = nil
+        self.challengePendingAt = nil
     end
 
     if not force and now < (self.challengeJoinCooldownUntil or 0) then
@@ -2788,15 +2839,9 @@ function Controller:RunChallengerStep(force)
                     kind = kind,
                 })
 
-                if kind == "Daily" then
-                    self.challengePendingType = "Daily"
-                    self.challengePendingAt = os.clock()
-                    self.challengeJoinCooldownUntil = os.clock() + 1
-                else
-                    self.lastChallengeType = "Normal"
-                    self.challengeJoinCooldownUntil = os.clock() + 8
-                end
-
+                self.challengePendingType = kind
+                self.challengePendingAt = os.clock()
+                self.challengeJoinCooldownUntil = os.clock() + 1
                 return true
             end
 
@@ -2915,8 +2960,8 @@ function Controller:_automationStep()
 
     local isLobby = game.PlaceId == 94823097601547 or state.map.isLobby == true
     if isLobby then
-        if self.challenger.enabled then
-            self:RunChallengerStep(false)
+        if self.challenger.enabled or self.challengePendingType then
+            self:RunChallengerStep(self.challengePendingType ~= nil and not self.challenger.enabled)
         end
         return
     end
