@@ -16,7 +16,7 @@ local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
 
 local Core = {}
-Core.VERSION = "2.4.2"
+Core.VERSION = "2.4.3"
 Core.LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Loader/Loader.lua", true))()]]
 
 local function safe(fn, fallback)
