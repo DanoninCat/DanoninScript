@@ -8,15 +8,20 @@ return function(Core, UI)
     -- Old queue_on_teleport registrations can all fetch the newest Loader.
     -- Never recycle a healthy interface just because another queued copy fired.
     local active = env.__RE_ADVENTURES_V2
-    if active and active.App and active.App.running then
+    local sameVersion = active and tostring(active.Version or "") == tostring(Core.VERSION or "")
+
+    -- Late queued copies of the same build must reuse the healthy app. A newer
+    -- embedded build, however, is allowed to recycle an older running version
+    -- in the same JobId so fixes take effect without forcing a server hop.
+    if sameVersion and active.App and active.App.running then
         return active
     end
 
-    -- Protect the initialization window before env.__RE_ADVENTURES_V2 exists.
-    -- Once the active app is published, the guard above becomes permanent for
-    -- the current JobId and late queued copies simply return it.
+    -- Protect only this build's initialization window. Do not let a stale boot
+    -- marker from V2.4.1 block V2.4.2 from replacing it.
     local boot = env.__RE_ADVENTURES_BOOT
-    if boot
+    if sameVersion
+        and boot
         and boot.jobId == game.JobId
         and os.clock() - (tonumber(boot.at) or 0) < 60
     then
