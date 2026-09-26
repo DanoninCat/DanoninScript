@@ -157,26 +157,33 @@ local function wrapPreviewObject(object)
     return model
 end
 
+local CachedSkinHelper = nil
+local CachedSkinLoader = nil
+
 local function getSkinPipeline(replicatedStorage)
-    local skinHelper, skinLoader
+    if CachedSkinHelper and CachedSkinLoader then
+        return CachedSkinHelper, CachedSkinLoader
+    end
 
-    pcall(function()
-        skinHelper = require(
-            replicatedStorage
-                :WaitForChild("Config")
-                :WaitForChild("SkinHelper")
-        )
-    end)
+    local config = replicatedStorage:FindFirstChild("Config")
+    local helperModule = config and config:FindFirstChild("SkinHelper")
 
-    pcall(function()
-        skinLoader = require(
-            replicatedStorage
-                :WaitForChild("Utils")
-                :WaitForChild("SkinLoader")
-        )
-    end)
+    if not CachedSkinHelper and helperModule and helperModule:IsA("ModuleScript") then
+        pcall(function()
+            CachedSkinHelper = require(helperModule)
+        end)
+    end
 
-    return skinHelper, skinLoader
+    local utils = replicatedStorage:FindFirstChild("Utils")
+    local loaderModule = utils and utils:FindFirstChild("SkinLoader")
+
+    if not CachedSkinLoader and loaderModule and loaderModule:IsA("ModuleScript") then
+        pcall(function()
+            CachedSkinLoader = require(loaderModule)
+        end)
+    end
+
+    return CachedSkinHelper, CachedSkinLoader
 end
 
 local function createFallbackWeapon()
