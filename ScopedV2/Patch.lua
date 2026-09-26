@@ -72,6 +72,18 @@ local function CreatePreviewPlaceholder(kind)
     local camera = Instance.new("Camera")
     camera.FieldOfView = 30
 
+    if kind == "Skin" then
+        camera.CFrame = CFrame.lookAt(
+            Vector3.new(7, 2.2, 9),
+            Vector3.new(0, 0, 0)
+        )
+    else
+        camera.CFrame = CFrame.lookAt(
+            Vector3.new(7, 3.5, 10),
+            Vector3.new(0, 1.2, 0)
+        )
+    end
+
     return model, camera
 end
 
@@ -148,7 +160,7 @@ replaceOnce(
         Height = 300,
         AspectRatio = "16:9",
         Interactive = true,
-        Focused = true,
+        Focused = false,
     })
 
     local espPreviewGeneration = 0
@@ -158,21 +170,34 @@ replaceOnce(
         local generation = espPreviewGeneration
 
         task.spawn(function()
-            local ok, newModel, newCamera = pcall(CreateESPPreview)
-
-            if generation ~= espPreviewGeneration or UIClosed then
-                if ok and newModel then
-                    pcall(function() newModel:Destroy() end)
+            for attempt = 1, 3 do
+                if attempt > 1 then
+                    task.wait(0.25)
                 end
-                return
-            end
 
-            if ok and newModel and espPreviewViewport then
-                espPreviewViewport:SetObject(newModel)
-                if newCamera then
-                    espPreviewViewport:SetCamera(newCamera)
+                if generation ~= espPreviewGeneration or UIClosed then
+                    return
                 end
-                espPreviewViewport:Focus()
+
+                local ok, newModel, newCamera = pcall(CreateESPPreview)
+
+                if generation ~= espPreviewGeneration or UIClosed then
+                    if ok and newModel then
+                        pcall(function() newModel:Destroy() end)
+                    end
+                    return
+                end
+
+                if ok and newModel and espPreviewViewport then
+                    espPreviewViewport:SetObject(newModel)
+                    if newCamera then
+                        espPreviewViewport:SetCamera(newCamera)
+                    end
+
+                    if newModel.Name ~= "ESPPreviewFallback" then
+                        return
+                    end
+                end
             end
         end)
     end
@@ -303,7 +328,7 @@ local replacementBlock = [[    local accountSection = Tabs.Misc:AddSection("Sua 
         Height = 300,
         AspectRatio = "16:9",
         Interactive = true,
-        Focused = true,
+        Focused = false,
     })
 
     local skinPreviewGeneration = 0
@@ -314,24 +339,39 @@ local replacementBlock = [[    local accountSection = Tabs.Misc:AddSection("Sua 
         local skinAtRequest = selectedSkinId
 
         task.spawn(function()
-            local ok, newModel, newCamera = pcall(
-                CreateWeaponPreview,
-                skinAtRequest
-            )
+            local delays = {0, 0.12, 0.35, 0.8}
 
-            if generation ~= skinPreviewGeneration or UIClosed then
-                if ok and newModel then
-                    pcall(function() newModel:Destroy() end)
+            for _, delayTime in ipairs(delays) do
+                if delayTime > 0 then
+                    task.wait(delayTime)
                 end
-                return
-            end
 
-            if ok and newModel and skinViewport then
-                skinViewport:SetObject(newModel)
-                if newCamera then
-                    skinViewport:SetCamera(newCamera)
+                if generation ~= skinPreviewGeneration or UIClosed then
+                    return
                 end
-                skinViewport:Focus()
+
+                local ok, newModel, newCamera = pcall(
+                    CreateWeaponPreview,
+                    skinAtRequest
+                )
+
+                if generation ~= skinPreviewGeneration or UIClosed then
+                    if ok and newModel then
+                        pcall(function() newModel:Destroy() end)
+                    end
+                    return
+                end
+
+                if ok and newModel and skinViewport then
+                    skinViewport:SetObject(newModel)
+                    if newCamera then
+                        skinViewport:SetCamera(newCamera)
+                    end
+
+                    if newModel.Name ~= "WeaponPreviewUnavailable" then
+                        return
+                    end
+                end
             end
         end)
     end
