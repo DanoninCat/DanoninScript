@@ -188,6 +188,7 @@ local function wrapPreviewObject(object)
 end
 
 local CachedSkinHelper = nil
+local CachedSkinMutation = nil
 
 local function getSkinHelper(replicatedStorage)
     if CachedSkinHelper then
@@ -204,6 +205,24 @@ local function getSkinHelper(replicatedStorage)
     end
 
     return CachedSkinHelper
+end
+
+local function getSkinMutation(replicatedStorage)
+    if CachedSkinMutation then
+        return CachedSkinMutation
+    end
+
+    local config = replicatedStorage:FindFirstChild("Config")
+    local helperModule = config and config:FindFirstChild("SkinHelper")
+    local mutationModule = helperModule and helperModule:FindFirstChild("SkinMutation")
+
+    if mutationModule and mutationModule:IsA("ModuleScript") then
+        pcall(function()
+            CachedSkinMutation = require(mutationModule)
+        end)
+    end
+
+    return CachedSkinMutation
 end
 
 local function createFallbackWeapon()
@@ -242,6 +261,15 @@ local function applySkinNonBlocking(model, skinId, wear, replicatedStorage)
     local skinFolder = skins and skins:FindFirstChild(skinId)
 
     if not skinFolder then
+        local mutations = getSkinMutation(replicatedStorage)
+        local mutationInfo = mutations and mutations[skinId]
+        local baseSkin = mutationInfo and mutationInfo.BaseSkin
+        if baseSkin and skins then
+            skinFolder = skins:FindFirstChild(tostring(baseSkin))
+        end
+    end
+
+    if not skinFolder then
         return false
     end
 
@@ -260,7 +288,7 @@ local function applySkinNonBlocking(model, skinId, wear, replicatedStorage)
         end
     end
 
-    local source = (wearLevel and skinFolder:FindFirstChild(wearLevel)) or skinFolder
+    local source = (wearLevel and skinFolder:FindFirstChild(tostring(wearLevel))) or skinFolder
 
     for _, decoration in ipairs(source:GetChildren()) do
         local supported = decoration:IsA("SurfaceAppearance")
@@ -281,10 +309,14 @@ local function applySkinNonBlocking(model, skinId, wear, replicatedStorage)
     return true
 end
 
-function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage, skinId, wear)
-    local currentGun = tostring(localPlayer:GetAttribute("UseGun") or "")
-    if currentGun == "" then
-        currentGun = tostring(localPlayer:GetAttribute("WeaponId") or "")
+function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage, skinId, wear, kind)
+    kind = kind == "melee" and "melee" or "gun"
+
+    local attributeName = kind == "melee" and "UseMelee" or "UseGun"
+    local currentWeapon = tostring(localPlayer:GetAttribute(attributeName) or "")
+
+    if currentWeapon == "" and kind == "gun" then
+        currentWeapon = tostring(localPlayer:GetAttribute("WeaponId") or "")
     end
 
     local assets = replicatedStorage:FindFirstChild("Assets")
@@ -293,11 +325,11 @@ function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage, skinId, wea
     local requestedSkin = type(skinId) == "string" and skinId ~= "" and skinId or nil
 
     local model
-    local modelId = currentGun
+    local modelId = currentWeapon
 
     if requestedSkin and skinHelper and type(skinHelper.getSkinWeaponModel) == "function" then
         pcall(function()
-            modelId = tostring(skinHelper.getSkinWeaponModel(requestedSkin) or currentGun)
+            modelId = tostring(skinHelper.getSkinWeaponModel(requestedSkin) or currentWeapon)
         end)
     end
 
@@ -308,8 +340,8 @@ function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage, skinId, wea
         end
     end
 
-    if not model and viewModels and currentGun ~= "" then
-        local sourceModel = viewModels:FindFirstChild(currentGun)
+    if not model and viewModels and currentWeapon ~= "" then
+        local sourceModel = viewModels:FindFirstChild(currentWeapon)
         if sourceModel then
             model = sourceModel:Clone()
         end
@@ -324,7 +356,7 @@ function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage, skinId, wea
         )
 
         if applied then
-            model.Name = "SkinPreview_" .. requestedSkin
+            model.Name = (kind == "melee" and "KnifePreview_" or "SkinPreview_") .. requestedSkin
         end
     end
 
