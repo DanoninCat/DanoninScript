@@ -46,6 +46,36 @@ local function addRod(model, name, a, b, thickness, color)
     rod.Parent = model
 end
 
+local function frameCamera(model, camera, mode)
+    if not model or not camera then
+        return
+    end
+
+    local ok, boxCF, boxSize = pcall(function()
+        return model:GetBoundingBox()
+    end)
+
+    if not ok or not boxCF or not boxSize then
+        camera.CFrame = CFrame.lookAt(Vector3.new(0, 2, 9), Vector3.new(0, 1.5, 0))
+        return
+    end
+
+    local center = boxCF.Position
+    local maxExtent = math.max(boxSize.X, boxSize.Y, boxSize.Z, 1)
+
+    if mode == "weapon" then
+        local distance = math.max(maxExtent * 1.9, 5.5)
+        local offset = Vector3.new(distance * 0.7, maxExtent * 0.4, distance)
+        camera.CFrame = CFrame.lookAt(center + offset, center)
+        camera.FieldOfView = 30
+    else
+        local distance = math.max(maxExtent * 1.8, 7)
+        local offset = Vector3.new(distance * 0.72, maxExtent * 0.2, distance)
+        camera.CFrame = CFrame.lookAt(center + offset, center + Vector3.new(0, boxSize.Y * 0.05, 0))
+        camera.FieldOfView = 32
+    end
+end
+
 function Helpers.CreateESPPreview(localPlayer, colors)
     local character = localPlayer and localPlayer.Character
     local clone = cloneArchivable(character)
@@ -133,7 +163,7 @@ function Helpers.CreateESPPreview(localPlayer, colors)
     end
 
     local camera = Instance.new("Camera")
-    camera.FieldOfView = 30
+    frameCamera(clone, camera, "avatar")
     return clone, camera
 end
 
@@ -158,32 +188,22 @@ local function wrapPreviewObject(object)
 end
 
 local CachedSkinHelper = nil
-local CachedSkinLoader = nil
 
-local function getSkinPipeline(replicatedStorage)
-    if CachedSkinHelper and CachedSkinLoader then
-        return CachedSkinHelper, CachedSkinLoader
+local function getSkinHelper(replicatedStorage)
+    if CachedSkinHelper then
+        return CachedSkinHelper
     end
 
     local config = replicatedStorage:FindFirstChild("Config")
     local helperModule = config and config:FindFirstChild("SkinHelper")
 
-    if not CachedSkinHelper and helperModule and helperModule:IsA("ModuleScript") then
+    if helperModule and helperModule:IsA("ModuleScript") then
         pcall(function()
             CachedSkinHelper = require(helperModule)
         end)
     end
 
-    local utils = replicatedStorage:FindFirstChild("Utils")
-    local loaderModule = utils and utils:FindFirstChild("SkinLoader")
-
-    if not CachedSkinLoader and loaderModule and loaderModule:IsA("ModuleScript") then
-        pcall(function()
-            CachedSkinLoader = require(loaderModule)
-        end)
-    end
-
-    return CachedSkinHelper, CachedSkinLoader
+    return CachedSkinHelper
 end
 
 local function createFallbackWeapon()
@@ -212,6 +232,55 @@ local function createFallbackWeapon()
     return model
 end
 
+local function applySkinNonBlocking(model, skinId, wear, replicatedStorage)
+    if not model or type(skinId) ~= "string" or skinId == "" then
+        return false
+    end
+
+    local assets = replicatedStorage:FindFirstChild("Assets")
+    local skins = assets and assets:FindFirstChild("Skin")
+    local skinFolder = skins and skins:FindFirstChild(skinId)
+
+    if not skinFolder then
+        return false
+    end
+
+    local skinHelper = getSkinHelper(replicatedStorage)
+    local wearLevel = nil
+
+    if skinHelper and type(skinHelper.getWearLevel) == "function" then
+        pcall(function()
+            wearLevel = skinHelper.getWearLevel(tonumber(wear) or 0.001)
+        end)
+    end
+
+    for _, desc in ipairs(model:GetDescendants()) do
+        if desc:IsA("SurfaceAppearance") then
+            desc:Destroy()
+        end
+    end
+
+    local source = (wearLevel and skinFolder:FindFirstChild(wearLevel)) or skinFolder
+
+    for _, decoration in ipairs(source:GetChildren()) do
+        local supported = decoration:IsA("SurfaceAppearance")
+            or decoration:IsA("Attachment")
+            or decoration:IsA("ParticleEmitter")
+
+        if supported then
+            local applyPart = decoration:GetAttribute("AppyPart")
+            if applyPart then
+                local target = model:FindFirstChild(tostring(applyPart), true)
+                if target then
+                    decoration:Clone().Parent = target
+                end
+            end
+        end
+    end
+
+    return true
+end
+
 function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage, skinId, wear)
     local currentGun = tostring(localPlayer:GetAttribute("UseGun") or "")
     if currentGun == "" then
@@ -220,44 +289,50 @@ function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage, skinId, wea
 
     local assets = replicatedStorage:FindFirstChild("Assets")
     local viewModels = assets and assets:FindFirstChild("ViewModel")
-    local skinHelper, skinLoader = getSkinPipeline(replicatedStorage)
-
-    local model
+    local skinHelper = getSkinHelper(replicatedStorage)
     local requestedSkin = type(skinId) == "string" and skinId ~= "" and skinId or nil
 
-    if viewModels then
-        if requestedSkin and skinHelper and type(skinHelper.getSkinWeaponModel) == "function" then
-            local okModel, modelId = pcall(function()
-                return skinHelper.getSkinWeaponModel(requestedSkin)
-            end)
+    local model
+    local modelId = currentGun
 
-            if okModel and modelId and viewModels:FindFirstChild(tostring(modelId)) then
-                model = viewModels[tostring(modelId)]:Clone()
-            end
-        end
+    if requestedSkin and skinHelper and type(skinHelper.getSkinWeaponModel) == "function" then
+        pcall(function()
+            modelId = tostring(skinHelper.getSkinWeaponModel(requestedSkin) or currentGun)
+        end)
+    end
 
-        if not model and currentGun ~= "" and viewModels:FindFirstChild(currentGun) then
-            model = viewModels[currentGun]:Clone()
+    if viewModels and modelId ~= "" then
+        local sourceModel = viewModels:FindFirstChild(modelId)
+        if sourceModel then
+            model = sourceModel:Clone()
         end
     end
 
-    if model and requestedSkin and skinLoader and type(skinLoader.loadSKinByModel) == "function" then
-        pcall(function()
-            skinLoader.loadSKinByModel(
-                model,
-                requestedSkin,
-                tonumber(wear) or 0.001,
-                {}
-            )
-        end)
-        model.Name = "SkinPreview_" .. requestedSkin
+    if not model and viewModels and currentGun ~= "" then
+        local sourceModel = viewModels:FindFirstChild(currentGun)
+        if sourceModel then
+            model = sourceModel:Clone()
+        end
+    end
+
+    if model and requestedSkin then
+        local applied = applySkinNonBlocking(
+            model,
+            requestedSkin,
+            tonumber(wear) or 0.001,
+            replicatedStorage
+        )
+
+        if applied then
+            model.Name = "SkinPreview_" .. requestedSkin
+        end
     end
 
     model = model and wrapPreviewObject(model) or nil
     model = model or createFallbackWeapon()
 
     local camera = Instance.new("Camera")
-    camera.FieldOfView = 28
+    frameCamera(model, camera, "weapon")
 
     return model, camera
 end
