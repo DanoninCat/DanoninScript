@@ -711,8 +711,13 @@ if not string.find(source, 'Values = {"Carregando..."}', 1, true) then
     error("[CAT_EMPIRE UI Patch] Lazy skin catalog missing")
 end
 
-if not string.find(source, 'CreatePreviewPlaceholder("Skin")', 1, true) then
-    error("[CAT_EMPIRE UI Patch] Lazy skin viewport missing")
+if not string.find(source, 'CreatePreviewPlaceholder(placeholderKind)', 1, true) then
+    error("[CAT_EMPIRE UI Patch] Dynamic gun/knife viewport missing")
+end
+
+if not string.find(source, 'makeSkinPanel("gun")', 1, true)
+    or not string.find(source, 'makeSkinPanel("melee")', 1, true) then
+    error("[CAT_EMPIRE UI Patch] Gun/knife panels missing")
 end
 
 if not string.find(source, "task.defer(RefreshESPPreview)", 1, true) then
