@@ -16,6 +16,23 @@ pcall(function()
     end
 end)
 
+local SkinConfig = {}
+local SkinMutation = {}
+pcall(function()
+    local helper = ReplicatedStorage:FindFirstChild("Config")
+    helper = helper and helper:FindFirstChild("SkinHelper")
+    if helper then
+        local config = helper:FindFirstChild("SkinConfig")
+        local mutation = helper:FindFirstChild("SkinMutation")
+        if config and config:IsA("ModuleScript") then
+            SkinConfig = require(config)
+        end
+        if mutation and mutation:IsA("ModuleScript") then
+            SkinMutation = require(mutation)
+        end
+    end
+end)
+
 local Fluent = loadstring(((getgenv and getgenv()) or _G)["__CE_F_91A7"])()
 
 local State = {
@@ -33,9 +50,8 @@ local State = {
     },
     Aim = {
         Enabled = false,
+        SilentEnabled = false,
         Strength = 1,
-        Prediction = true,
-        PredictionSeconds = 0.035,
         Part = "Head",
     },
     Visual = {
@@ -250,6 +266,27 @@ local function GetDistance(a, b)
     return (a - b).Magnitude
 end
 
+local function GetRevengeTargetName()
+    local combatPlayers = workspace:FindFirstChild("CombatPlayers")
+    local localInfo = combatPlayers and combatPlayers:FindFirstChild(LocalPlayer.Name)
+    local lastKiller = localInfo and localInfo:GetAttribute("LastKiller")
+    if type(lastKiller) == "string" and lastKiller ~= "" then
+        return lastKiller
+    end
+    return nil
+end
+
+local function IsRevengeCharacter(char)
+    if not char then
+        return false
+    end
+    if char:FindFirstChild("RevengeHighlight") then
+        return true
+    end
+    local revengeName = GetRevengeTargetName()
+    return revengeName ~= nil and char.Name == revengeName
+end
+
 local function GetESPCharacters()
     local result = {}
     local seen = {}
@@ -258,27 +295,65 @@ local function GetESPCharacters()
         if not char or seen[char] or char == LocalPlayer.Character then
             return
         end
-        if not char:IsA("Model") or char:GetAttribute("FakeChar") then
+        if not char:IsA("Model") then
             return
         end
+        if char.Name == LocalPlayer.Name then
+            local owner = GetPlayerFromCharacter(char)
+            if owner == LocalPlayer then
+                return
+            end
+        end
+
         local humanoid = char:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then
             return
         end
+
+        -- RevengeMarker intentionally allows the marked model even when the
+        -- combat representation is tagged FakeChar.
+        if char:GetAttribute("FakeChar") and not IsRevengeCharacter(char) then
+            return
+        end
+
         seen[char] = true
         table.insert(result, char)
     end
 
+    -- Standard Roblox character ownership.
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
             addCharacter(player.Character)
         end
     end
 
+    -- PlayerDeathHandler in the dump checks workspace directly first.
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
+            addCharacter(child)
+        end
+    end
+
+    -- AimAssit/RevengeMarker both use PlayersCharacters.
     local playersCharacters = workspace:FindFirstChild("PlayersCharacters")
     if playersCharacters then
         for _, char in ipairs(playersCharacters:GetChildren()) do
             addCharacter(char)
+        end
+    end
+
+    -- Explicitly resolve LastKiller so the native revenge marker can never be
+    -- lost just because the round swapped character containers.
+    local revengeName = GetRevengeTargetName()
+    if revengeName then
+        local player = Players:FindFirstChild(revengeName)
+        addCharacter(player and player.Character)
+
+        local direct = workspace:FindFirstChild(revengeName)
+        addCharacter(direct)
+
+        if playersCharacters then
+            addCharacter(playersCharacters:FindFirstChild(revengeName))
         end
     end
 
@@ -379,20 +454,23 @@ local function IsTargetVisible(origin, targetPos, targetChar)
 end
 
 local function GetCandidateMetadata(char)
-    local targetPart = char:FindFirstChild(State.Aim.Part)
-        or char:FindFirstChild("Head")
-        or GetTargetPart(char)
+    local targetPart
+
+    if State.Aim.Part == "Torso" then
+        targetPart = char:FindFirstChild("Torso")
+            or char:FindFirstChild("UpperTorso")
+            or char:FindFirstChild("HumanoidRootPart")
+    else
+        targetPart = char:FindFirstChild("Head")
+    end
+
+    targetPart = targetPart or GetTargetPart(char)
 
     if not targetPart or not targetPart:IsA("BasePart") then
         return nil
     end
 
     local targetPosition = targetPart.Position
-    if State.Aim.Prediction then
-        targetPosition = targetPosition
-            + targetPart.AssemblyLinearVelocity * State.Aim.PredictionSeconds
-    end
-
     local screenPos, onScreen = ProjectToScreen(targetPosition)
     if not onScreen or not screenPos then
         return nil
@@ -805,19 +883,23 @@ local function IsESPCharacterEligible(char)
     if not char or not char.Parent or char == LocalPlayer.Character or not IsAlive(char) then
         return false
     end
-    if char:GetAttribute("FakeChar") then
+
+    if char:GetAttribute("FakeChar") and not IsRevengeCharacter(char) then
         return false
     end
+
     local targetPlayer = GetPlayerFromCharacter(char)
     if targetPlayer == LocalPlayer then
         return false
     end
+
     if State.Filters.TeamCheck then
         local myChar = LocalPlayer.Character
         if myChar and AreSameTeam(myChar, char) then
             return false
         end
     end
+
     return true
 end
 
@@ -981,8 +1063,13 @@ local function UpdatePlayerESP(char, data, myRoot)
     local width = bounds.Width
     local height = bounds.Height
 
+    local revengeMarked = IsRevengeCharacter(char)
+    local boxColor = revengeMarked and Color3.fromRGB(255, 40, 40) or ESP_COLORS.Box
+    local skeletonColor = revengeMarked and Color3.fromRGB(255, 40, 40) or ESP_COLORS.Skeleton
+    local lineColor = revengeMarked and Color3.fromRGB(255, 40, 40) or ESP_COLORS.Lines
+
     if data.BoxStroke then
-        data.BoxStroke.Color = ESP_COLORS.Box
+        data.BoxStroke.Color = boxColor
     end
     data.Name.TextColor3 = ESP_COLORS.Name
     data.Distance.TextColor3 = ESP_COLORS.Distance
@@ -1023,12 +1110,17 @@ local function UpdatePlayerESP(char, data, myRoot)
 
     if State.ESP.Lines then
         local headAnchor = GetESPHeadTopScreen(char) or bounds.TopCenter
-        SetLine(data.Line, GetLocalScreenOrigin(), headAnchor, 1, ESP_COLORS.Lines)
+        SetLine(data.Line, GetLocalScreenOrigin(), headAnchor, 1, lineColor)
     else
         data.Line.Visible = false
     end
 
+    local previousSkeletonColor = ESP_COLORS.Skeleton
+    if revengeMarked then
+        ESP_COLORS.Skeleton = skeletonColor
+    end
     UpdateSkeleton(char, data)
+    ESP_COLORS.Skeleton = previousSkeletonColor
 end
 
 local function RefreshESPEnabled()
@@ -1164,6 +1256,9 @@ local function Cleanup()
 
     safeStep("DisconnectAll", DisconnectAll)
     safeStep("StopCombatLoop", StopCombatLoop)
+    safeStep("StopESPRenderLoop", function()
+        RunService:UnbindFromRenderStep("CAT_EMPIRE_ESP")
+    end)
     safeStep("ClearPlayerCache", function() table.clear(PlayerCache) end)
     safeStep("ClearESP", ClearESP)
     safeStep("DestroyESPGui", function() DestroyNamedGui(ESP_GUI_NAME) end)
@@ -1184,6 +1279,128 @@ local function Cleanup()
     end
 
     IsCleaningUp = false
+end
+
+local function CreateESPPreview()
+    local model = Instance.new("Model")
+    model.Name = "ESPPreview"
+
+    local function part(name, size, position, color, transparency)
+        local p = Instance.new("Part")
+        p.Name = name
+        p.Size = size
+        p.Position = position
+        p.Anchored = true
+        p.CanCollide = false
+        p.Material = Enum.Material.SmoothPlastic
+        p.Color = color or Color3.fromRGB(130, 130, 140)
+        p.Transparency = transparency or 0
+        p.Parent = model
+        return p
+    end
+
+    local function rod(name, a, b, thickness, color)
+        local delta = b - a
+        local p = part(name, Vector3.new(thickness, thickness, delta.Magnitude), (a + b) * 0.5, color)
+        p.Material = Enum.Material.Neon
+        p.CFrame = CFrame.lookAt((a + b) * 0.5, b)
+        return p
+    end
+
+    part("Head", Vector3.new(1.35, 1.35, 1.35), Vector3.new(0, 4.7, 0))
+    part("Torso", Vector3.new(2.4, 2.7, 1.2), Vector3.new(0, 2.7, 0))
+    part("LeftArm", Vector3.new(0.75, 2.7, 0.75), Vector3.new(-1.6, 2.7, 0))
+    part("RightArm", Vector3.new(0.75, 2.7, 0.75), Vector3.new(1.6, 2.7, 0))
+    part("LeftLeg", Vector3.new(0.9, 2.8, 0.9), Vector3.new(-0.65, -0.05, 0))
+    part("RightLeg", Vector3.new(0.9, 2.8, 0.9), Vector3.new(0.65, -0.05, 0))
+
+    local accent = Color3.fromRGB(78, 91, 222)
+    local skeleton = Color3.fromRGB(235, 235, 240)
+
+    rod("SkullSpine", Vector3.new(0, 4.7, -0.8), Vector3.new(0, 3.5, -0.8), 0.07, skeleton)
+    rod("Spine", Vector3.new(0, 3.5, -0.8), Vector3.new(0, 1.5, -0.8), 0.07, skeleton)
+    rod("Shoulders", Vector3.new(-1.6, 3.5, -0.8), Vector3.new(1.6, 3.5, -0.8), 0.07, skeleton)
+    rod("LeftArmESP", Vector3.new(-1.6, 3.5, -0.8), Vector3.new(-1.6, 1.7, -0.8), 0.07, skeleton)
+    rod("RightArmESP", Vector3.new(1.6, 3.5, -0.8), Vector3.new(1.6, 1.7, -0.8), 0.07, skeleton)
+    rod("LeftLegESP", Vector3.new(0, 1.5, -0.8), Vector3.new(-0.65, -1.4, -0.8), 0.07, skeleton)
+    rod("RightLegESP", Vector3.new(0, 1.5, -0.8), Vector3.new(0.65, -1.4, -0.8), 0.07, skeleton)
+
+    local min = Vector3.new(-2.25, -1.7, -0.95)
+    local max = Vector3.new(2.25, 5.55, 0.95)
+    local corners = {
+        Vector3.new(min.X,min.Y,min.Z), Vector3.new(max.X,min.Y,min.Z),
+        Vector3.new(min.X,max.Y,min.Z), Vector3.new(max.X,max.Y,min.Z),
+        Vector3.new(min.X,min.Y,max.Z), Vector3.new(max.X,min.Y,max.Z),
+        Vector3.new(min.X,max.Y,max.Z), Vector3.new(max.X,max.Y,max.Z),
+    }
+    local edges = {
+        {1,2},{3,4},{5,6},{7,8},{1,3},{2,4},{5,7},{6,8},{1,5},{2,6},{3,7},{4,8},
+    }
+    for index, edge in ipairs(edges) do
+        rod("Box" .. index, corners[edge[1]], corners[edge[2]], 0.055, accent)
+    end
+
+    rod("Tracer", Vector3.new(0, -2.5, 4), Vector3.new(0, 2.5, -0.8), 0.045, accent)
+
+    local camera = Instance.new("Camera")
+    camera.CFrame = CFrame.lookAt(Vector3.new(8.5, 3.8, 12.5), Vector3.new(0, 2.0, 0))
+    camera.FieldOfView = 35
+
+    return model, camera
+end
+
+local function BuildSkinChoices()
+    local currentGun = tostring(LocalPlayer:GetAttribute("UseGun") or "")
+    local choices = {"Default"}
+    local ids = {}
+
+    local function collect(config)
+        for skinId, info in pairs(config or {}) do
+            if type(info) == "table" and tostring(info.WeaponId or "") == currentGun then
+                local label = string.format(
+                    "%s | %s | %s",
+                    tostring(skinId),
+                    tostring(info.Name or skinId),
+                    tostring(info.Rarity or "")
+                )
+                ids[label] = skinId
+                table.insert(choices, label)
+            end
+        end
+    end
+
+    collect(SkinConfig)
+    collect(SkinMutation)
+
+    table.sort(choices, function(a, b)
+        if a == "Default" then return true end
+        if b == "Default" then return false end
+        return a < b
+    end)
+
+    return choices, ids
+end
+
+local function RefreshLocalWeaponSkin(skinId)
+    if skinId then
+        LocalPlayer:SetAttribute("UseGunSkin", skinId)
+        LocalPlayer:SetAttribute("UseGunSkinWear", 0.001)
+    else
+        LocalPlayer:SetAttribute("UseGunSkin", "")
+    end
+
+    local currentWeapon = LocalPlayer:GetAttribute("WeaponId")
+    if not currentWeapon or currentWeapon == "" then
+        return
+    end
+
+    -- Hand.lua rebuilds the first-person weapon whenever WeaponId changes.
+    LocalPlayer:SetAttribute("WeaponId", "")
+    task.delay(0.06, function()
+        if LocalPlayer and LocalPlayer.Parent then
+            LocalPlayer:SetAttribute("WeaponId", currentWeapon)
+        end
+    end)
 end
 
 -- ============================================================
@@ -1285,40 +1502,11 @@ local function CreateUI()
 
     aimbotSection:AddDropdown("AimPart", {
         Title = "Aim Part",
-        Values = {"Head", "HumanoidRootPart", "UpperTorso", "Torso"},
+        Values = {"Head", "Torso"},
         Default = "Head",
         DropdownOutsideWindow = true,
         Callback = function(value)
             State.Aim.Part = tostring(value or "Head")
-        end,
-    })
-
-    aimbotSection:AddToggle("AimPrediction", {
-        Title = "Movement Prediction",
-        Default = true,
-        Callback = function(value)
-            State.Aim.Prediction = value == true
-        end,
-    })
-
-    aimbotSection:AddSlider("AimPredictionMs", {
-        Title = "Prediction",
-        Min = 0,
-        Max = 100,
-        Default = 35,
-        Rounding = 0,
-        Callback = function(value)
-            State.Aim.PredictionSeconds = math.clamp(tonumber(value) or 35, 0, 100) / 1000
-        end,
-    })
-
-    aimbotSection:AddToggle("AutoScopeEnabled", {
-        Title = "Auto Scope",
-        Default = LocalPlayer:GetAttribute("AutoScopeEnabled") ~= false,
-        Callback = function(value)
-            pcall(function()
-                LocalPlayer:SetAttribute("AutoScopeEnabled", value == true)
-            end)
         end,
     })
 
@@ -1428,6 +1616,17 @@ local function CreateUI()
         end,
     })
 
+    local previewSection = Tabs.Visuals:AddSection("ESP Preview 3D", "solar/cube-bold")
+    local previewModel, previewCamera = CreateESPPreview()
+    previewSection:AddViewport({
+        Object = previewModel,
+        Camera = previewCamera,
+        Height = 260,
+        AspectRatio = "16:9",
+        Interactive = true,
+        Focused = false,
+    })
+
     local function resolveGameName()
         local gameName = "Scoped"
         pcall(function()
@@ -1453,19 +1652,9 @@ local function CreateUI()
     end
 
     local function resolveAvatarThumbnail()
-        local fallback = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(LocalPlayer.UserId) .. "&w=150&h=150"
-        local resolved = fallback
-        pcall(function()
-            local content = Players:GetUserThumbnailAsync(
-                LocalPlayer.UserId,
-                Enum.ThumbnailType.HeadShot,
-                Enum.ThumbnailSize.Size150x150
-            )
-            if type(content) == "string" and content ~= "" then
-                resolved = content
-            end
-        end)
-        return resolved
+        return "https://www.roblox.com/headshot-thumbnail/image?userId="
+            .. tostring(LocalPlayer.UserId)
+            .. "&width=420&height=420&format=png"
     end
 
     local function shortJobId()
@@ -1494,20 +1683,36 @@ local function CreateUI()
     })
 
     local accountSection = Tabs.Misc:AddSection("Sua Conta", "solar/user-bold")
-    accountSection:AddImage({
-        Image = resolveAvatarThumbnail(),
-        AspectRatio = "4:1",
-        Radius = 10,
+    accountSection:AddSocial({
+        Username = LocalPlayer.Name,
+        DisplayName = LocalPlayer.DisplayName,
+        Platform = "Roblox",
+        Avatar = resolveAvatarThumbnail(),
     })
     accountSection:AddParagraph({
-        Title = LocalPlayer.DisplayName,
+        Title = "Conta",
         Content = string.format(
-            "Display Name: %s\nNickname: @%s\nUser ID: %d\nConta: %d dias",
-            LocalPlayer.DisplayName,
+            "@%s  •  User ID: %d  •  %d dias",
             LocalPlayer.Name,
             LocalPlayer.UserId,
             LocalPlayer.AccountAge
         ),
+    })
+
+    local skinSection = Tabs.Misc:AddSection("Skin Changer", "solar/palette-bold")
+    local skinChoices, skinIds = BuildSkinChoices()
+    skinSection:AddDropdown("ScopedGunSkin", {
+        Title = "Gun Skin",
+        Values = skinChoices,
+        Default = "Default",
+        DropdownOutsideWindow = true,
+        Callback = function(value)
+            if value == "Default" then
+                RefreshLocalWeaponSkin(nil)
+            else
+                RefreshLocalWeaponSkin(skinIds[value])
+            end
+        end,
     })
 
     local communitySection = Tabs.Misc:AddSection("Comunidade", "solar/chat-round-bold")
@@ -1607,11 +1812,25 @@ local function CreateUI()
 
             for index = 1, #playerRows do
                 local row = rows[index]
-                local value = row
-                    and string.format("%s  [%d]", row.Player.DisplayName or row.Player.Name, math.floor(row.Distance + 0.5))
-                    or "-"
-                if playerRows[index] and playerRows[index].SetTitle then
-                    playerRows[index]:SetTitle(value)
+                local title = "-"
+                local desc = ""
+
+                if row then
+                    title = row.Player.DisplayName or row.Player.Name
+                    desc = string.format(
+                        "@%s  •  User ID: %d  •  %d studs",
+                        row.Player.Name,
+                        row.Player.UserId,
+                        math.floor(row.Distance + 0.5)
+                    )
+                end
+
+                local paragraph = playerRows[index]
+                if paragraph and paragraph.SetTitle then
+                    paragraph:SetTitle(title)
+                end
+                if paragraph and paragraph.SetDesc then
+                    paragraph:SetDesc(desc)
                 end
             end
 
@@ -1630,26 +1849,76 @@ end
 local function SetupConnections()
     SetupPlayerCache()
 
-    table.insert(Connections, RunService.RenderStepped:Connect(function()
-        if UIClosed then return end
-        UpdateESP()
-        if State.Visual.FOVCircle then
-            UpdateFOVCircle()
+    pcall(function()
+        RunService:UnbindFromRenderStep("CAT_EMPIRE_ESP")
+    end)
+
+    RunService:BindToRenderStep(
+        "CAT_EMPIRE_ESP",
+        Enum.RenderPriority.Camera.Value + 20,
+        function()
+            if UIClosed then
+                return
+            end
+            UpdateESP()
+            if State.Visual.FOVCircle then
+                UpdateFOVCircle()
+            end
         end
-    end))
+    )
+
+    local function refreshRoundESP()
+        task.delay(0.08, function()
+            if UIClosed then
+                return
+            end
+            ClearESP()
+            UpdateESP()
+        end)
+    end
 
     table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function()
         ResetCombatState()
-        task.defer(UpdateESP)
+        refreshRoundESP()
     end))
 
-    local characters = workspace:FindFirstChild("Characters")
-    if characters then
-        table.insert(Connections, characters.ChildRemoved:Connect(function(child)
+    table.insert(Connections, workspace.ChildAdded:Connect(function(child)
+        if child.Name == "PlayersCharacters"
+            or child.Name == "CombatPlayers"
+            or child.Name == LocalPlayer.Name then
+            refreshRoundESP()
+        end
+    end))
+
+    table.insert(Connections, workspace.ChildRemoved:Connect(function(child)
+        if child.Name == "PlayersCharacters"
+            or child.Name == "CombatPlayers" then
+            refreshRoundESP()
+        elseif child:IsA("Model") then
             UnregisterCharacter(child)
             RemoveESP(child)
+        end
+    end))
+
+    local gameBC = workspace:FindFirstChild("GameBC")
+    local gameState = gameBC and gameBC:FindFirstChild("GameState")
+    if gameState and gameState:IsA("ValueBase") then
+        table.insert(Connections, gameState.Changed:Connect(refreshRoundESP))
+    end
+
+    local function bindPlayersCharacters(folder)
+        if not folder then
+            return
+        end
+        table.insert(Connections, folder.ChildAdded:Connect(refreshRoundESP))
+        table.insert(Connections, folder.ChildRemoved:Connect(function(child)
+            UnregisterCharacter(child)
+            RemoveESP(child)
+            refreshRoundESP()
         end))
     end
+
+    bindPlayersCharacters(workspace:FindFirstChild("PlayersCharacters"))
 end
 
 local function Init()
