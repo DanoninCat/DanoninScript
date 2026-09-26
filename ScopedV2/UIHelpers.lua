@@ -151,117 +151,107 @@ local function wrapPreviewObject(object)
     end
 
     cleanClone(model)
-    pcall(function() model:PivotTo(CFrame.new()) end)
+    pcall(function()
+        model:PivotTo(CFrame.new())
+    end)
     return model
 end
 
-local function countParts(object)
-    local count = 0
-    for _, child in ipairs(object:GetDescendants()) do
-        if child:IsA("BasePart") then count = count + 1 end
-    end
-    return count
+local function getSkinPipeline(replicatedStorage)
+    local skinHelper, skinLoader
+
+    pcall(function()
+        skinHelper = require(
+            replicatedStorage
+                :WaitForChild("Config")
+                :WaitForChild("SkinHelper")
+        )
+    end)
+
+    pcall(function()
+        skinLoader = require(
+            replicatedStorage
+                :WaitForChild("Utils")
+                :WaitForChild("SkinLoader")
+        )
+    end)
+
+    return skinHelper, skinLoader
 end
 
-function Helpers.FindWeaponVisual(localPlayer, replicatedStorage)
+local function createFallbackWeapon()
+    local model = Instance.new("Model")
+    model.Name = "WeaponPreviewUnavailable"
+
+    local body = Instance.new("Part")
+    body.Name = "Body"
+    body.Size = Vector3.new(4.5, 0.7, 0.7)
+    body.Anchored = true
+    body.CanCollide = false
+    body.Material = Enum.Material.Metal
+    body.Color = Color3.fromRGB(80, 80, 90)
+    body.Parent = model
+
+    local barrel = Instance.new("Part")
+    barrel.Name = "Barrel"
+    barrel.Size = Vector3.new(3.5, 0.25, 0.25)
+    barrel.Position = Vector3.new(3.5, 0.1, 0)
+    barrel.Anchored = true
+    barrel.CanCollide = false
+    barrel.Material = Enum.Material.Metal
+    barrel.Color = Color3.fromRGB(110, 110, 120)
+    barrel.Parent = model
+
+    return model
+end
+
+function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage, skinId, wear)
     local currentGun = tostring(localPlayer:GetAttribute("UseGun") or "")
-    local weaponId = tostring(localPlayer:GetAttribute("WeaponId") or "")
-    local best, bestScore = nil, -math.huge
+    if currentGun == "" then
+        currentGun = tostring(localPlayer:GetAttribute("WeaponId") or "")
+    end
 
-    local function consider(object, bonus)
-        if not object or not (object:IsA("Model") or object:IsA("Tool")) then return end
-        if object == localPlayer.Character then return end
-        if object:IsA("Model") and object:FindFirstChildOfClass("Humanoid") then return end
+    local assets = replicatedStorage:FindFirstChild("Assets")
+    local viewModels = assets and assets:FindFirstChild("ViewModel")
+    local skinHelper, skinLoader = getSkinPipeline(replicatedStorage)
 
-        local parts = countParts(object)
-        if parts == 0 then return end
+    local model
+    local requestedSkin = type(skinId) == "string" and skinId ~= "" and skinId or nil
 
-        local lowerName = string.lower(object.Name)
-        local score = bonus + math.min(parts, 30)
+    if viewModels then
+        if requestedSkin and skinHelper and type(skinHelper.getSkinWeaponModel) == "function" then
+            local okModel, modelId = pcall(function()
+                return skinHelper.getSkinWeaponModel(requestedSkin)
+            end)
 
-        for _, id in ipairs({currentGun, weaponId}) do
-            if id ~= "" then
-                local lowerId = string.lower(id)
-                if lowerName == lowerId then
-                    score = score + 160
-                elseif string.find(lowerName, lowerId, 1, true) then
-                    score = score + 90
-                end
-                if tostring(object:GetAttribute("WeaponId") or "") == id then
-                    score = score + 180
-                end
+            if okModel and modelId and viewModels:FindFirstChild(tostring(modelId)) then
+                model = viewModels[tostring(modelId)]:Clone()
             end
         end
 
-        if score > bestScore then
-            best = object
-            bestScore = score
+        if not model and currentGun ~= "" and viewModels:FindFirstChild(currentGun) then
+            model = viewModels[currentGun]:Clone()
         end
     end
 
-    local camera = workspace.CurrentCamera
-    if camera then
-        for _, object in ipairs(camera:GetChildren()) do
-            consider(object, 120)
-        end
-        for _, object in ipairs(camera:GetDescendants()) do
-            if object:IsA("Model") or object:IsA("Tool") then
-                consider(object, 100)
-            end
-        end
+    if model and requestedSkin and skinLoader and type(skinLoader.loadSKinByModel) == "function" then
+        pcall(function()
+            skinLoader.loadSKinByModel(
+                model,
+                requestedSkin,
+                tonumber(wear) or 0.001,
+                {}
+            )
+        end)
+        model.Name = "SkinPreview_" .. requestedSkin
     end
 
-    local character = localPlayer.Character
-    if character then
-        for _, object in ipairs(character:GetChildren()) do
-            consider(object, 80)
-        end
-    end
-
-    if best then return best end
-
-    if replicatedStorage then
-        for _, object in ipairs(replicatedStorage:GetDescendants()) do
-            if object:IsA("Model") then
-                local lowerName = string.lower(object.Name)
-                local exact = (currentGun ~= "" and lowerName == string.lower(currentGun))
-                    or (weaponId ~= "" and lowerName == string.lower(weaponId))
-                if exact then consider(object, 10) end
-            end
-        end
-    end
-
-    return best
-end
-
-function Helpers.CreateWeaponPreview(localPlayer, replicatedStorage)
-    local source = Helpers.FindWeaponVisual(localPlayer, replicatedStorage)
-    local model = wrapPreviewObject(source)
-
-    if not model then
-        model = Instance.new("Model")
-        model.Name = "WeaponPreviewUnavailable"
-
-        local body = Instance.new("Part")
-        body.Size = Vector3.new(4.5, 0.7, 0.7)
-        body.Anchored = true
-        body.CanCollide = false
-        body.Material = Enum.Material.Metal
-        body.Color = Color3.fromRGB(80, 80, 90)
-        body.Parent = model
-
-        local barrel = Instance.new("Part")
-        barrel.Size = Vector3.new(3.5, 0.25, 0.25)
-        barrel.Position = Vector3.new(3.5, 0.1, 0)
-        barrel.Anchored = true
-        barrel.CanCollide = false
-        barrel.Material = Enum.Material.Metal
-        barrel.Color = Color3.fromRGB(110, 110, 120)
-        barrel.Parent = model
-    end
+    model = model and wrapPreviewObject(model) or nil
+    model = model or createFallbackWeapon()
 
     local camera = Instance.new("Camera")
     camera.FieldOfView = 28
+
     return model, camera
 end
 
