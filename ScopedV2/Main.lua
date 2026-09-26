@@ -4,17 +4,9 @@ local MarketplaceService = game:GetService("MarketplaceService")
 local LocalPlayer = Players.LocalPlayer
 local env = (getgenv and getgenv()) or _G
 
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
-if LocalPlayer then
-    LocalPlayer:WaitForChild("PlayerGui", 20)
-end
-
 local fluentSource = env["__CE_F_91A7"]
 if type(fluentSource) ~= "string" or fluentSource == "" then
-    error("[CAT_EMPIRE][Scoped] Fluent source missing")
+    error("[CAT_EMPIRE] Fluent source missing")
 end
 
 local Fluent = loadstring(fluentSource)()
@@ -24,6 +16,28 @@ if previous and previous.Window then
     pcall(function()
         previous.Window:Destroy()
     end)
+end
+
+local function getSetting(name)
+    local folder = LocalPlayer and LocalPlayer:FindFirstChild("Setting")
+    return folder and folder:FindFirstChild(name)
+end
+
+local function readSetting(name, fallback)
+    local object = getSetting(name)
+    if object and object:IsA("ValueBase") then
+        return object.Value
+    end
+    return fallback
+end
+
+local function writeSetting(name, value)
+    local object = getSetting(name)
+    if object and object:IsA("ValueBase") then
+        pcall(function()
+            object.Value = value
+        end)
+    end
 end
 
 local Window = Fluent:CreateWindow({
@@ -46,26 +60,90 @@ local Tabs = {
     Settings = Window:AddTab({Title = "Settings", Icon = "solar/settings-bold"}),
 }
 
-local combat = Tabs.Combat:AddSection("Scoped Runtime", "solar/target-bold")
-combat:AddParagraph({
-    Title = "Loader OK",
-    Content = "CAT EMPIRE carregado no Scoped. Place ID: " .. tostring(game.PlaceId),
-})
-combat:AddParagraph({
-    Title = "Second Dump",
-    Content = "Runtime preparado para a arquitetura do segundo dump (Scripts_114689356953798).",
+local aimSection = Tabs.Combat:AddSection("Aim", "solar/target-bold")
+
+aimSection:AddToggle("ScopedAimAssist", {
+    Title = "Aim Assist",
+    Default = LocalPlayer:GetAttribute("AimAssistEnabled") == true,
+    Callback = function(value)
+        pcall(function()
+            LocalPlayer:SetAttribute("AimAssistEnabled", value == true)
+        end)
+    end,
 })
 
-local visuals = Tabs.Visuals:AddSection("Visuals", "solar/eye-bold")
-visuals:AddParagraph({
-    Title = "Interface",
-    Content = "Layout no mesmo padrão do Murder Duels: Crimson, tabs separadas e Settings FluentPro.",
+aimSection:AddToggle("ScopedAutoScope", {
+    Title = "Auto Scope",
+    Default = LocalPlayer:GetAttribute("AutoScopeEnabled") == true,
+    Callback = function(value)
+        pcall(function()
+            LocalPlayer:SetAttribute("AutoScopeEnabled", value == true)
+        end)
+    end,
+})
+
+local cameraSection = Tabs.Combat:AddSection("Camera", "solar/radar-2-bold")
+
+cameraSection:AddSlider("ScopedDefaultFov", {
+    Title = "Default FOV",
+    Min = 40,
+    Max = 120,
+    Default = tonumber(readSetting("DefaultFov", 70)) or 70,
+    Rounding = 0,
+    Callback = function(value)
+        writeSetting("DefaultFov", tonumber(value) or 70)
+    end,
+})
+
+cameraSection:AddSlider("ScopedScopedFov", {
+    Title = "Scoped FOV",
+    Min = 10,
+    Max = 90,
+    Default = tonumber(readSetting("ScopedFov", 40)) or 40,
+    Rounding = 0,
+    Callback = function(value)
+        writeSetting("ScopedFov", tonumber(value) or 40)
+    end,
+})
+
+local performance = Tabs.Visuals:AddSection("Performance", "solar/bolt-bold")
+
+performance:AddToggle("ScopedOptimizedShadow", {
+    Title = "Optimized Shadow",
+    Default = readSetting("Optimized Shadow", false) == true,
+    Callback = function(value)
+        writeSetting("Optimized Shadow", value == true)
+    end,
+})
+
+performance:AddToggle("ScopedRemoveTextures", {
+    Title = "Remove Textures",
+    Default = readSetting("Remove Textures", false) == true,
+    Callback = function(value)
+        writeSetting("Remove Textures", value == true)
+    end,
+})
+
+performance:AddToggle("ScopedOptimizedRagdoll", {
+    Title = "Optimized Ragdoll",
+    Default = readSetting("Optimized Ragdoll", false) == true,
+    Callback = function(value)
+        writeSetting("Optimized Ragdoll", value == true)
+    end,
+})
+
+performance:AddToggle("ScopedOptimizedEffects", {
+    Title = "Optimized Effects",
+    Default = readSetting("Optimized Effects", false) == true,
+    Callback = function(value)
+        writeSetting("Optimized Effects", value == true)
+    end,
 })
 
 local function shortJobId()
     local id = tostring(game.JobId or "")
     if id == "" then return "N/A" end
-    return #id > 18 and (string.sub(id,1,18) .. "...") or id
+    return #id > 18 and (string.sub(id, 1, 18) .. "...") or id
 end
 
 local function resolveGameName()
@@ -79,8 +157,8 @@ local function resolveGameName()
     return name
 end
 
-local misc = Tabs.Misc:AddSection("Servidor Atual", "solar/server-square-bold")
-misc:AddParagraph({
+local server = Tabs.Misc:AddSection("Servidor Atual", "solar/server-square-bold")
+server:AddParagraph({
     Title = resolveGameName(),
     Content = string.format(
         "Jogadores: %d/%d\nPlace ID: %s\nServer ID: %s",
@@ -93,32 +171,25 @@ misc:AddParagraph({
 
 local account = Tabs.Misc:AddSection("Sua Conta", "solar/user-bold")
 account:AddParagraph({
-    Title = LocalPlayer and LocalPlayer.DisplayName or "Player",
-    Content = LocalPlayer and string.format(
+    Title = LocalPlayer.DisplayName,
+    Content = string.format(
         "Nickname: @%s\nUser ID: %d\nConta: %d dias",
         LocalPlayer.Name,
         LocalPlayer.UserId,
         LocalPlayer.AccountAge
-    ) or "LocalPlayer indisponível",
+    ),
 })
 
 local community = Tabs.Misc:AddSection("Comunidade", "solar/chat-round-bold")
 community:AddDiscord({InviteCode = "yykVnTjd2Y"})
 
-local listSection = Tabs.Players:AddSection("Players List", "solar/users-group-rounded-bold")
+local players = Tabs.Players:AddSection("Players List", "solar/users-group-rounded-bold")
 for _, player in ipairs(Players:GetPlayers()) do
-    listSection:AddParagraph({
+    players:AddParagraph({
         Title = player.DisplayName or player.Name,
         Content = "@" .. player.Name,
     })
 end
-
-local developer = Tabs.Settings:AddSection("Developer", "solar/code-bold")
-developer:AddParagraph({Title = "Dev", Content = "Danonin"})
-developer:AddParagraph({
-    Title = "Scoped Loader",
-    Content = "Build UI diagnostic\nPlace: " .. tostring(game.PlaceId),
-})
 
 if Fluent.InterfaceManager and Fluent.SaveManager then
     Fluent.InterfaceManager:SetLibrary(Fluent)
@@ -164,7 +235,7 @@ end)
 env.__CAT_EMPIRE_SCOPED_UI = {
     Window = Window,
     Fluent = Fluent,
-    Version = "UI-DIAG-1",
+    Version = "2.0.0",
     PlaceId = game.PlaceId,
 }
 
