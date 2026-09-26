@@ -16,6 +16,16 @@ pcall(function()
     end
 end)
 
+local FireRay = nil
+local OriginalFireRayFire = nil
+pcall(function()
+    local guiUtils = ReplicatedStorage:FindFirstChild("GuiUtils")
+    local module = guiUtils and guiUtils:FindFirstChild("FireRay")
+    if module and module:IsA("ModuleScript") then
+        FireRay = require(module)
+    end
+end)
+
 local SkinConfig = {}
 local SkinMutation = {}
 pcall(function()
@@ -520,6 +530,73 @@ local function GetClosestTarget()
     end
 
     return closest
+end
+
+local function InstallSilentAim()
+    if not FireRay or type(FireRay.Fire) ~= "function" or OriginalFireRayFire then
+        return
+    end
+
+    OriginalFireRayFire = FireRay.Fire
+
+    FireRay.Fire = function(...)
+        if not State.Aim.SilentEnabled
+            or not CameraController
+            or type(CameraController.GetAimRay) ~= "function" then
+            return OriginalFireRayFire(...)
+        end
+
+        local candidate = GetClosestTarget()
+        if not candidate or not candidate.Part or not candidate.Part.Parent then
+            return OriginalFireRayFire(...)
+        end
+
+        local oldGetAimRay = CameraController.GetAimRay
+        local origin
+
+        if type(CameraController.GetCameraPosition) == "function" then
+            local ok, value = pcall(function()
+                return CameraController:GetCameraPosition()
+            end)
+            if ok then
+                origin = value
+            end
+        end
+
+        local camera = GetCamera()
+        origin = origin or (camera and camera.CFrame.Position)
+
+        if not origin then
+            return OriginalFireRayFire(...)
+        end
+
+        local delta = candidate.Part.Position - origin
+        if delta.Magnitude <= 0.001 then
+            return OriginalFireRayFire(...)
+        end
+
+        local direction = delta.Unit
+
+        CameraController.GetAimRay = function()
+            return origin, direction
+        end
+
+        local result = table.pack(pcall(OriginalFireRayFire, ...))
+        CameraController.GetAimRay = oldGetAimRay
+
+        if not result[1] then
+            error(result[2])
+        end
+
+        return table.unpack(result, 2, result.n)
+    end
+end
+
+local function RestoreSilentAim()
+    if FireRay and OriginalFireRayFire then
+        FireRay.Fire = OriginalFireRayFire
+        OriginalFireRayFire = nil
+    end
 end
 
 local function ApplyAimbot(camera, targetPosition)
@@ -1259,6 +1336,7 @@ local function Cleanup()
     safeStep("StopESPRenderLoop", function()
         RunService:UnbindFromRenderStep("CAT_EMPIRE_ESP")
     end)
+    safeStep("RestoreSilentAim", RestoreSilentAim)
     safeStep("ClearPlayerCache", function() table.clear(PlayerCache) end)
     safeStep("ClearESP", ClearESP)
     safeStep("DestroyESPGui", function() DestroyNamedGui(ESP_GUI_NAME) end)
@@ -1486,6 +1564,15 @@ local function CreateUI()
                 end)
             end
             RefreshCombatTracking()
+        end,
+    })
+
+    aimbotSection:AddToggle("SilentAimEnabled", {
+        Title = "Silent Aim",
+        Description = "Redirects shots to the closest valid target inside the FOV without moving the camera.",
+        Default = false,
+        Callback = function(value)
+            State.Aim.SilentEnabled = value == true
         end,
     })
 
@@ -1935,6 +2022,7 @@ local function Init()
         Cleanup()
     end
 
+    InstallSilentAim()
     CreateUI()
     SetupConnections()
 
