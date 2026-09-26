@@ -6,6 +6,7 @@ local function replaceOnce(old, new, label)
     if not startPos then
         error("[CAT_EMPIRE UI Patch] Missing anchor: " .. tostring(label))
     end
+
     source = string.sub(source, 1, startPos - 1)
         .. new
         .. string.sub(source, endPos + 1)
@@ -51,6 +52,29 @@ local function CreateWeaponPreview(skinId)
     )
 end
 
+local function CreatePreviewPlaceholder(kind)
+    local model = Instance.new("Model")
+    model.Name = "CAT_EMPIRE_" .. tostring(kind or "Preview") .. "_Loading"
+
+    local core = Instance.new("Part")
+    core.Name = "Loading"
+    core.Size = kind == "Skin"
+        and Vector3.new(4.5, 0.7, 0.7)
+        or Vector3.new(2, 4.5, 1)
+    core.Anchored = true
+    core.CanCollide = false
+    core.CanTouch = false
+    core.CanQuery = false
+    core.Material = Enum.Material.SmoothPlastic
+    core.Color = Color3.fromRGB(55, 55, 65)
+    core.Parent = model
+
+    local camera = Instance.new("Camera")
+    camera.FieldOfView = 30
+
+    return model, camera
+end
+
 local function AddRobloxProfileCard(section)
     return UIHelpers.AddRobloxProfileCard(section, LocalPlayer, Players)
 end
@@ -65,7 +89,7 @@ source, replacedPreview = string.gsub(
     1
 )
 if replacedPreview ~= 1 then
-    error("[CAT_EMPIRE UI Patch] Could not replace ESP preview")
+    error("[CAT_EMPIRE UI Patch] Could not replace preview helpers")
 end
 
 replaceOnce(
@@ -117,7 +141,7 @@ replaceOnce(
         Focused = false,
     })]],
 [[    local previewSection = Tabs.Visuals:AddSection("ESP Preview 3D", "solar/cube-bold")
-    local previewModel, previewCamera = CreateESPPreview()
+    local previewModel, previewCamera = CreatePreviewPlaceholder("ESP")
     local espPreviewViewport = previewSection:AddViewport({
         Object = previewModel,
         Camera = previewCamera,
@@ -127,26 +151,69 @@ replaceOnce(
         Focused = true,
     })
 
+    local espPreviewGeneration = 0
+
     RefreshESPPreview = function()
-        if not espPreviewViewport then
-            return
-        end
-        local newModel = CreateESPPreview()
-        if newModel then
-            espPreviewViewport:SetObject(newModel)
-            espPreviewViewport:Focus()
-        end
+        espPreviewGeneration = espPreviewGeneration + 1
+        local generation = espPreviewGeneration
+
+        task.spawn(function()
+            local ok, newModel, newCamera = pcall(CreateESPPreview)
+
+            if generation ~= espPreviewGeneration or UIClosed then
+                if ok and newModel then
+                    pcall(function() newModel:Destroy() end)
+                end
+                return
+            end
+
+            if ok and newModel and espPreviewViewport then
+                espPreviewViewport:SetObject(newModel)
+                if newCamera then
+                    espPreviewViewport:SetCamera(newCamera)
+                end
+                espPreviewViewport:Focus()
+            end
+        end)
     end
 
+    task.defer(RefreshESPPreview)
+
     table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function()
-        task.delay(0.5, function()
+        task.delay(0.35, function()
             if RefreshESPPreview then
                 RefreshESPPreview()
             end
         end)
     end))]],
-    "real avatar ESP preview"
+    "lazy ESP preview"
 )
+
+local gameNamePattern =
+    "    local function resolveGameName%(%)"
+    .. ".-\n    end\n\n    local function resolveGameIcon%(%)"
+    .. ".-\n    end"
+
+local gameInfoReplacement = [[    local function resolveGameName()
+        return "Scoped"
+    end
+
+    local function resolveGameIcon()
+        return "rbxthumb://type=GameIcon&id="
+            .. tostring(game.GameId)
+            .. "&w=150&h=150"
+    end]]
+
+local gameInfoCount
+source, gameInfoCount = string.gsub(
+    source,
+    gameNamePattern,
+    gameInfoReplacement,
+    1
+)
+if gameInfoCount ~= 1 then
+    error("[CAT_EMPIRE UI Patch] Could not make game info nonblocking")
+end
 
 local avatarPattern =
     "    local function resolveAvatarThumbnail%(%)"
@@ -192,16 +259,44 @@ local replacementBlock = [[    local accountSection = Tabs.Misc:AddSection("Sua 
     })
 
     local skinControlSection = Tabs.Skins:AddSection("Skin Changer", "solar/palette-bold")
-    local skinChoices, skinIds = BuildSkinChoices()
-
-    local skinPreviewSection = Tabs.Skins:AddSection("Preview 3D", "solar/cube-bold")
 
     local selectedSkinId = tostring(LocalPlayer:GetAttribute("UseGunSkin") or "")
     if selectedSkinId == "" then
         selectedSkinId = nil
     end
 
-    local weaponPreviewModel, weaponPreviewCamera = CreateWeaponPreview(selectedSkinId)
+    local skinIds = {}
+
+    local weaponParagraph = skinControlSection:AddParagraph({
+        Title = "Arma Atual",
+        Content = tostring(LocalPlayer:GetAttribute("UseGun") or "N/A"),
+    })
+
+    local skinDropdown
+    skinDropdown = skinControlSection:AddDropdown("ScopedGunSkin", {
+        Title = "Gun Skin",
+        Values = {"Carregando..."},
+        Default = "Carregando...",
+        DropdownOutsideWindow = true,
+        Callback = function(value)
+            if value == nil or value == "Carregando..." then
+                return
+            end
+
+            if value == "Default" then
+                selectedSkinId = nil
+                RefreshLocalWeaponSkin(nil)
+            else
+                selectedSkinId = skinIds[value]
+                if selectedSkinId then
+                    RefreshLocalWeaponSkin(selectedSkinId)
+                end
+            end
+        end,
+    })
+
+    local skinPreviewSection = Tabs.Skins:AddSection("Preview 3D", "solar/cube-bold")
+    local weaponPreviewModel, weaponPreviewCamera = CreatePreviewPlaceholder("Skin")
     local skinViewport = skinPreviewSection:AddViewport({
         Object = weaponPreviewModel,
         Camera = weaponPreviewCamera,
@@ -211,42 +306,53 @@ local replacementBlock = [[    local accountSection = Tabs.Misc:AddSection("Sua 
         Focused = true,
     })
 
+    local skinPreviewGeneration = 0
+
     local function refreshSkinPreview()
-        if not skinViewport then
+        skinPreviewGeneration = skinPreviewGeneration + 1
+        local generation = skinPreviewGeneration
+        local skinAtRequest = selectedSkinId
+
+        task.spawn(function()
+            local ok, newModel, newCamera = pcall(
+                CreateWeaponPreview,
+                skinAtRequest
+            )
+
+            if generation ~= skinPreviewGeneration or UIClosed then
+                if ok and newModel then
+                    pcall(function() newModel:Destroy() end)
+                end
+                return
+            end
+
+            if ok and newModel and skinViewport then
+                skinViewport:SetObject(newModel)
+                if newCamera then
+                    skinViewport:SetCamera(newCamera)
+                end
+                skinViewport:Focus()
+            end
+        end)
+    end
+
+    -- Build the catalog only after every tab/section has already been created.
+    task.defer(function()
+        local ok, choices, ids = pcall(BuildSkinChoices)
+
+        if UIClosed or not ok then
             return
         end
 
-        local newModel = CreateWeaponPreview(selectedSkinId)
-        if newModel then
-            skinViewport:SetObject(newModel)
-            skinViewport:Focus()
+        skinIds = ids or {}
+        choices = choices or {"Default"}
+
+        if skinDropdown and skinDropdown.SetValues then
+            skinDropdown:SetValues(choices)
         end
-    end
 
-    skinControlSection:AddParagraph({
-        Title = "Arma Atual",
-        Content = tostring(LocalPlayer:GetAttribute("UseGun") or "N/A"),
-    })
-
-    skinControlSection:AddDropdown("ScopedGunSkin", {
-        Title = "Gun Skin",
-        Values = skinChoices,
-        Default = "Default",
-        DropdownOutsideWindow = true,
-        Callback = function(value)
-            if value == "Default" then
-                selectedSkinId = nil
-                RefreshLocalWeaponSkin(nil)
-            else
-                selectedSkinId = skinIds[value]
-                RefreshLocalWeaponSkin(selectedSkinId)
-            end
-
-            -- Preview is built directly from Assets.ViewModel + SkinLoader,
-            -- so it can update immediately without waiting for Hand.lua.
-            task.defer(refreshSkinPreview)
-        end,
-    })
+        refreshSkinPreview()
+    end)
 
     table.insert(Connections, LocalPlayer:GetAttributeChangedSignal("UseGunSkin"):Connect(function()
         local value = tostring(LocalPlayer:GetAttribute("UseGunSkin") or "")
@@ -255,6 +361,13 @@ local replacementBlock = [[    local accountSection = Tabs.Misc:AddSection("Sua 
     end))
 
     table.insert(Connections, LocalPlayer:GetAttributeChangedSignal("WeaponId"):Connect(function()
+        task.defer(refreshSkinPreview)
+    end))
+
+    table.insert(Connections, LocalPlayer:GetAttributeChangedSignal("UseGun"):Connect(function()
+        if weaponParagraph and weaponParagraph.SetDesc then
+            weaponParagraph:SetDesc(tostring(LocalPlayer:GetAttribute("UseGun") or "N/A"))
+        end
         task.defer(refreshSkinPreview)
     end))
 
@@ -272,12 +385,16 @@ if not string.find(source, 'Skins = Window:AddTab({Title = "Skins"', 1, true) th
     error("[CAT_EMPIRE UI Patch] Skins tab missing")
 end
 
-if not string.find(source, "AddRobloxProfileCard(accountSection)", 1, true) then
-    error("[CAT_EMPIRE UI Patch] Roblox profile card missing")
+if not string.find(source, 'Values = {"Carregando..."}', 1, true) then
+    error("[CAT_EMPIRE UI Patch] Lazy skin catalog missing")
 end
 
-if not string.find(source, "local skinViewport = skinPreviewSection:AddViewport", 1, true) then
-    error("[CAT_EMPIRE UI Patch] Skin viewport missing")
+if not string.find(source, 'CreatePreviewPlaceholder("Skin")', 1, true) then
+    error("[CAT_EMPIRE UI Patch] Lazy skin viewport missing")
+end
+
+if not string.find(source, "task.defer(RefreshESPPreview)", 1, true) then
+    error("[CAT_EMPIRE UI Patch] Lazy ESP preview missing")
 end
 
 return loadstring(source)()
