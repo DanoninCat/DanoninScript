@@ -1,16 +1,31 @@
-"""Rebuild only the Re Adventures payload; preserve other games and Fluent."""
+"""Rebuild Cat Empire payloads while preserving unrelated games and embedded Fluent."""
 import base64
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PATTERN = re.compile(r'(\[138271828389486\]=)\{\{(.*?)\},(\d+)\}')
 
-def payload():
+PAYLOADS = {
+    138271828389486: {
+        "folder": "ReAdventuresV2",
+        "parts": ("Core", "UI", "Entry"),
+        "return": "return Entry(Core,UI)",
+        "default_key": 157,
+    },
+    93466613073564: {
+        "folder": "ScopedV1",
+        "parts": ("Core", "UI", "Entry"),
+        "return": "return Entry(Core,UI)",
+        "default_key": 173,
+    },
+}
+
+def payload(spec):
     parts = []
-    for name in ('Core', 'UI', 'Entry'):
-        parts.append('local ' + name + '=(function()\n' + (ROOT / 'ReAdventuresV2' / (name + '.lua')).read_text() + '\nend)()\n')
-    return (''.join(parts) + 'return Entry(Core,UI)').encode()
+    for name in spec["parts"]:
+        source = (ROOT / spec["folder"] / (name + ".lua")).read_text()
+        parts.append("local " + name + "=(function()\\n" + source + "\\nend)()\\n")
+    return ("".join(parts) + spec["return"]).encode()
 
 def crypt(data, key):
     out = bytearray()
@@ -19,18 +34,33 @@ def crypt(data, key):
         out.append(byte ^ key)
     return bytes(out)
 
-def build():
-    path = ROOT / 'Loader/Loader.lua'
-    source = path.read_text()
-    matches = list(PATTERN.finditer(source))
-    if len(matches) != 1:
-        raise ValueError('Expected exactly one Re Adventures payload')
-    match = matches[0]
-    key = int(match[3])
-    encoded = base64.b64encode(crypt(payload(), key)).decode()
-    chunks = ','.join('"' + encoded[i:i+12000] + '"' for i in range(0, len(encoded), 12000))
-    replacement = match[1] + '{{' + chunks + '},' + str(key) + '}'
-    path.write_text(source[:match.start()] + replacement + source[match.end():])
+def encoded_entry(place_id, spec, key):
+    encoded = base64.b64encode(crypt(payload(spec), key)).decode()
+    chunks = ",".join('"' + encoded[i:i+12000] + '"' for i in range(0, len(encoded), 12000))
+    return "[" + str(place_id) + "]={{" + chunks + "}," + str(key) + "}"
 
-if __name__ == '__main__':
+def replace_or_insert(source, place_id, spec):
+    pattern = re.compile(r'(\\[' + re.escape(str(place_id)) + r'\\]=)\\{\\{(.*?)\\},(\\d+)\\}')
+    match = pattern.search(source)
+
+    if match:
+        key = int(match[3])
+        replacement = encoded_entry(place_id, spec, key)
+        return source[:match.start()] + replacement + source[match.end():]
+
+    key = spec["default_key"]
+    entry = encoded_entry(place_id, spec, key)
+    marker = "};a[94823097601547]=a[138271828389486];local b="
+    if marker not in source:
+        raise ValueError("Could not find loader payload-table insertion point")
+    return source.replace(marker, "," + entry + marker, 1)
+
+def build():
+    path = ROOT / "Loader/Loader.lua"
+    source = path.read_text()
+    for place_id, spec in PAYLOADS.items():
+        source = replace_or_insert(source, place_id, spec)
+    path.write_text(source)
+
+if __name__ == "__main__":
     build()
