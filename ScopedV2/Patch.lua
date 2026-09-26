@@ -42,8 +42,13 @@ local previewReplacement = [[local function CreateESPPreview()
     return UIHelpers.CreateESPPreview(LocalPlayer, ESP_COLORS)
 end
 
-local function CreateWeaponPreview()
-    return UIHelpers.CreateWeaponPreview(LocalPlayer, ReplicatedStorage)
+local function CreateWeaponPreview(skinId)
+    return UIHelpers.CreateWeaponPreview(
+        LocalPlayer,
+        ReplicatedStorage,
+        skinId,
+        0.001
+    )
 end
 
 local function AddRobloxProfileCard(section)
@@ -190,7 +195,13 @@ local replacementBlock = [[    local accountSection = Tabs.Misc:AddSection("Sua 
     local skinChoices, skinIds = BuildSkinChoices()
 
     local skinPreviewSection = Tabs.Skins:AddSection("Preview 3D", "solar/cube-bold")
-    local weaponPreviewModel, weaponPreviewCamera = CreateWeaponPreview()
+
+    local selectedSkinId = tostring(LocalPlayer:GetAttribute("UseGunSkin") or "")
+    if selectedSkinId == "" then
+        selectedSkinId = nil
+    end
+
+    local weaponPreviewModel, weaponPreviewCamera = CreateWeaponPreview(selectedSkinId)
     local skinViewport = skinPreviewSection:AddViewport({
         Object = weaponPreviewModel,
         Camera = weaponPreviewCamera,
@@ -205,7 +216,7 @@ local replacementBlock = [[    local accountSection = Tabs.Misc:AddSection("Sua 
             return
         end
 
-        local newModel = CreateWeaponPreview()
+        local newModel = CreateWeaponPreview(selectedSkinId)
         if newModel then
             skinViewport:SetObject(newModel)
             skinViewport:Focus()
@@ -224,22 +235,27 @@ local replacementBlock = [[    local accountSection = Tabs.Misc:AddSection("Sua 
         DropdownOutsideWindow = true,
         Callback = function(value)
             if value == "Default" then
+                selectedSkinId = nil
                 RefreshLocalWeaponSkin(nil)
             else
-                RefreshLocalWeaponSkin(skinIds[value])
+                selectedSkinId = skinIds[value]
+                RefreshLocalWeaponSkin(selectedSkinId)
             end
 
-            task.delay(0.2, refreshSkinPreview)
-            task.delay(0.55, refreshSkinPreview)
+            -- Preview is built directly from Assets.ViewModel + SkinLoader,
+            -- so it can update immediately without waiting for Hand.lua.
+            task.defer(refreshSkinPreview)
         end,
     })
 
     table.insert(Connections, LocalPlayer:GetAttributeChangedSignal("UseGunSkin"):Connect(function()
-        task.delay(0.2, refreshSkinPreview)
+        local value = tostring(LocalPlayer:GetAttribute("UseGunSkin") or "")
+        selectedSkinId = value ~= "" and value or nil
+        task.defer(refreshSkinPreview)
     end))
 
     table.insert(Connections, LocalPlayer:GetAttributeChangedSignal("WeaponId"):Connect(function()
-        task.delay(0.25, refreshSkinPreview)
+        task.defer(refreshSkinPreview)
     end))
 
 ]]
