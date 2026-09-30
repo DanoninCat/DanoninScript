@@ -915,9 +915,48 @@ local function selectedCapsuleLabels()
     return out
 end
 
+local function executorGlobalFunction(name)
+    local direct = rawget(Env, name)
+        or rawget(_G, name)
+
+    if type(direct) == "function" then
+        return direct
+    end
+
+    -- Real exposes some executor APIs as true globals without mirroring
+    -- every one of them into getgenv()/_G.
+    if name == "getconnections" then
+        local ok, value = pcall(function()
+            return getconnections
+        end)
+        if ok and type(value) == "function" then
+            return value
+        end
+    elseif name == "getgc" then
+        local ok, value = pcall(function()
+            return getgc
+        end)
+        if ok and type(value) == "function" then
+            return value
+        end
+    end
+
+    return nil
+end
+
 local function executorDebugMethod(name)
     local debugTable = rawget(Env, "debug")
         or rawget(_G, "debug")
+
+    if type(debugTable) ~= "table" then
+        local ok, value = pcall(function()
+            return debug
+        end)
+
+        if ok and type(value) == "table" then
+            debugTable = value
+        end
+    end
 
     if type(debugTable) == "table"
         and type(debugTable[name]) == "function"
@@ -962,6 +1001,53 @@ local function functionHasConstant(fn, wanted)
     return false
 end
 
+local function controllerFromHandler(handler, getUpvalues)
+    if type(handler) ~= "function"
+        or type(getUpvalues) ~= "function"
+    then
+        return nil
+    end
+
+    local ok, handlerUpvalues = pcall(function()
+        return getUpvalues(handler)
+    end)
+
+    if not ok or type(handlerUpvalues) ~= "table" then
+        return nil
+    end
+
+    for _, controller in pairs(handlerUpvalues) do
+        if type(controller) == "table" then
+            local hasSession =
+                type(rawget(controller, "session")) == "table"
+            local looksLikeItemsController =
+                rawget(controller, "ItemsGrid") ~= nil
+                or rawget(controller, "virtual_item_frames") ~= nil
+                or rawget(controller, "virtual_grid_frames") ~= nil
+                or rawget(controller, "item_group") ~= nil
+
+            if hasSession and looksLikeItemsController then
+                return controller
+            end
+        end
+    end
+
+    return nil
+end
+
+local function cacheNativeStarUse(handler, controller)
+    if type(handler) == "function"
+        and type(controller) == "table"
+    then
+        NativeStarHandler = handler
+        NativeStarController = controller
+
+        return NativeStarHandler, NativeStarController
+    end
+
+    return nil, nil
+end
+
 local function resolveNativeStarUse(force)
     if not force
         and type(NativeStarHandler) == "function"
@@ -973,107 +1059,138 @@ local function resolveNativeStarUse(force)
     NativeStarHandler = nil
     NativeStarController = nil
 
-    local getConnections = rawget(Env, "getconnections")
-        or rawget(_G, "getconnections")
+    local getConnections =
+        executorGlobalFunction("getconnections")
     local getUpvalues =
         executorDebugMethod("getupvalues")
 
-    if type(getConnections) ~= "function"
-        or type(getUpvalues) ~= "function"
-        or not PlayerGui
-    then
+    if type(getUpvalues) ~= "function" then
         return nil, nil
     end
 
-    local itemsGui = PlayerGui:FindFirstChild("items")
-    local grid = itemsGui and itemsGui:FindFirstChild("grid")
-    local itemOptions = grid
-        and grid:FindFirstChild("ItemOptions")
-    local main = itemOptions
-        and itemOptions:FindFirstChild("Main")
-    local options = main
-        and main:FindFirstChild("Options")
-    local scrolling = options
-        and options:FindFirstChild("ScrollingFrame")
-    local use10Button = scrolling
-        and scrolling:FindFirstChild("Use10")
-
-    if not use10Button
-        or not use10Button:IsA("GuiButton")
-    then
-        return nil, nil
-    end
-
-    local okConnections, connections = pcall(function()
-        return getConnections(
-            use10Button.MouseButton1Click
+    local activePlayerGui = PlayerGui
+        or (
+            LocalPlayer
+            and LocalPlayer:FindFirstChildOfClass("PlayerGui")
         )
-    end)
 
-    if not okConnections
-        or type(connections) ~= "table"
+    -- Primary path: this is the exact path confirmed by the runtime
+    -- diagnostics. Connection #2 contains one function upvalue: the
+    -- inventory item-use handler. Its own upvalue is the items controller.
+    if type(getConnections) == "function"
+        and activePlayerGui
     then
-        return nil, nil
-    end
+        local itemsGui =
+            activePlayerGui:FindFirstChild("items")
+        local grid =
+            itemsGui and itemsGui:FindFirstChild("grid")
+        local itemOptions =
+            grid and grid:FindFirstChild("ItemOptions")
+        local main =
+            itemOptions and itemOptions:FindFirstChild("Main")
+        local options =
+            main and main:FindFirstChild("Options")
+        local scrolling =
+            options and options:FindFirstChild("ScrollingFrame")
+        local use10Button =
+            scrolling and scrolling:FindFirstChild("Use10")
 
-    for _, connection in ipairs(connections) do
-        local outer = connection.Function
+        if use10Button and use10Button:IsA("GuiButton") then
+            local okConnections, connections =
+                pcall(function()
+                    return getConnections(
+                        use10Button.MouseButton1Click
+                    )
+                end)
 
-        if type(outer) == "function" then
-            local okOuter, outerUpvalues = pcall(function()
-                return getUpvalues(outer)
-            end)
-
-            if okOuter
-                and type(outerUpvalues) == "table"
+            if okConnections
+                and type(connections) == "table"
             then
-                for _, candidate in pairs(outerUpvalues) do
-                    if type(candidate) == "function"
-                        and functionHasConstant(
-                            candidate,
-                            "selected_item_uuid_or_id"
-                        )
-                    then
-                        local okHandler, handlerUpvalues =
+                -- Prefer connection #2 because the runtime test proved
+                -- that #1 is only the generic button/SFX handler.
+                local ordered = {}
+
+                if connections[2] then
+                    ordered[#ordered + 1] =
+                        connections[2]
+                end
+
+                for index, connection in ipairs(connections) do
+                    if index ~= 2 then
+                        ordered[#ordered + 1] =
+                            connection
+                    end
+                end
+
+                for _, connection in ipairs(ordered) do
+                    local outer = connection.Function
+
+                    if type(outer) == "function" then
+                        local okOuter, outerUpvalues =
                             pcall(function()
-                                return getUpvalues(candidate)
+                                return getUpvalues(outer)
                             end)
 
-                        if okHandler
-                            and type(handlerUpvalues) == "table"
+                        if okOuter
+                            and type(outerUpvalues) == "table"
                         then
-                            for _, controller in pairs(handlerUpvalues) do
-                                if type(controller) == "table"
-                                    and type(
-                                        rawget(
-                                            controller,
-                                            "session"
+                            for _, handler in pairs(outerUpvalues) do
+                                if type(handler) == "function" then
+                                    local controller =
+                                        controllerFromHandler(
+                                            handler,
+                                            getUpvalues
                                         )
-                                    ) == "table"
-                                    and (
-                                        rawget(
-                                            controller,
-                                            "ItemsGrid"
-                                        ) ~= nil
-                                        or rawget(
-                                            controller,
-                                            "virtual_item_frames"
-                                        ) ~= nil
-                                        or rawget(
-                                            controller,
-                                            "item_group"
-                                        ) ~= nil
-                                    )
-                                then
-                                    NativeStarHandler = candidate
-                                    NativeStarController = controller
 
-                                    return
-                                        NativeStarHandler,
-                                        NativeStarController
+                                    if controller then
+                                        return cacheNativeStarUse(
+                                            handler,
+                                            controller
+                                        )
+                                    end
                                 end
                             end
                         end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Fallback: locate the same handler from the already-loaded Lua
+    -- objects. This lets Auto Stars work even if the Items window was
+    -- never opened by the user in the current session.
+    local getGc =
+        executorGlobalFunction("getgc")
+
+    if type(getGc) == "function" then
+        local okGc, objects = pcall(function()
+            return getGc(true)
+        end)
+
+        if okGc and type(objects) == "table" then
+            for _, object in ipairs(objects) do
+                if type(object) == "function"
+                    and functionHasConstant(
+                        object,
+                        "selected_item_uuid_or_id"
+                    )
+                    and functionHasConstant(
+                        object,
+                        "usage_from_inventory"
+                    )
+                then
+                    local controller =
+                        controllerFromHandler(
+                            object,
+                            getUpvalues
+                        )
+
+                    if controller then
+                        return cacheNativeStarUse(
+                            object,
+                            controller
+                        )
                     end
                 end
             end
@@ -1118,10 +1235,8 @@ local function nativeUseCapsule(itemId, useTen)
         handler(useTen == true)
     end)
 
-    -- The native handler creates task.spawn immediately and captures
-    -- the item id + use10 flag in that closure. Keep our shared RPC
-    -- gate briefly so Traits cannot start a blocking invoke at the
-    -- same instant as the native capsule request.
+    -- The native handler immediately creates task.spawn and captures the
+    -- selected item id + use10 boolean in that closure.
     task.wait(useTen and 0.22 or 0.12)
 
     RpcBusy = false
