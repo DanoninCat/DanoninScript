@@ -57,7 +57,6 @@ local State = {
     StarBatchSize = 10,
     StarsOpened = 0,
     SkipStarAnimations = true,
-    StarRequestGap = 0.075,
 
     AntiAFK = false,
     AutoRejoin = false,
@@ -122,36 +121,94 @@ local function getEndpointFolder(side)
     return endpoints and endpoints:FindFirstChild(side)
 end
 
-local function invokeEndpoint(name, ...)
+local RpcBusy = false
+
+local function rawInvokeEndpoint(name, ...)
     local args = table.pack(...)
+
+    -- Match the game's own client path first. The native Trait UI uses
+    -- EndpointsClient.invoke_server inside task.spawn.
+    if EndpointsClient
+        and type(EndpointsClient.invoke_server) == "function"
+    then
+        local ok, a, b, c = pcall(
+            EndpointsClient.invoke_server,
+            name,
+            table.unpack(args, 1, args.n)
+        )
+
+        if not ok then
+            return false, nil, tostring(a)
+        end
+
+        return true, a, b, c
+    end
+
     local folder = getEndpointFolder("client_to_server")
     local endpoint = folder and folder:FindFirstChild(name)
 
     if endpoint then
         local ok, packed = pcall(function()
             if endpoint:IsA("RemoteFunction") then
-                return table.pack(endpoint:InvokeServer(table.unpack(args, 1, args.n)))
+                return table.pack(
+                    endpoint:InvokeServer(
+                        table.unpack(args, 1, args.n)
+                    )
+                )
             elseif endpoint:IsA("RemoteEvent") then
-                endpoint:FireServer(table.unpack(args, 1, args.n))
+                endpoint:FireServer(
+                    table.unpack(args, 1, args.n)
+                )
                 return table.pack(true)
             end
+
             error("unsupported endpoint")
         end)
+
         if not ok then
             return false, nil, tostring(packed)
         end
-        return true, table.unpack(packed, 1, packed.n)
-    end
 
-    if EndpointsClient and type(EndpointsClient.invoke_server) == "function" then
-        local ok, a, b, c = pcall(EndpointsClient.invoke_server, name, table.unpack(args, 1, args.n))
-        if not ok then
-            return false, nil, tostring(a)
-        end
-        return true, a, b, c
+        return true, table.unpack(
+            packed,
+            1,
+            packed.n
+        )
     end
 
     return false, nil, "unavailable"
+end
+
+local function invokeEndpoint(name, ...)
+    local args = table.pack(...)
+
+    -- RemoteFunctions are intentionally serialized. Running use_item and
+    -- request_token_trait_reroll concurrently caused executor/client stalls.
+    while RpcBusy and State.Running do
+        task.wait(0.025)
+    end
+
+    if not State.Running then
+        return false, nil, "stopped"
+    end
+
+    RpcBusy = true
+
+    local result = table.pack(
+        rawInvokeEndpoint(
+            name,
+            table.unpack(args, 1, args.n)
+        )
+    )
+
+    RpcBusy = false
+    task.wait()
+
+    return table.unpack(
+        result,
+        1,
+        result.n
+    )
 end
 
 local function ownedFromTable(value)
@@ -977,7 +1034,17 @@ local function processStarOnce(manual)
         return
     end
 
-    local batchSize = manual
+    State.CapsuleCursor =
+        (State.CapsuleCursor % #selected) + 1
+
+    local label = selected[State.CapsuleCursor]
+    local itemId = CapsuleMap[label]
+
+    if State.SkipStarAnimations then
+        installStarVisualHooks()
+    end
+
+    local amount = manual
         and 1
         or math.max(
             1,
@@ -986,74 +1053,65 @@ local function processStarOnce(manual)
             )
         )
 
-    local openedThisBatch = 0
-    local lastLabel = nil
+    local ok, result, err
 
-    if State.SkipStarAnimations then
-        installStarVisualHooks()
-    end
-
-    for index = 1, batchSize do
-        if not State.Running
-            or (not manual and not State.AutoStars)
-        then
-            break
-        end
-
-        State.CapsuleCursor =
-            (State.CapsuleCursor % #selected) + 1
-
-        local label = selected[State.CapsuleCursor]
-        local itemId = CapsuleMap[label]
-        lastLabel = label
-
-        local ok, result =
+    if amount <= 1 then
+        ok, result, err =
             invokeEndpoint("use_item", itemId)
-
-        if not ok or result == false then
-            if openedThisBatch == 0 then
-                setStarsStatus(
-                    label .. ": unavailable"
-                )
-            end
-            break
-        end
-
-        openedThisBatch = openedThisBatch + 1
-        State.StarsOpened = State.StarsOpened + 1
-
-        -- Keep the batch responsive without flooding the client/server thread.
-        -- RemoteFunction calls are still serialized and a small cooperative
-        -- yield prevents large batches from creating frame-time spikes.
-        if index < batchSize then
-            task.wait(State.StarRequestGap)
-        end
-
-        if index % 5 == 0 then
-            task.wait()
-        end
+    else
+        -- Real bulk attempt: one server invocation carrying the requested
+        -- amount. Do not emulate bulk with X InvokeServer calls; that was the
+        -- source of both lag and "one by one" behavior.
+        ok, result, err =
+            invokeEndpoint(
+                "use_item",
+                itemId,
+                {amount = amount}
+            )
     end
 
-    if manual then
+    if not ok then
         setStarsStatus(
-            openedThisBatch > 0
-                and ("Opened: " .. tostring(lastLabel))
-                or "Capsule unavailable"
+            "Capsule service unavailable"
         )
+        task.wait(0.35)
         return
     end
 
+    if result == false then
+        local reason = tostring(err or "rejected")
+
+        if amount > 1 then
+            setStarsStatus(
+                "Bulk x"
+                .. tostring(amount)
+                .. " rejected: "
+                .. reason
+            )
+        else
+            setStarsStatus(label .. ": " .. reason)
+        end
+
+        task.wait(0.35)
+        return
+    end
+
+    State.StarsOpened =
+        State.StarsOpened + amount
+
     setStarsStatus(
-        string.format(
-            "Batch: %d/%d  •  Total: %d%s",
-            openedThisBatch,
-            batchSize,
-            State.StarsOpened,
-            lastLabel and ("  •  " .. lastLabel) or ""
-        )
+        amount > 1
+            and string.format(
+                "Bulk x%d sent  •  %s",
+                amount,
+                label
+            )
+            or ("Opened: " .. label)
     )
 
-    task.wait(math.max(0.05, State.StarDelay))
+    task.wait(
+        math.max(0.05, State.StarDelay)
+    )
 end
 
 local function connectRuntime(signal, callback)
@@ -1407,7 +1465,7 @@ Tabs.Traits:AddButton({
 
 StarsStatus = Tabs.Stars:AddParagraph({
     Title = "Stars",
-    Content = "Select capsules and how many to open per batch",
+    Content = "Select capsules and how many to request in one opening"
 })
 
 Tabs.Stars:AddDropdown("RE790_Capsules", {
@@ -1422,7 +1480,7 @@ Tabs.Stars:AddDropdown("RE790_Capsules", {
 })
 
 Tabs.Stars:AddInput("RE790_StarBatchSize", {
-    Title = "Open Per Batch",
+    Title = "Open At Once",
     Default = "10",
     Placeholder = "10",
     Numeric = true,
@@ -1436,7 +1494,7 @@ Tabs.Stars:AddInput("RE790_StarBatchSize", {
 
 if type(Tabs.Stars.AddSlider) == "function" then
     Tabs.Stars:AddSlider("RE790_StarDelay", {
-        Title = "Time Between Capsules",
+        Title = "Time Between Openings",
         Default = 0.65,
         Min = 0.05,
         Max = 5,
@@ -1482,7 +1540,7 @@ AutoStarsToggle = Tabs.Stars:AddToggle("RE790_AutoStars", {
             State.CapsuleCursor = 0
             setStarsStatus(
                 string.format(
-                    "Batch size: %d",
+                    "Open at once: %d",
                     State.StarBatchSize
                 )
             )
