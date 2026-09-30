@@ -1200,6 +1200,175 @@ local function resolveNativeStarUse(force)
     return nil, nil
 end
 
+local function readNativeItemCount(controller, itemId)
+    if type(controller) ~= "table" then
+        return nil
+    end
+
+    local function tryMethod(holder, name)
+        if type(holder) ~= "table" then
+            return nil
+        end
+
+        local fn = rawget(holder, name)
+
+        if type(fn) ~= "function" then
+            return nil
+        end
+
+        local ok, value = pcall(function()
+            return fn(holder, itemId)
+        end)
+
+        if ok and tonumber(value) then
+            return tonumber(value)
+        end
+
+        ok, value = pcall(function()
+            return fn(itemId)
+        end)
+
+        if ok and tonumber(value) then
+            return tonumber(value)
+        end
+
+        return nil
+    end
+
+    -- The native item handler references get_number_of_owned_item.
+    local count =
+        tryMethod(
+            controller,
+            "get_number_of_owned_item"
+        )
+
+    if count ~= nil then
+        return count
+    end
+
+    local session = rawget(controller, "session")
+    local inventory =
+        type(session) == "table"
+        and rawget(session, "inventory")
+        or nil
+
+    count =
+        tryMethod(
+            inventory,
+            "get_number_of_owned_item"
+        )
+
+    if count ~= nil then
+        return count
+    end
+
+    -- Last fallback for profile layouts where stackable items live
+    -- directly in inventory_profile_data / items tables.
+    local profile =
+        type(inventory) == "table"
+        and rawget(inventory, "inventory_profile_data")
+        or nil
+
+    if type(profile) == "table" then
+        local direct = rawget(profile, itemId)
+
+        if tonumber(direct) then
+            return tonumber(direct)
+        end
+
+        if type(direct) == "table" then
+            local value =
+                rawget(direct, "amount")
+                or rawget(direct, "count")
+                or rawget(direct, "quantity")
+
+            if tonumber(value) then
+                return tonumber(value)
+            end
+        end
+
+        for _, key in ipairs({
+            "items",
+            "owned_items",
+            "normal_items",
+        }) do
+            local items = rawget(profile, key)
+
+            if type(items) == "table" then
+                local entry = rawget(items, itemId)
+
+                if tonumber(entry) then
+                    return tonumber(entry)
+                end
+
+                if type(entry) == "table" then
+                    local value =
+                        rawget(entry, "amount")
+                        or rawget(entry, "count")
+                        or rawget(entry, "quantity")
+
+                    if tonumber(value) then
+                        return tonumber(value)
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function waitNativeItemConsumption(
+    controller,
+    itemId,
+    before,
+    expected,
+    timeout
+)
+    if before == nil then
+        task.wait(
+            expected >= 10
+                and math.max(0.85, State.StarDelay)
+                or math.max(0.22, State.StarDelay)
+        )
+        return true, nil
+    end
+
+    local deadline =
+        os.clock() + (timeout or 4)
+
+    repeat
+        if not State.Running then
+            return false, before
+        end
+
+        local current =
+            readNativeItemCount(
+                controller,
+                itemId
+            )
+
+        if current ~= nil
+            and current <= before - expected
+        then
+            task.wait(0.08)
+            return true, current
+        end
+
+        task.wait(0.06)
+    until os.clock() >= deadline
+
+    local current =
+        readNativeItemCount(
+            controller,
+            itemId
+        )
+
+    return current ~= nil
+        and current < before,
+        current
+end
+
 local function nativeUseCapsule(itemId, useTen)
     local handler, controller =
         resolveNativeStarUse(false)
@@ -1225,6 +1394,13 @@ local function nativeUseCapsule(itemId, useTen)
         return false, "stopped"
     end
 
+    local expected = useTen and 10 or 1
+    local before =
+        readNativeItemCount(
+            controller,
+            tostring(itemId)
+        )
+
     controller.selected_item_uuid_or_id =
         tostring(itemId)
     controller.selected_item_is_unique = false
@@ -1235,19 +1411,37 @@ local function nativeUseCapsule(itemId, useTen)
         handler(useTen == true)
     end)
 
-    -- The native handler immediately creates task.spawn and captures the
-    -- selected item id + use10 boolean in that closure.
-    task.wait(useTen and 0.22 or 0.12)
-
-    RpcBusy = false
-
     if not ok then
+        RpcBusy = false
         NativeStarHandler = nil
         NativeStarController = nil
         return false, tostring(err)
     end
 
-    return true
+    -- handler() only schedules the real use_item call. Do not start
+    -- the next batch until inventory state confirms that this batch
+    -- was consumed (or a conservative fallback delay elapsed).
+    local consumed, after =
+        waitNativeItemConsumption(
+            controller,
+            tostring(itemId),
+            before,
+            expected,
+            useTen and 4 or 2
+        )
+
+    RpcBusy = false
+
+    if before ~= nil and not consumed then
+        return false,
+            string.format(
+                "batch not confirmed (%s -> %s)",
+                tostring(before),
+                tostring(after)
+            )
+    end
+
+    return true, nil, expected
 end
 
 local function restoreStarVisualConnections()
@@ -1416,7 +1610,11 @@ local function processStarOnce(manual)
         -- is intentionally split into the game's real Use10 chunks,
         -- never ten individual remote calls.
         if remaining > 0 then
-            task.wait(useTen and 0.08 or 0.04)
+            task.wait(
+                useTen
+                    and math.max(0.12, State.StarDelay)
+                    or math.max(0.08, State.StarDelay)
+            )
         end
     end
 
