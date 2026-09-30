@@ -81,6 +81,8 @@ local StarVisualHooksInstalled = false
 local UnitRefreshQueued = false
 local LastUnitUiRefresh = 0
 local UNIT_UI_REFRESH_INTERVAL = 0.75
+local NativeStarHandler
+local NativeStarController
 
 local function setParagraph(paragraph, title, content)
     if not paragraph then
@@ -913,6 +915,226 @@ local function selectedCapsuleLabels()
     return out
 end
 
+local function executorDebugMethod(name)
+    local debugTable = rawget(Env, "debug")
+        or rawget(_G, "debug")
+
+    if type(debugTable) == "table"
+        and type(debugTable[name]) == "function"
+    then
+        return debugTable[name]
+    end
+
+    local direct = rawget(Env, name)
+        or rawget(_G, name)
+
+    return type(direct) == "function"
+        and direct
+        or nil
+end
+
+local function functionHasConstant(fn, wanted)
+    if type(fn) ~= "function" then
+        return false
+    end
+
+    local getConstants =
+        executorDebugMethod("getconstants")
+
+    if type(getConstants) ~= "function" then
+        return false
+    end
+
+    local ok, constants = pcall(function()
+        return getConstants(fn)
+    end)
+
+    if not ok or type(constants) ~= "table" then
+        return false
+    end
+
+    for _, constant in pairs(constants) do
+        if constant == wanted then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function resolveNativeStarUse(force)
+    if not force
+        and type(NativeStarHandler) == "function"
+        and type(NativeStarController) == "table"
+    then
+        return NativeStarHandler, NativeStarController
+    end
+
+    NativeStarHandler = nil
+    NativeStarController = nil
+
+    local getConnections = rawget(Env, "getconnections")
+        or rawget(_G, "getconnections")
+    local getUpvalues =
+        executorDebugMethod("getupvalues")
+
+    if type(getConnections) ~= "function"
+        or type(getUpvalues) ~= "function"
+        or not PlayerGui
+    then
+        return nil, nil
+    end
+
+    local itemsGui = PlayerGui:FindFirstChild("items")
+    local grid = itemsGui and itemsGui:FindFirstChild("grid")
+    local itemOptions = grid
+        and grid:FindFirstChild("ItemOptions")
+    local main = itemOptions
+        and itemOptions:FindFirstChild("Main")
+    local options = main
+        and main:FindFirstChild("Options")
+    local scrolling = options
+        and options:FindFirstChild("ScrollingFrame")
+    local use10Button = scrolling
+        and scrolling:FindFirstChild("Use10")
+
+    if not use10Button
+        or not use10Button:IsA("GuiButton")
+    then
+        return nil, nil
+    end
+
+    local okConnections, connections = pcall(function()
+        return getConnections(
+            use10Button.MouseButton1Click
+        )
+    end)
+
+    if not okConnections
+        or type(connections) ~= "table"
+    then
+        return nil, nil
+    end
+
+    for _, connection in ipairs(connections) do
+        local outer = connection.Function
+
+        if type(outer) == "function" then
+            local okOuter, outerUpvalues = pcall(function()
+                return getUpvalues(outer)
+            end)
+
+            if okOuter
+                and type(outerUpvalues) == "table"
+            then
+                for _, candidate in pairs(outerUpvalues) do
+                    if type(candidate) == "function"
+                        and functionHasConstant(
+                            candidate,
+                            "selected_item_uuid_or_id"
+                        )
+                    then
+                        local okHandler, handlerUpvalues =
+                            pcall(function()
+                                return getUpvalues(candidate)
+                            end)
+
+                        if okHandler
+                            and type(handlerUpvalues) == "table"
+                        then
+                            for _, controller in pairs(handlerUpvalues) do
+                                if type(controller) == "table"
+                                    and type(
+                                        rawget(
+                                            controller,
+                                            "session"
+                                        )
+                                    ) == "table"
+                                    and (
+                                        rawget(
+                                            controller,
+                                            "ItemsGrid"
+                                        ) ~= nil
+                                        or rawget(
+                                            controller,
+                                            "virtual_item_frames"
+                                        ) ~= nil
+                                        or rawget(
+                                            controller,
+                                            "item_group"
+                                        ) ~= nil
+                                    )
+                                then
+                                    NativeStarHandler = candidate
+                                    NativeStarController = controller
+
+                                    return
+                                        NativeStarHandler,
+                                        NativeStarController
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil, nil
+end
+
+local function nativeUseCapsule(itemId, useTen)
+    local handler, controller =
+        resolveNativeStarUse(false)
+
+    if type(handler) ~= "function"
+        or type(controller) ~= "table"
+    then
+        handler, controller =
+            resolveNativeStarUse(true)
+    end
+
+    if type(handler) ~= "function"
+        or type(controller) ~= "table"
+    then
+        return false, "native Use10 handler unavailable"
+    end
+
+    while RpcBusy and State.Running do
+        task.wait(0.025)
+    end
+
+    if not State.Running then
+        return false, "stopped"
+    end
+
+    controller.selected_item_uuid_or_id =
+        tostring(itemId)
+    controller.selected_item_is_unique = false
+
+    RpcBusy = true
+
+    local ok, err = pcall(function()
+        handler(useTen == true)
+    end)
+
+    -- The native handler creates task.spawn immediately and captures
+    -- the item id + use10 flag in that closure. Keep our shared RPC
+    -- gate briefly so Traits cannot start a blocking invoke at the
+    -- same instant as the native capsule request.
+    task.wait(useTen and 0.22 or 0.12)
+
+    RpcBusy = false
+
+    if not ok then
+        NativeStarHandler = nil
+        NativeStarController = nil
+        return false, tostring(err)
+    end
+
+    return true
+end
+
 local function restoreStarVisualConnections()
     for _, connection in ipairs(DisabledStarConnections) do
         pcall(function()
@@ -1049,65 +1271,54 @@ local function processStarOnce(manual)
         or math.max(
             1,
             math.floor(
-                tonumber(State.StarBatchSize) or 1
+                tonumber(State.StarBatchSize) or 10
             )
         )
 
-    local ok, result, err
+    local remaining = amount
+    local opened = 0
 
-    if amount <= 1 then
-        ok, result, err =
-            invokeEndpoint("use_item", itemId)
-    else
-        -- Real bulk attempt: one server invocation carrying the requested
-        -- amount. Do not emulate bulk with X InvokeServer calls; that was the
-        -- source of both lag and "one by one" behavior.
-        ok, result, err =
-            invokeEndpoint(
-                "use_item",
-                itemId,
-                {amount = amount}
-            )
-    end
+    while remaining > 0 and State.Running do
+        local useTen = remaining >= 10
+        local step = useTen and 10 or 1
 
-    if not ok then
-        setStarsStatus(
-            "Capsule service unavailable"
-        )
-        task.wait(0.35)
-        return
-    end
+        local ok, err =
+            nativeUseCapsule(itemId, useTen)
 
-    if result == false then
-        local reason = tostring(err or "rejected")
-
-        if amount > 1 then
+        if not ok then
             setStarsStatus(
-                "Bulk x"
-                .. tostring(amount)
-                .. " rejected: "
-                .. reason
+                "Native capsule use failed: "
+                .. tostring(err or "unknown")
             )
-        else
-            setStarsStatus(label .. ": " .. reason)
+            task.wait(0.35)
+            return
         end
 
-        task.wait(0.35)
-        return
+        opened = opened + step
+        remaining = remaining - step
+
+        -- Yield between native batches. A requested amount above 10
+        -- is intentionally split into the game's real Use10 chunks,
+        -- never ten individual remote calls.
+        if remaining > 0 then
+            task.wait(useTen and 0.08 or 0.04)
+        end
     end
 
     State.StarsOpened =
-        State.StarsOpened + amount
+        State.StarsOpened + opened
 
-    setStarsStatus(
-        amount > 1
-            and string.format(
-                "Bulk x%d sent  •  %s",
-                amount,
+    if manual then
+        setStarsStatus("Opened: " .. label)
+    else
+        setStarsStatus(
+            string.format(
+                "Native x%d  •  %s",
+                opened,
                 label
             )
-            or ("Opened: " .. label)
-    )
+        )
+    end
 
     task.wait(
         math.max(0.05, State.StarDelay)
@@ -1465,7 +1676,7 @@ Tabs.Traits:AddButton({
 
 StarsStatus = Tabs.Stars:AddParagraph({
     Title = "Stars",
-    Content = "Select capsules and how many to request in one opening"
+    Content = "Uses the game's native Use 10 flow; larger amounts run in native x10 chunks"
 })
 
 Tabs.Stars:AddDropdown("RE790_Capsules", {
