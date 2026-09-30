@@ -54,7 +54,7 @@ local State = {
     CapsuleCursor = 0,
     StarBusy = false,
     StarDelay = 0.65,
-    StarAmount = 10,
+    StarBatchSize = 10,
     StarsOpened = 0,
     SkipStarAnimations = true,
 
@@ -912,76 +912,78 @@ local function processStarOnce(manual)
         return
     end
 
-    if not manual
-        and State.StarAmount > 0
-        and State.StarsOpened >= State.StarAmount
-    then
-        stopAutoStars(
-            string.format(
-                "Finished: %d capsules opened",
-                State.StarsOpened
+    local batchSize = manual
+        and 1
+        or math.max(
+            1,
+            math.floor(
+                tonumber(State.StarBatchSize) or 1
             )
         )
-        return
-    end
 
-    State.CapsuleCursor =
-        (State.CapsuleCursor % #selected) + 1
-
-    local label = selected[State.CapsuleCursor]
-    local itemId = CapsuleMap[label]
+    local openedThisBatch = 0
+    local lastLabel = nil
 
     if State.SkipStarAnimations then
         setSkipStarAnimations(true)
     end
 
-    local ok, result, err =
-        invokeEndpoint("use_item", itemId)
+    for index = 1, batchSize do
+        if not State.Running
+            or (not manual and not State.AutoStars)
+        then
+            break
+        end
 
-    if not ok then
-        setStarsStatus("Capsule opening is temporarily unavailable")
-        task.wait(0.6)
-        return
-    end
+        State.CapsuleCursor =
+            (State.CapsuleCursor % #selected) + 1
 
-    if result == false then
-        setStarsStatus(label .. ": unavailable")
-        task.wait(0.5)
-        return
-    end
+        local label = selected[State.CapsuleCursor]
+        local itemId = CapsuleMap[label]
+        lastLabel = label
 
-    task.defer(hideStarAnimationFallback)
+        local ok, result =
+            invokeEndpoint("use_item", itemId)
 
-    if manual then
-        setStarsStatus("Opened: " .. label)
-    else
+        if not ok or result == false then
+            if openedThisBatch == 0 then
+                setStarsStatus(
+                    label .. ": unavailable"
+                )
+            end
+            break
+        end
+
+        openedThisBatch = openedThisBatch + 1
         State.StarsOpened = State.StarsOpened + 1
 
-        local totalText = State.StarAmount > 0
-            and tostring(State.StarAmount)
-            or "∞"
+        task.defer(hideStarAnimationFallback)
 
-        setStarsStatus(
-            string.format(
-                "%d/%s  •  %s",
-                State.StarsOpened,
-                totalText,
-                label
-            )
-        )
-
-        if State.StarAmount > 0
-            and State.StarsOpened >= State.StarAmount
-        then
-            stopAutoStars(
-                string.format(
-                    "Finished: %d capsules opened",
-                    State.StarsOpened
-                )
-            )
-            return
+        -- Keep requests serialized, but pack them into the same cycle.
+        -- This avoids relying on an unconfirmed bulk-amount server argument.
+        if index < batchSize then
+            task.wait(0.03)
         end
     end
+
+    if manual then
+        setStarsStatus(
+            openedThisBatch > 0
+                and ("Opened: " .. tostring(lastLabel))
+                or "Capsule unavailable"
+        )
+        return
+    end
+
+    setStarsStatus(
+        string.format(
+            "Batch: %d/%d  •  Total: %d%s",
+            openedThisBatch,
+            batchSize,
+            State.StarsOpened,
+            lastLabel and ("  •  " .. lastLabel) or ""
+        )
+    )
 
     task.wait(math.max(0.05, State.StarDelay))
 end
@@ -1354,7 +1356,7 @@ Tabs.Traits:AddButton({
 
 StarsStatus = Tabs.Stars:AddParagraph({
     Title = "Stars",
-    Content = "Select capsules and amount to open",
+    Content = "Select capsules and how many to open per batch",
 })
 
 Tabs.Stars:AddDropdown("RE790_Capsules", {
@@ -1368,13 +1370,13 @@ Tabs.Stars:AddDropdown("RE790_Capsules", {
     end,
 })
 
-Tabs.Stars:AddInput("RE790_StarAmount", {
-    Title = "Amount To Open",
+Tabs.Stars:AddInput("RE790_StarBatchSize", {
+    Title = "Open Per Batch",
     Default = "10",
     Placeholder = "10",
     Numeric = true,
     Callback = function(value)
-        State.StarAmount = math.max(
+        State.StarBatchSize = math.max(
             1,
             math.floor(tonumber(value) or 10)
         )
@@ -1429,8 +1431,8 @@ AutoStarsToggle = Tabs.Stars:AddToggle("RE790_AutoStars", {
             State.CapsuleCursor = 0
             setStarsStatus(
                 string.format(
-                    "0/%d capsules",
-                    State.StarAmount
+                    "Batch size: %d",
+                    State.StarBatchSize
                 )
             )
         end
