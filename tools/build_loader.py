@@ -6,11 +6,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 PAYLOADS = {
-    138271828389486: {
-        "folder": "ReAdventuresV2",
-        "parts": ("Core", "UI", "Entry"),
-        "return": "return Entry(Core,UI)",
-        "default_key": 157,
+    79073563583903: {
+        "raw_file": "ReAdventures790/Main.lua",
+        "default_key": 197,
     },
     93466613073564: {
         "raw_file": "ScopedV2/Main.lua",
@@ -40,18 +38,28 @@ def encoded_entry(place_id, spec, key):
     return "[" + str(place_id) + "]={{" + chunks + "}," + str(key) + "}"
 
 def replace_or_insert(source, place_id, spec):
-    pattern = re.compile(r'(\[' + re.escape(str(place_id)) + r'\]=)\{\{(.*?)\},(\d+)\}')
-    match = pattern.search(source)
+    table_pattern = re.compile(r'(\\[' + re.escape(str(place_id)) + r'\\]=)\\{\\{(.*?)\\},(\\d+)\\}')
+    direct_pattern = re.compile(r'(a\\[' + re.escape(str(place_id)) + r'\\]=)\\{\\{(.*?)\\},(\\d+)\\}')
+
+    match = direct_pattern.search(source)
+    if match:
+        key = int(match[3])
+        replacement = "a" + encoded_entry(place_id, spec, key)
+        return source[:match.start()] + replacement + source[match.end():]
+
+    match = table_pattern.search(source)
     if match:
         key = int(match[3])
         replacement = encoded_entry(place_id, spec, key)
         return source[:match.start()] + replacement + source[match.end():]
+
     key = spec["default_key"]
-    entry = encoded_entry(place_id, spec, key)
-    marker = "};a[94823097601547]=a[138271828389486];local b="
+    entry = "a" + encoded_entry(place_id, spec, key)
+    marker = ";local b="
     if marker not in source:
-        raise ValueError("Could not find loader payload-table insertion point")
-    return source.replace(marker, "," + entry + marker, 1)
+        raise ValueError("Could not find loader payload insertion point")
+    return source.replace(marker, ";" + entry + marker, 1)
+
 
 def build():
     path = ROOT / "Loader/Loader.lua"
