@@ -38,8 +38,8 @@ def encoded_entry(place_id, spec, key):
     return "[" + str(place_id) + "]={{" + chunks + "}," + str(key) + "}"
 
 def replace_or_insert(source, place_id, spec):
-    table_pattern = re.compile(r'(\\[' + re.escape(str(place_id)) + r'\\]=)\\{\\{(.*?)\\},(\\d+)\\}')
-    direct_pattern = re.compile(r'(a\\[' + re.escape(str(place_id)) + r'\\]=)\\{\\{(.*?)\\},(\\d+)\\}')
+    table_pattern = re.compile(r'(\[' + re.escape(str(place_id)) + r'\]=)\{\{(.*?)\},(\d+)\}')
+    direct_pattern = re.compile(r'(a\[' + re.escape(str(place_id)) + r'\]=)\{\{(.*?)\},(\d+)\}')
 
     match = direct_pattern.search(source)
     if match:
