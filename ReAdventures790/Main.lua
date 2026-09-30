@@ -5,8 +5,14 @@ end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local GuiService = game:GetService("GuiService")
+local CoreGui = game:GetService("CoreGui")
+local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
 local Env = (getgenv and getgenv()) or _G
+local LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Loader/Loader.lua", true))()]]
 
 if type(Env.__CE_RE790_CLEANUP) == "function" then
     pcall(Env.__CE_RE790_CLEANUP)
@@ -35,14 +41,27 @@ local State = {
     Running = true,
     AutoTraits = false,
     AutoStars = false,
-    ProtectDouble = true,
-    SelectedUnitLabel = nil,
-    SelectedUnitUUID = nil,
+
+    SelectedUnits = {},
     TraitTargets = {},
+    DoubleTraitTargets = {},
     TraitSource = "Tokens",
+    TraitCursor = 0,
+    TraitBusy = false,
+    TraitCompleted = {},
+
     CapsuleTargets = {},
     CapsuleCursor = 0,
-    ActionBusy = false,
+    StarBusy = false,
+    StarDelay = 0.65,
+    StarAmount = 10,
+    StarsOpened = 0,
+    SkipStarAnimations = true,
+
+    AntiAFK = false,
+    AutoRejoin = false,
+    AutoExecute = false,
+    RejoinQueued = false,
 }
 
 local WindowRef
@@ -54,7 +73,10 @@ local StarsStatus
 local CollectionCache
 local OwnedCache
 local UnitMap = {}
+local UnitUUIDToLabel = {}
 local LastUnitSignature = ""
+local RuntimeConnections = {}
+local DisabledStarConnections = {}
 
 local function setParagraph(paragraph, title, content)
     if not paragraph then
@@ -202,6 +224,71 @@ local function unitId(unit)
         or "Unit"
 end
 
+local UnitDisplayNames = {}
+local UnitNamesScanned = false
+
+local function scanUnitDisplayNames()
+    if UnitNamesScanned then
+        return
+    end
+
+    local src = ReplicatedStorage:FindFirstChild("src")
+    local data = src and src:FindFirstChild("Data")
+    local unitsRoot = data and data:FindFirstChild("Units")
+
+    if not unitsRoot then
+        return
+    end
+
+    UnitNamesScanned = true
+
+    for _, module in ipairs(unitsRoot:GetDescendants()) do
+        if module:IsA("ModuleScript") then
+            local ok, definitions = pcall(require, module)
+
+            if ok and type(definitions) == "table" then
+                for key, definition in pairs(definitions) do
+                    if type(definition) == "table" then
+                        local id = rawget(definition, "id")
+                            or (type(key) == "string" and key or nil)
+
+                        local displayName = rawget(definition, "name")
+                            or rawget(definition, "display_name")
+                            or rawget(definition, "displayName")
+
+                        if type(id) == "string"
+                            and id ~= ""
+                            and type(displayName) == "string"
+                            and displayName ~= ""
+                        then
+                            UnitDisplayNames[id] = displayName
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function unitDisplayName(unit)
+    local id = tostring(unitId(unit))
+
+    if not UnitNamesScanned then
+        scanUnitDisplayNames()
+    end
+
+    local direct = type(unit) == "table"
+        and (
+            rawget(unit, "display_name")
+            or rawget(unit, "displayName")
+        )
+        or nil
+
+    return (type(direct) == "string" and direct ~= "" and direct)
+        or UnitDisplayNames[id]
+        or prettyId(id)
+end
+
 local function traitKey(trait)
     if type(trait) ~= "table" then
         return nil
@@ -287,14 +374,41 @@ local function matchesTraitTarget(traits)
     if next(State.TraitTargets) == nil then
         return false
     end
+
     for _, trait in ipairs(traits or {}) do
         local key = traitKey(trait)
         local label = key and TraitLabels[key]
+
         if label and State.TraitTargets[label] then
             return true
         end
     end
+
     return false
+end
+
+local function matchesDoubleTarget(traits)
+    if next(State.DoubleTraitTargets) == nil then
+        return false
+    end
+
+    local matched = 0
+
+    for _, trait in ipairs(traits or {}) do
+        local key = traitKey(trait)
+        local label = key and TraitLabels[key]
+
+        if label and State.DoubleTraitTargets[label] then
+            matched = matched + 1
+        end
+    end
+
+    return matched >= 2
+end
+
+local function matchesAnyTraitGoal(traits)
+    return matchesTraitTarget(traits)
+        or matchesDoubleTarget(traits)
 end
 
 local function stopAutoTraits(reason)
@@ -317,18 +431,60 @@ local function stopAutoStars(reason)
     end
 end
 
+local function selectedUnitUUIDs()
+    local out = {}
+
+    for uuid, enabled in pairs(State.SelectedUnits) do
+        if enabled and UnitUUIDToLabel[uuid] then
+            out[#out + 1] = uuid
+        end
+    end
+
+    table.sort(out, function(a, b)
+        return tostring(UnitUUIDToLabel[a] or a)
+            < tostring(UnitUUIDToLabel[b] or b)
+    end)
+
+    return out
+end
+
 local function refreshUnits(force)
     local owned = getOwnedUnits(force == true)
     local values = {}
     local map = {}
+    local reverse = {}
     local signatureParts = {}
+    local duplicates = {}
 
     if type(owned) == "table" then
         for uuid, unit in pairs(owned) do
-            if type(uuid) == "string" and type(unit) == "table" then
-                local label = string.format("%s | %s", prettyId(unitId(unit)), string.sub(uuid, 1, 8))
+            if type(uuid) == "string"
+                and type(unit) == "table"
+            then
+                local name = unitDisplayName(unit)
+                local traitText = traitSummary(
+                    rawget(unit, "traits") or {}
+                )
+                local base = string.format(
+                    "%s  •  %s",
+                    name,
+                    traitText
+                )
+
+                duplicates[base] = (duplicates[base] or 0) + 1
+                local label = base
+
+                if duplicates[base] > 1 then
+                    label = string.format(
+                        "%s (%d)",
+                        base,
+                        duplicates[base]
+                    )
+                end
+
                 values[#values + 1] = label
                 map[label] = uuid
+                reverse[uuid] = label
                 signatureParts[#signatureParts + 1] = label
             end
         end
@@ -336,27 +492,51 @@ local function refreshUnits(force)
 
     table.sort(values)
     table.sort(signatureParts)
-    local signature = table.concat(signatureParts, "|")
-    UnitMap = map
 
-    if UnitDropdown and UnitDropdown.SetValues and (force or signature ~= LastUnitSignature) then
-        pcall(function() UnitDropdown:SetValues(values) end)
-    end
-    LastUnitSignature = signature
-
-    if State.SelectedUnitLabel and UnitMap[State.SelectedUnitLabel] then
-        State.SelectedUnitUUID = UnitMap[State.SelectedUnitLabel]
-    elseif values[1] then
-        State.SelectedUnitLabel = values[1]
-        State.SelectedUnitUUID = UnitMap[values[1]]
-        if UnitDropdown and UnitDropdown.SetValue then
-            pcall(function() UnitDropdown:SetValue(values[1]) end)
+    local previousSelected = {}
+    for uuid, enabled in pairs(State.SelectedUnits) do
+        if enabled then
+            previousSelected[uuid] = true
         end
-    else
-        State.SelectedUnitLabel = nil
-        State.SelectedUnitUUID = nil
     end
 
+    UnitMap = map
+    UnitUUIDToLabel = reverse
+
+    local selectedLabels = {}
+
+    for uuid in pairs(previousSelected) do
+        local label = reverse[uuid]
+        if label then
+            State.SelectedUnits[uuid] = true
+            selectedLabels[label] = true
+        else
+            State.SelectedUnits[uuid] = nil
+            State.TraitCompleted[uuid] = nil
+        end
+    end
+
+    if next(State.SelectedUnits) == nil and values[1] then
+        local uuid = map[values[1]]
+        if uuid then
+            State.SelectedUnits[uuid] = true
+            selectedLabels[values[1]] = true
+        end
+    end
+
+    local signature = table.concat(signatureParts, "|")
+
+    if UnitDropdown
+        and UnitDropdown.SetValues
+        and (force or signature ~= LastUnitSignature)
+    then
+        pcall(function()
+            UnitDropdown:SetValues(values)
+            UnitDropdown:SetValue(selectedLabels)
+        end)
+    end
+
+    LastUnitSignature = signature
     return #values
 end
 
@@ -451,74 +631,186 @@ local function waitForTraitChange(uuid, before, timeout)
     return false, currentTraits(uuid)
 end
 
-local function processTraitOnce()
-    local uuid = State.SelectedUnitUUID
+local function allSelectedUnitsFinished()
+    local uuids = selectedUnitUUIDs()
+
+    if #uuids == 0 then
+        return false
+    end
+
+    for _, uuid in ipairs(uuids) do
+        if not State.TraitCompleted[uuid] then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function nextTraitUUID()
+    local uuids = selectedUnitUUIDs()
+
+    if #uuids == 0 then
+        return nil
+    end
+
+    for _ = 1, #uuids do
+        State.TraitCursor =
+            (State.TraitCursor % #uuids) + 1
+
+        local uuid = uuids[State.TraitCursor]
+
+        if not State.TraitCompleted[uuid] then
+            return uuid
+        end
+    end
+
+    return nil
+end
+
+local function processTraitOnce(manual)
+    local uuid = nextTraitUUID()
+
     if not uuid then
         refreshUnits(true)
-        uuid = State.SelectedUnitUUID
+        uuid = nextTraitUUID()
     end
+
     if not uuid then
-        setTraitStatus("Select a unit")
+        setTraitStatus("Select at least one character")
         return
     end
-    if next(State.TraitTargets) == nil then
-        setTraitStatus("Select at least one wanted Trait")
+
+    if not manual
+        and next(State.TraitTargets) == nil
+        and next(State.DoubleTraitTargets) == nil
+    then
+        setTraitStatus("Select a Trait or a Double Trait target")
         return
     end
 
     local traits = currentTraits(uuid)
-    if matchesTraitTarget(traits) then
-        stopAutoTraits("Finished: " .. traitSummary(traits))
-        return
-    end
-    if State.ProtectDouble and #traits >= 2 then
-        stopAutoTraits("Stopped on Double Trait: " .. traitSummary(traits))
+    local label = UnitUUIDToLabel[uuid] or "Character"
+
+    if not manual and matchesAnyTraitGoal(traits) then
+        State.TraitCompleted[uuid] = true
+        refreshUnits(false)
+
+        if allSelectedUnitsFinished() then
+            stopAutoTraits("Finished selected characters")
+        else
+            setTraitStatus(
+                label .. ": target reached"
+            )
+        end
+
         return
     end
 
     local before = traitsFingerprint(traits)
     local ok, result, err
+
     if State.TraitSource == "Star Remnant" then
-        ok, result, err = invokeEndpoint("use_item", "star_remnant", {unit_uuid = uuid})
+        ok, result, err = invokeEndpoint(
+            "use_item",
+            "star_remnant",
+            {unit_uuid = uuid}
+        )
     elseif State.TraitSource == "Star Remnant (Limited)" then
-        ok, result, err = invokeEndpoint("use_item", "star_remnant_limited", {unit_uuid = uuid})
+        ok, result, err = invokeEndpoint(
+            "use_item",
+            "star_remnant_limited",
+            {unit_uuid = uuid}
+        )
     else
-        ok, result, err = invokeEndpoint("request_token_trait_reroll", uuid)
+        ok, result, err = invokeEndpoint(
+            "request_token_trait_reroll",
+            uuid
+        )
     end
 
     if not ok then
-        setTraitStatus("Waiting for game action")
-        task.wait(1.2)
-        return
-    end
-    if result == false then
-        local reason = tostring(err or "rejected")
-        if reason == "not_ready" then
-            setTraitStatus("Game is not ready yet")
-            task.wait(0.8)
-            return
-        end
-        stopAutoTraits("Stopped: " .. reason)
+        setTraitStatus("Trait reroll is temporarily unavailable")
+        task.wait(0.8)
         return
     end
 
-    local changed, newTraits = waitForTraitChange(uuid, before, 4)
+    if result == false then
+        local reason = tostring(err or "rejected")
+
+        if reason == "not_ready" then
+            setTraitStatus("Waiting for the next reroll")
+            task.wait(0.35)
+            return
+        end
+
+        if manual then
+            setTraitStatus("Reroll failed")
+        else
+            stopAutoTraits("Stopped: " .. reason)
+        end
+
+        return
+    end
+
+    local changed, newTraits =
+        waitForTraitChange(uuid, before, 4)
+
     if changed then
         local summary = traitSummary(newTraits)
-        setTraitStatus("Rolled: " .. summary)
-        if matchesTraitTarget(newTraits) then
-            stopAutoTraits("Finished: " .. summary)
+
+        if not manual and matchesAnyTraitGoal(newTraits) then
+            State.TraitCompleted[uuid] = true
+        end
+
+        refreshUnits(false)
+
+        if not manual and allSelectedUnitsFinished() then
+            stopAutoTraits("Finished selected characters")
             return
         end
-        if State.ProtectDouble and #newTraits >= 2 then
-            stopAutoTraits("Stopped on Double Trait: " .. summary)
-            return
-        end
-        task.wait(0.2)
+
+        setTraitStatus(
+            unitDisplayName(
+                (getOwnedUnits(false) or {})[uuid]
+            )
+            .. ": "
+            .. summary
+        )
+
+        task.wait(0.12)
     else
-        setTraitStatus("Synchronizing Trait state")
-        task.wait(1.0)
+        setTraitStatus("Updating Trait state...")
+        task.wait(0.45)
     end
+end
+
+local function rerollSelectedOnce()
+    local uuids = selectedUnitUUIDs()
+
+    if #uuids == 0 then
+        setTraitStatus("Select at least one character")
+        return
+    end
+
+    for _, uuid in ipairs(uuids) do
+        if not State.Running then
+            return
+        end
+
+        State.TraitCursor = 0
+
+        local original = State.SelectedUnits
+        local only = {[uuid] = true}
+        State.SelectedUnits = only
+
+        pcall(processTraitOnce, true)
+
+        State.SelectedUnits = original
+        task.wait(0.12)
+    end
+
+    refreshUnits(false)
 end
 
 local function selectedCapsuleLabels()
@@ -531,42 +823,368 @@ local function selectedCapsuleLabels()
     return out
 end
 
-local function processStarOnce()
+local function restoreStarVisualConnections()
+    for _, connection in ipairs(DisabledStarConnections) do
+        pcall(function()
+            if connection and type(connection.Enable) == "function" then
+                connection:Enable()
+            end
+        end)
+    end
+
+    table.clear(DisabledStarConnections)
+end
+
+local function setSkipStarAnimations(enabled)
+    State.SkipStarAnimations = enabled == true
+    restoreStarVisualConnections()
+
+    if not State.SkipStarAnimations then
+        return
+    end
+
+    local getConnections = rawget(Env, "getconnections")
+        or rawget(_G, "getconnections")
+
+    if type(getConnections) ~= "function" then
+        return
+    end
+
+    local folder = getEndpointFolder("server_to_client")
+
+    for _, name in ipairs({
+        "show_item_hatch_effect",
+        "show_unit_and_item_rewards",
+    }) do
+        local remote = folder and folder:FindFirstChild(name)
+
+        if remote and remote:IsA("RemoteEvent") then
+            local ok, connections =
+                pcall(getConnections, remote.OnClientEvent)
+
+            if ok and type(connections) == "table" then
+                for _, connection in ipairs(connections) do
+                    if type(connection.Disable) == "function" then
+                        local disabled = pcall(function()
+                            connection:Disable()
+                        end)
+
+                        if disabled then
+                            DisabledStarConnections[
+                                #DisabledStarConnections + 1
+                            ] = connection
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function hideStarAnimationFallback()
+    if not State.SkipStarAnimations or not PlayerGui then
+        return
+    end
+
+    for _, item in ipairs(PlayerGui:GetDescendants()) do
+        local name = tostring(item.Name or ""):lower()
+
+        if name:find("hatch", 1, true)
+            or name:find("itemreward", 1, true)
+            or name:find("item_reward", 1, true)
+        then
+            pcall(function()
+                if item:IsA("ScreenGui") then
+                    item.Enabled = false
+                elseif item:IsA("GuiObject") then
+                    item.Visible = false
+                end
+            end)
+        end
+    end
+end
+
+local function processStarOnce(manual)
     local selected = selectedCapsuleLabels()
+
     if #selected == 0 then
         setStarsStatus("Select at least one capsule")
         return
     end
 
-    State.CapsuleCursor = (State.CapsuleCursor % #selected) + 1
+    if not manual
+        and State.StarAmount > 0
+        and State.StarsOpened >= State.StarAmount
+    then
+        stopAutoStars(
+            string.format(
+                "Finished: %d capsules opened",
+                State.StarsOpened
+            )
+        )
+        return
+    end
+
+    State.CapsuleCursor =
+        (State.CapsuleCursor % #selected) + 1
+
     local label = selected[State.CapsuleCursor]
     local itemId = CapsuleMap[label]
-    local ok, result, err = invokeEndpoint("use_item", itemId)
+
+    if State.SkipStarAnimations then
+        setSkipStarAnimations(true)
+    end
+
+    local ok, result, err =
+        invokeEndpoint("use_item", itemId)
 
     if not ok then
-        setStarsStatus("Waiting for inventory service")
-        task.wait(1.2)
-        return
-    end
-    if result == false then
-        setStarsStatus(label .. ": " .. tostring(err or "not available"))
-        task.wait(0.8)
+        setStarsStatus("Capsule opening is temporarily unavailable")
+        task.wait(0.6)
         return
     end
 
-    setStarsStatus("Opened: " .. label)
-    task.wait(0.65)
+    if result == false then
+        setStarsStatus(label .. ": unavailable")
+        task.wait(0.5)
+        return
+    end
+
+    task.defer(hideStarAnimationFallback)
+
+    if manual then
+        setStarsStatus("Opened: " .. label)
+    else
+        State.StarsOpened = State.StarsOpened + 1
+
+        local totalText = State.StarAmount > 0
+            and tostring(State.StarAmount)
+            or "∞"
+
+        setStarsStatus(
+            string.format(
+                "%d/%s  •  %s",
+                State.StarsOpened,
+                totalText,
+                label
+            )
+        )
+
+        if State.StarAmount > 0
+            and State.StarsOpened >= State.StarAmount
+        then
+            stopAutoStars(
+                string.format(
+                    "Finished: %d capsules opened",
+                    State.StarsOpened
+                )
+            )
+            return
+        end
+    end
+
+    task.wait(math.max(0.05, State.StarDelay))
+end
+
+local function connectRuntime(signal, callback)
+    if not signal then
+        return nil
+    end
+
+    local connection = signal:Connect(callback)
+    RuntimeConnections[#RuntimeConnections + 1] = connection
+    return connection
+end
+
+local function executorFunction(...)
+    for index = 1, select("#", ...) do
+        local name = select(index, ...)
+        local value = rawget(Env, name)
+
+        if type(value) == "function" then
+            return value
+        end
+    end
+
+    local syn = rawget(Env, "syn")
+
+    if type(syn) == "table"
+        and type(syn.queue_on_teleport) == "function"
+    then
+        return syn.queue_on_teleport
+    end
+
+    local fluxus = rawget(Env, "fluxus")
+
+    if type(fluxus) == "table"
+        and type(fluxus.queue_on_teleport) == "function"
+    then
+        return fluxus.queue_on_teleport
+    end
+
+    return nil
+end
+
+local function queueLoader()
+    local queueFn = executorFunction(
+        "queue_on_teleport",
+        "queueonteleport"
+    )
+
+    if type(queueFn) ~= "function" then
+        return false
+    end
+
+    return pcall(queueFn, LOADER_COMMAND)
+end
+
+local function requestReconnect()
+    if not State.AutoRejoin or State.RejoinQueued then
+        return
+    end
+
+    State.RejoinQueued = true
+
+    if State.AutoExecute then
+        pcall(queueLoader)
+    end
+
+    task.delay(1.25, function()
+        if not State.Running then
+            return
+        end
+
+        local ok = pcall(function()
+            TeleportService:Teleport(
+                game.PlaceId,
+                LocalPlayer
+            )
+        end)
+
+        if not ok then
+            State.RejoinQueued = false
+        end
+    end)
+end
+
+if LocalPlayer then
+    connectRuntime(LocalPlayer.Idled, function()
+        if not State.AntiAFK then
+            return
+        end
+
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(
+                Vector2.new(0, 0)
+            )
+        end)
+    end)
+end
+
+local errorSignal
+pcall(function()
+    errorSignal = GuiService.ErrorMessageChanged
+end)
+
+if errorSignal then
+    connectRuntime(errorSignal, function(message)
+        if not State.AutoRejoin then
+            return
+        end
+
+        local lower = tostring(message or ""):lower()
+
+        if lower:find("disconnect", 1, true)
+            or lower:find("desconect", 1, true)
+            or lower:find("connection", 1, true)
+            or lower:find("conex", 1, true)
+            or lower:find("idle", 1, true)
+            or lower:find("inatividade", 1, true)
+            or lower:find("error code: 267", 1, true)
+            or lower:find("error code: 277", 1, true)
+            or lower:find("error code: 279", 1, true)
+        then
+            requestReconnect()
+        end
+    end)
+end
+
+local promptOverlay
+pcall(function()
+    local promptGui = CoreGui:FindFirstChild("RobloxPromptGui")
+    promptOverlay = promptGui
+        and promptGui:FindFirstChild("promptOverlay")
+end)
+
+if promptOverlay then
+    connectRuntime(promptOverlay.ChildAdded, function(child)
+        task.delay(0.1, function()
+            if not State.AutoRejoin then
+                return
+            end
+
+            local name = tostring(
+                child and child.Name or ""
+            ):lower()
+
+            if name:find("errorprompt", 1, true) then
+                requestReconnect()
+            end
+        end)
+    end)
+end
+
+if PlayerGui then
+    connectRuntime(PlayerGui.DescendantAdded, function(item)
+        if not State.SkipStarAnimations then
+            return
+        end
+
+        local name = tostring(item.Name or ""):lower()
+
+        if name:find("hatch", 1, true)
+            or name:find("itemreward", 1, true)
+            or name:find("item_reward", 1, true)
+        then
+            task.defer(function()
+                pcall(function()
+                    if item:IsA("ScreenGui") then
+                        item.Enabled = false
+                    elseif item:IsA("GuiObject") then
+                        item.Visible = false
+                    end
+                end)
+            end)
+        end
+    end)
 end
 
 local function cleanup()
     State.Running = false
     State.AutoTraits = false
     State.AutoStars = false
-    if WindowRef and WindowRef.Destroy then
-        pcall(function() WindowRef:Destroy() end)
-    elseif Fluent and Fluent.Destroy then
-        pcall(function() Fluent:Destroy() end)
+
+    restoreStarVisualConnections()
+
+    for _, connection in ipairs(RuntimeConnections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
     end
+
+    table.clear(RuntimeConnections)
+
+    if WindowRef and WindowRef.Destroy then
+        pcall(function()
+            WindowRef:Destroy()
+        end)
+    elseif Fluent and Fluent.Destroy then
+        pcall(function()
+            Fluent:Destroy()
+        end)
+    end
+
     Env.__CE_RE790_CLEANUP = nil
 end
 Env.__CE_RE790_CLEANUP = cleanup
@@ -590,104 +1208,287 @@ local Tabs = {
     Settings = Window:AddTab({Title = "Settings", Icon = "solar/settings-bold"}),
 }
 
-TraitStatus = Tabs.Traits:AddParagraph({Title = "Traits", Content = "Loading units..."})
-UnitDropdown = Tabs.Traits:AddDropdown("RE790_Unit", {
-    Title = "Unit",
+TraitStatus = Tabs.Traits:AddParagraph({
+    Title = "Traits",
+    Content = "Select characters and target Traits",
+})
+
+UnitDropdown = Tabs.Traits:AddDropdown("RE790_Units", {
+    Title = "Characters",
     Values = {},
-    Default = nil,
+    Multi = true,
+    Default = {},
     DropdownOutsideWindow = true,
     Callback = function(value)
-        State.SelectedUnitLabel = value
-        State.SelectedUnitUUID = UnitMap[value]
-        if State.SelectedUnitUUID then
-            setTraitStatus("Current: " .. traitSummary(currentTraits(State.SelectedUnitUUID)))
+        table.clear(State.SelectedUnits)
+        State.TraitCompleted = {}
+
+        if type(value) == "table" then
+            for key, item in pairs(value) do
+                local label
+                local enabled = true
+
+                if type(key) == "string" then
+                    label = key
+                    enabled = item == true
+                elseif type(item) == "string" then
+                    label = item
+                end
+
+                local uuid = enabled
+                    and label
+                    and UnitMap[label]
+                    or nil
+
+                if uuid then
+                    State.SelectedUnits[uuid] = true
+                end
+            end
+        elseif type(value) == "string"
+            and UnitMap[value]
+        then
+            State.SelectedUnits[
+                UnitMap[value]
+            ] = true
         end
+
+        local count = #selectedUnitUUIDs()
+
+        setTraitStatus(
+            count > 0
+                and string.format(
+                    "%d character%s selected",
+                    count,
+                    count == 1 and "" or "s"
+                )
+                or "Select at least one character"
+        )
     end,
 })
+
 Tabs.Traits:AddButton({
-    Title = "Refresh Units",
+    Title = "Refresh Characters",
     Icon = "solar/refresh-bold",
     Callback = function()
         local count = refreshUnits(true)
-        setTraitStatus(count > 0 and ("Units found: " .. tostring(count)) or "Waiting for collection data")
+
+        setTraitStatus(
+            count > 0
+                and ("Characters found: " .. tostring(count))
+                or "Characters are still loading"
+        )
     end,
 })
+
 Tabs.Traits:AddDropdown("RE790_TraitSource", {
-    Title = "Reroll Source",
-    Values = {"Tokens", "Star Remnant", "Star Remnant (Limited)"},
+    Title = "Reroll With",
+    Values = {
+        "Tokens",
+        "Star Remnant",
+        "Star Remnant (Limited)",
+    },
     Default = "Tokens",
     DropdownOutsideWindow = true,
-    Callback = function(value) State.TraitSource = value or "Tokens" end,
+    Callback = function(value)
+        State.TraitSource = value or "Tokens"
+    end,
 })
+
 Tabs.Traits:AddDropdown("RE790_TraitTargets", {
     Title = "Wanted Traits",
     Values = TraitValues,
     Multi = true,
     Default = {},
     DropdownOutsideWindow = true,
-    Callback = function(value) copySelection(State.TraitTargets, value) end,
+    Callback = function(value)
+        copySelection(State.TraitTargets, value)
+        State.TraitCompleted = {}
+    end,
 })
-Tabs.Traits:AddToggle("RE790_ProtectDouble", {
-    Title = "Stop on Double Trait",
-    Default = true,
-    Callback = function(value) State.ProtectDouble = value == true end,
+
+Tabs.Traits:AddDropdown("RE790_DoubleTraitTargets", {
+    Title = "Wanted Double Trait",
+    Values = TraitValues,
+    Multi = true,
+    Default = {},
+    DropdownOutsideWindow = true,
+    Callback = function(value)
+        copySelection(
+            State.DoubleTraitTargets,
+            value
+        )
+        State.TraitCompleted = {}
+    end,
 })
+
 AutoTraitToggle = Tabs.Traits:AddToggle("RE790_AutoTraits", {
     Title = "Auto Traits",
     Default = false,
     Callback = function(value)
         State.AutoTraits = value == true
+
         if value then
+            State.TraitCompleted = {}
+            State.TraitCursor = 0
             setTraitStatus("Auto Traits running")
         end
     end,
 })
+
 Tabs.Traits:AddButton({
-    Title = "Reroll Once",
+    Title = "Reroll Selected Once",
     Icon = "solar/refresh-bold",
     Callback = function()
-        if not State.ActionBusy then
-            State.ActionBusy = true
-            task.spawn(function()
-                pcall(processTraitOnce)
-                State.ActionBusy = false
-            end)
+        if State.TraitBusy then
+            return
         end
+
+        State.TraitBusy = true
+
+        task.spawn(function()
+            pcall(rerollSelectedOnce)
+            State.TraitBusy = false
+        end)
     end,
 })
 
-StarsStatus = Tabs.Stars:AddParagraph({Title = "Stars", Content = "Select capsules to open"})
+StarsStatus = Tabs.Stars:AddParagraph({
+    Title = "Stars",
+    Content = "Select capsules and amount to open",
+})
+
 Tabs.Stars:AddDropdown("RE790_Capsules", {
     Title = "Capsules",
     Values = CapsuleValues,
     Multi = true,
     Default = {},
     DropdownOutsideWindow = true,
-    Callback = function(value) copySelection(State.CapsuleTargets, value) end,
+    Callback = function(value)
+        copySelection(State.CapsuleTargets, value)
+    end,
 })
+
+Tabs.Stars:AddInput("RE790_StarAmount", {
+    Title = "Amount To Open",
+    Default = "10",
+    Placeholder = "10",
+    Numeric = true,
+    Callback = function(value)
+        State.StarAmount = math.max(
+            1,
+            math.floor(tonumber(value) or 10)
+        )
+    end,
+})
+
+if type(Tabs.Stars.AddSlider) == "function" then
+    Tabs.Stars:AddSlider("RE790_StarDelay", {
+        Title = "Time Between Capsules",
+        Default = 0.65,
+        Min = 0.05,
+        Max = 5,
+        Rounding = 2,
+        Callback = function(value)
+            State.StarDelay = math.max(
+                0.05,
+                tonumber(value) or 0.65
+            )
+        end,
+    })
+else
+    Tabs.Stars:AddInput("RE790_StarDelay", {
+        Title = "Time Between Capsules",
+        Default = "0.65",
+        Placeholder = "0.65",
+        Numeric = true,
+        Callback = function(value)
+            State.StarDelay = math.max(
+                0.05,
+                tonumber(value) or 0.65
+            )
+        end,
+    })
+end
+
+Tabs.Stars:AddToggle("RE790_SkipStarAnimations", {
+    Title = "Skip Opening Animations",
+    Default = true,
+    Callback = function(value)
+        setSkipStarAnimations(value == true)
+    end,
+})
+
 AutoStarsToggle = Tabs.Stars:AddToggle("RE790_AutoStars", {
-    Title = "Auto Stars (Capsules)",
+    Title = "Auto Stars",
     Default = false,
     Callback = function(value)
         State.AutoStars = value == true
+
         if value then
-            setStarsStatus("Auto Stars running")
+            State.StarsOpened = 0
+            State.CapsuleCursor = 0
+            setStarsStatus(
+                string.format(
+                    "0/%d capsules",
+                    State.StarAmount
+                )
+            )
         end
     end,
 })
+
 Tabs.Stars:AddButton({
     Title = "Open Once",
     Icon = "solar/refresh-bold",
     Callback = function()
-        if not State.ActionBusy then
-            State.ActionBusy = true
-            task.spawn(function()
-                pcall(processStarOnce)
-                State.ActionBusy = false
-            end)
+        if State.StarBusy then
+            return
+        end
+
+        State.StarBusy = true
+
+        task.spawn(function()
+            pcall(processStarOnce, true)
+            State.StarBusy = false
+        end)
+    end,
+})
+
+Tabs.Settings:AddSection("Session")
+
+Tabs.Settings:AddToggle("RE790_AntiAFK", {
+    Title = "Anti AFK",
+    Default = false,
+    Callback = function(value)
+        State.AntiAFK = value == true
+    end,
+})
+
+Tabs.Settings:AddToggle("RE790_AutoRejoin", {
+    Title = "Auto Rejoin",
+    Default = false,
+    Callback = function(value)
+        State.AutoRejoin = value == true
+
+        if not value then
+            State.RejoinQueued = false
         end
     end,
 })
+
+Tabs.Settings:AddToggle("RE790_AutoExecute", {
+    Title = "Auto Load After Rejoin",
+    Default = false,
+    Callback = function(value)
+        State.AutoExecute = value == true
+
+        if value then
+            pcall(queueLoader)
+        end
+    end,
+})
+
+Tabs.Settings:AddSection("Interface")
 
 Tabs.Settings:AddDropdown("RE790_Theme", {
     Title = "Theme",
@@ -695,52 +1496,90 @@ Tabs.Settings:AddDropdown("RE790_Theme", {
     Default = "Dark",
     DropdownOutsideWindow = true,
     Callback = function(value)
-        pcall(function() Fluent:SetTheme(value) end)
+        pcall(function()
+            Fluent:SetTheme(value)
+        end)
     end,
 })
+
 Tabs.Settings:AddButton({
     Title = "Unload CAT EMPIRE",
     Icon = "solar/power-bold",
     Callback = cleanup,
 })
 
+setSkipStarAnimations(true)
 refreshUnits(true)
 
 task.spawn(function()
     local lastRefresh = 0
+
     while State.Running do
-        local now = os.clock()
-        if now - lastRefresh >= 5 then
-            lastRefresh = now
+        local current = os.clock()
+
+        if current - lastRefresh >= 3 then
+            lastRefresh = current
             pcall(refreshUnits, false)
         end
 
-        if not State.ActionBusy then
-            if State.AutoTraits then
-                State.ActionBusy = true
-                task.spawn(function()
-                    local ok, err = pcall(processTraitOnce)
-                    if not ok then
-                        setTraitStatus("Trait worker paused")
-                        task.wait(1)
-                    end
-                    State.ActionBusy = false
-                end)
-            elseif State.AutoStars then
-                State.ActionBusy = true
-                task.spawn(function()
-                    local ok, err = pcall(processStarOnce)
-                    if not ok then
-                        setStarsStatus("Stars worker paused")
-                        task.wait(1)
-                    end
-                    State.ActionBusy = false
-                end)
-            end
-        end
-
-        task.wait(0.1)
+        task.wait(0.25)
     end
 end)
 
-Fluent:Notify({Title = "CAT EMPIRE", Content = "Re Adventures loaded", Duration = 3})
+task.spawn(function()
+    while State.Running do
+        if State.AutoTraits and not State.TraitBusy then
+            State.TraitBusy = true
+
+            task.spawn(function()
+                local ok = pcall(
+                    processTraitOnce,
+                    false
+                )
+
+                if not ok then
+                    setTraitStatus(
+                        "Auto Traits paused briefly"
+                    )
+                    task.wait(0.5)
+                end
+
+                State.TraitBusy = false
+            end)
+        end
+
+        task.wait(0.06)
+    end
+end)
+
+task.spawn(function()
+    while State.Running do
+        if State.AutoStars and not State.StarBusy then
+            State.StarBusy = true
+
+            task.spawn(function()
+                local ok = pcall(
+                    processStarOnce,
+                    false
+                )
+
+                if not ok then
+                    setStarsStatus(
+                        "Auto Stars paused briefly"
+                    )
+                    task.wait(0.5)
+                end
+
+                State.StarBusy = false
+            end)
+        end
+
+        task.wait(0.06)
+    end
+end)
+
+Fluent:Notify({
+    Title = "CAT EMPIRE",
+    Content = "Re Adventures loaded",
+    Duration = 3,
+})
