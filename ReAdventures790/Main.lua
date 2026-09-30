@@ -1575,14 +1575,15 @@ local function processStarOnce(manual)
         installStarVisualHooks()
     end
 
-    local amount = manual
-        and 1
-        or math.max(
-            1,
-            math.floor(
-                tonumber(State.StarBatchSize) or 10
-            )
+    -- Both Auto Stars and the manual button use the configured
+    -- amount. A single manual click processes the whole quantity and
+    -- then stops; Auto Stars repeats the same quantity continuously.
+    local amount = math.max(
+        1,
+        math.floor(
+            tonumber(State.StarBatchSize) or 10
         )
+    )
 
     local remaining = amount
     local opened = 0
@@ -1621,17 +1622,15 @@ local function processStarOnce(manual)
     State.StarsOpened =
         State.StarsOpened + opened
 
-    if manual then
-        setStarsStatus("Opened: " .. label)
-    else
-        setStarsStatus(
-            string.format(
-                "Native x%d  •  %s",
-                opened,
-                label
-            )
+    setStarsStatus(
+        string.format(
+            manual
+                and "Opened x%d with one click  •  %s"
+                or "Native x%d  •  %s",
+            opened,
+            label
         )
-    end
+    )
 
     task.wait(
         math.max(0.05, State.StarDelay)
@@ -2073,7 +2072,7 @@ AutoStarsToggle = Tabs.Stars:AddToggle("RE790_AutoStars", {
 })
 
 Tabs.Stars:AddButton({
-    Title = "Open Once",
+    Title = "Open Selected Amount",
     Icon = "solar/refresh-bold",
     Callback = function()
         if State.StarBusy then
