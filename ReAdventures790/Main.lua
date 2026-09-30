@@ -57,6 +57,7 @@ local State = {
     StarBatchSize = 10,
     StarsOpened = 0,
     SkipStarAnimations = true,
+    StarRequestGap = 0.075,
 
     AntiAFK = false,
     AutoRejoin = false,
@@ -77,6 +78,10 @@ local UnitUUIDToLabel = {}
 local LastUnitSignature = ""
 local RuntimeConnections = {}
 local DisabledStarConnections = {}
+local StarVisualHooksInstalled = false
+local UnitRefreshQueued = false
+local LastUnitUiRefresh = 0
+local UNIT_UI_REFRESH_INTERVAL = 0.75
 
 local function setParagraph(paragraph, title, content)
     if not paragraph then
@@ -537,7 +542,35 @@ local function refreshUnits(force)
     end
 
     LastUnitSignature = signature
+    LastUnitUiRefresh = os.clock()
     return #values
+end
+
+local function requestUnitRefresh(force)
+    if force then
+        UnitRefreshQueued = false
+        return refreshUnits(true)
+    end
+
+    if UnitRefreshQueued then
+        return
+    end
+
+    local elapsed = os.clock() - LastUnitUiRefresh
+    local delayTime = math.max(
+        0,
+        UNIT_UI_REFRESH_INTERVAL - elapsed
+    )
+
+    UnitRefreshQueued = true
+
+    task.delay(delayTime, function()
+        UnitRefreshQueued = false
+
+        if State.Running then
+            pcall(refreshUnits, false)
+        end
+    end)
 end
 
 local CapsuleMap = {
@@ -694,7 +727,7 @@ local function processTraitOnce(manual)
 
     if not manual and matchesAnyTraitGoal(traits) then
         State.TraitCompleted[uuid] = true
-        refreshUnits(false)
+        requestUnitRefresh(false)
 
         if allSelectedUnitsFinished() then
             stopAutoTraits("Finished selected characters")
@@ -763,7 +796,7 @@ local function processTraitOnce(manual)
             State.TraitCompleted[uuid] = true
         end
 
-        refreshUnits(false)
+        requestUnitRefresh(false)
 
         if not manual and allSelectedUnitsFinished() then
             stopAutoTraits("Finished selected characters")
@@ -810,7 +843,7 @@ local function rerollSelectedOnce()
         task.wait(0.12)
     end
 
-    refreshUnits(false)
+    requestUnitRefresh(false)
 end
 
 local function selectedCapsuleLabels()
@@ -826,82 +859,114 @@ end
 local function restoreStarVisualConnections()
     for _, connection in ipairs(DisabledStarConnections) do
         pcall(function()
-            if connection and type(connection.Enable) == "function" then
+            if connection
+                and type(connection.Enable) == "function"
+            then
                 connection:Enable()
             end
         end)
     end
 
     table.clear(DisabledStarConnections)
+    StarVisualHooksInstalled = false
 end
 
-local function setSkipStarAnimations(enabled)
-    State.SkipStarAnimations = enabled == true
-    restoreStarVisualConnections()
-
-    if not State.SkipStarAnimations then
+local function hideStarVisual(item)
+    if not State.SkipStarAnimations or not item then
         return
     end
+
+    local name = tostring(item.Name or ""):lower()
+
+    if name:find("hatch", 1, true)
+        or name:find("itemreward", 1, true)
+        or name:find("item_reward", 1, true)
+    then
+        pcall(function()
+            if item:IsA("ScreenGui") then
+                item.Enabled = false
+            elseif item:IsA("GuiObject") then
+                item.Visible = false
+            end
+        end)
+    end
+end
+
+local function installStarVisualHooks()
+    if StarVisualHooksInstalled
+        or not State.SkipStarAnimations
+    then
+        return
+    end
+
+    StarVisualHooksInstalled = true
 
     local getConnections = rawget(Env, "getconnections")
         or rawget(_G, "getconnections")
 
-    if type(getConnections) ~= "function" then
-        return
-    end
+    if type(getConnections) == "function" then
+        local folder = getEndpointFolder("server_to_client")
 
-    local folder = getEndpointFolder("server_to_client")
+        for _, name in ipairs({
+            "show_item_hatch_effect",
+            "show_unit_and_item_rewards",
+        }) do
+            local remote = folder
+                and folder:FindFirstChild(name)
 
-    for _, name in ipairs({
-        "show_item_hatch_effect",
-        "show_unit_and_item_rewards",
-    }) do
-        local remote = folder and folder:FindFirstChild(name)
+            if remote and remote:IsA("RemoteEvent") then
+                local ok, connections =
+                    pcall(
+                        getConnections,
+                        remote.OnClientEvent
+                    )
 
-        if remote and remote:IsA("RemoteEvent") then
-            local ok, connections =
-                pcall(getConnections, remote.OnClientEvent)
+                if ok and type(connections) == "table" then
+                    for _, connection in ipairs(connections) do
+                        if type(connection.Disable) == "function" then
+                            local disabled = pcall(function()
+                                connection:Disable()
+                            end)
 
-            if ok and type(connections) == "table" then
-                for _, connection in ipairs(connections) do
-                    if type(connection.Disable) == "function" then
-                        local disabled = pcall(function()
-                            connection:Disable()
-                        end)
-
-                        if disabled then
-                            DisabledStarConnections[
-                                #DisabledStarConnections + 1
-                            ] = connection
+                            if disabled then
+                                DisabledStarConnections[
+                                    #DisabledStarConnections + 1
+                                ] = connection
+                            end
                         end
                     end
                 end
             end
         end
     end
+
+    -- One initial pass only. New animation GUIs are handled by
+    -- PlayerGui.DescendantAdded instead of scanning the whole tree per capsule.
+    if PlayerGui then
+        task.defer(function()
+            local ok, descendants =
+                pcall(PlayerGui.GetDescendants, PlayerGui)
+
+            if ok and type(descendants) == "table" then
+                for _, item in ipairs(descendants) do
+                    hideStarVisual(item)
+                end
+            end
+        end)
+    end
 end
 
-local function hideStarAnimationFallback()
-    if not State.SkipStarAnimations or not PlayerGui then
+local function setSkipStarAnimations(enabled)
+    local nextValue = enabled == true
+
+    if not nextValue then
+        State.SkipStarAnimations = false
+        restoreStarVisualConnections()
         return
     end
 
-    for _, item in ipairs(PlayerGui:GetDescendants()) do
-        local name = tostring(item.Name or ""):lower()
-
-        if name:find("hatch", 1, true)
-            or name:find("itemreward", 1, true)
-            or name:find("item_reward", 1, true)
-        then
-            pcall(function()
-                if item:IsA("ScreenGui") then
-                    item.Enabled = false
-                elseif item:IsA("GuiObject") then
-                    item.Visible = false
-                end
-            end)
-        end
-    end
+    State.SkipStarAnimations = true
+    installStarVisualHooks()
 end
 
 local function processStarOnce(manual)
@@ -925,7 +990,7 @@ local function processStarOnce(manual)
     local lastLabel = nil
 
     if State.SkipStarAnimations then
-        setSkipStarAnimations(true)
+        installStarVisualHooks()
     end
 
     for index = 1, batchSize do
@@ -957,12 +1022,15 @@ local function processStarOnce(manual)
         openedThisBatch = openedThisBatch + 1
         State.StarsOpened = State.StarsOpened + 1
 
-        task.defer(hideStarAnimationFallback)
-
-        -- Keep requests serialized, but pack them into the same cycle.
-        -- This avoids relying on an unconfirmed bulk-amount server argument.
+        -- Keep the batch responsive without flooding the client/server thread.
+        -- RemoteFunction calls are still serialized and a small cooperative
+        -- yield prevents large batches from creating frame-time spikes.
         if index < batchSize then
-            task.wait(0.03)
+            task.wait(State.StarRequestGap)
+        end
+
+        if index % 5 == 0 then
+            task.wait()
         end
     end
 
@@ -1139,25 +1207,8 @@ end
 
 if PlayerGui then
     connectRuntime(PlayerGui.DescendantAdded, function(item)
-        if not State.SkipStarAnimations then
-            return
-        end
-
-        local name = tostring(item.Name or ""):lower()
-
-        if name:find("hatch", 1, true)
-            or name:find("itemreward", 1, true)
-            or name:find("item_reward", 1, true)
-        then
-            task.defer(function()
-                pcall(function()
-                    if item:IsA("ScreenGui") then
-                        item.Enabled = false
-                    elseif item:IsA("GuiObject") then
-                        item.Visible = false
-                    end
-                end)
-            end)
+        if State.SkipStarAnimations then
+            task.defer(hideStarVisual, item)
         end
     end)
 end
@@ -1519,12 +1570,12 @@ task.spawn(function()
     while State.Running do
         local current = os.clock()
 
-        if current - lastRefresh >= 3 then
+        if current - lastRefresh >= 6 then
             lastRefresh = current
-            pcall(refreshUnits, false)
+            requestUnitRefresh(false)
         end
 
-        task.wait(0.25)
+        task.wait(0.5)
     end
 end)
 
@@ -1550,7 +1601,7 @@ task.spawn(function()
             end)
         end
 
-        task.wait(0.06)
+        task.wait(0.12)
     end
 end)
 
@@ -1576,7 +1627,7 @@ task.spawn(function()
             end)
         end
 
-        task.wait(0.06)
+        task.wait(0.12)
     end
 end)
 
