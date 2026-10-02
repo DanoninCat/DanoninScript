@@ -55,7 +55,7 @@ local State = {
     CapsuleTargets = {},
     CapsuleCursor = 0,
     StarBusy = false,
-    StarDelay = 0.65,
+    StarDelay = 0.05,
     SelectAllCapsules = false,
     StarBatchSize = 10,
     StarsOpened = 0,
@@ -858,8 +858,6 @@ local function processTraitOnce(manual)
             State.TraitCompleted[uuid] = true
         end
 
-        requestUnitRefresh(false)
-
         if not manual and allSelectedUnitsFinished() then
             stopAutoTraits("Finished selected characters")
             return
@@ -1591,6 +1589,28 @@ local function processStarOnce(manual)
     local label = selected[State.CapsuleCursor]
     local itemId = CapsuleMap[label]
 
+    local _, inventoryController =
+        resolveNativeStarUse(false)
+
+    if type(inventoryController) ~= "table" then
+        _, inventoryController =
+            resolveNativeStarUse(true)
+    end
+
+    local ownedCount =
+        type(inventoryController) == "table"
+        and readNativeItemCount(
+            inventoryController,
+            tostring(itemId)
+        )
+        or nil
+
+    if ownedCount ~= nil and ownedCount <= 0 then
+        setStarsStatus("Skipping empty: " .. label)
+        task.wait(0.01)
+        return
+    end
+
     if State.SkipStarAnimations then
         installStarVisualHooks()
     end
@@ -2142,27 +2162,27 @@ Tabs.Stars:AddInput("RE790_StarBatchSize", {
 if type(Tabs.Stars.AddSlider) == "function" then
     Tabs.Stars:AddSlider("RE790_StarDelay", {
         Title = "Time Between Openings",
-        Default = 0.65,
+        Default = 0.05,
         Min = 0.01,
         Max = 5,
         Rounding = 3,
         Callback = function(value)
             State.StarDelay = math.max(
                 0.01,
-                tonumber(value) or 0.65
+                tonumber(value) or 0.05
             )
         end,
     })
 else
     Tabs.Stars:AddInput("RE790_StarDelay", {
         Title = "Time Between Capsules",
-        Default = "0.65",
-        Placeholder = "0.65",
+        Default = "0.05",
+        Placeholder = "0.05",
         Numeric = true,
         Callback = function(value)
             State.StarDelay = math.max(
                 0.01,
-                tonumber(value) or 0.65
+                tonumber(value) or 0.05
             )
         end,
     })
@@ -2277,7 +2297,10 @@ task.spawn(function()
 
         if current - lastRefresh >= 6 then
             lastRefresh = current
-            requestUnitRefresh(false)
+
+            if not State.AutoTraits then
+                requestUnitRefresh(false)
+            end
         end
 
         task.wait(0.5)
