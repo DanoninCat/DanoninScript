@@ -49,11 +49,14 @@ local State = {
     TraitCursor = 0,
     TraitBusy = false,
     TraitCompleted = {},
+    TraitDelay = 0.08,
+    SelectAllUnits = false,
 
     CapsuleTargets = {},
     CapsuleCursor = 0,
     StarBusy = false,
     StarDelay = 0.65,
+    SelectAllCapsules = false,
     StarBatchSize = 10,
     StarsOpened = 0,
     SkipStarAnimations = true,
@@ -66,6 +69,7 @@ local State = {
 
 local WindowRef
 local UnitDropdown
+local CapsuleDropdown
 local AutoTraitToggle
 local AutoStarsToggle
 local TraitStatus
@@ -80,7 +84,7 @@ local DisabledStarConnections = {}
 local StarVisualHooksInstalled = false
 local UnitRefreshQueued = false
 local LastUnitUiRefresh = 0
-local UNIT_UI_REFRESH_INTERVAL = 0.75
+local UNIT_UI_REFRESH_INTERVAL = 3
 local NativeStarHandler
 local NativeStarController
 
@@ -567,6 +571,16 @@ local function refreshUnits(force)
     UnitMap = map
     UnitUUIDToLabel = reverse
 
+    if State.SelectAllUnits then
+        table.clear(State.SelectedUnits)
+        table.clear(previousSelected)
+
+        for _, uuid in pairs(map) do
+            State.SelectedUnits[uuid] = true
+            previousSelected[uuid] = true
+        end
+    end
+
     local selectedLabels = {}
 
     for uuid in pairs(previousSelected) do
@@ -577,14 +591,6 @@ local function refreshUnits(force)
         else
             State.SelectedUnits[uuid] = nil
             State.TraitCompleted[uuid] = nil
-        end
-    end
-
-    if next(State.SelectedUnits) == nil and values[1] then
-        local uuid = map[values[1]]
-        if uuid then
-            State.SelectedUnits[uuid] = true
-            selectedLabels[values[1]] = true
         end
     end
 
@@ -718,7 +724,7 @@ local function waitForTraitChange(uuid, before, timeout)
         if traitsFingerprint(traits) ~= before then
             return true, traits
         end
-        task.wait(0.08)
+        task.wait(0.025)
     until os.clock() >= deadline
     return false, currentTraits(uuid)
 end
@@ -764,11 +770,6 @@ local function processTraitOnce(manual)
     local uuid = nextTraitUUID()
 
     if not uuid then
-        refreshUnits(true)
-        uuid = nextTraitUUID()
-    end
-
-    if not uuid then
         setTraitStatus("Select at least one character")
         return
     end
@@ -786,8 +787,6 @@ local function processTraitOnce(manual)
 
     if not manual and matchesAnyTraitGoal(traits) then
         State.TraitCompleted[uuid] = true
-        requestUnitRefresh(false)
-
         if allSelectedUnitsFinished() then
             stopAutoTraits("Finished selected characters")
         else
@@ -823,7 +822,9 @@ local function processTraitOnce(manual)
 
     if not ok then
         setTraitStatus("Trait reroll is temporarily unavailable")
-        task.wait(0.8)
+        task.wait(
+            math.max(0.15, State.TraitDelay)
+        )
         return
     end
 
@@ -832,7 +833,9 @@ local function processTraitOnce(manual)
 
         if reason == "not_ready" then
             setTraitStatus("Waiting for the next reroll")
-            task.wait(0.35)
+            task.wait(
+                math.max(0.05, State.TraitDelay)
+            )
             return
         end
 
@@ -870,10 +873,14 @@ local function processTraitOnce(manual)
             .. summary
         )
 
-        task.wait(0.12)
+        task.wait(
+            math.max(0.01, State.TraitDelay)
+        )
     else
         setTraitStatus("Updating Trait state...")
-        task.wait(0.45)
+        task.wait(
+            math.max(0.05, State.TraitDelay)
+        )
     end
 end
 
@@ -899,7 +906,9 @@ local function rerollSelectedOnce()
         pcall(processTraitOnce, true)
 
         State.SelectedUnits = original
-        task.wait(0.12)
+        task.wait(
+            math.max(0.01, State.TraitDelay)
+        )
     end
 
     requestUnitRefresh(false)
@@ -1328,8 +1337,8 @@ local function waitNativeItemConsumption(
     if before == nil then
         task.wait(
             expected >= 10
-                and math.max(0.85, State.StarDelay)
-                or math.max(0.22, State.StarDelay)
+                and math.max(0.30, State.StarDelay)
+                or math.max(0.08, State.StarDelay)
         )
         return true, nil
     end
@@ -1351,11 +1360,11 @@ local function waitNativeItemConsumption(
         if current ~= nil
             and current <= before - expected
         then
-            task.wait(0.08)
+            task.wait(0.02)
             return true, current
         end
 
-        task.wait(0.06)
+        task.wait(0.02)
     until os.clock() >= deadline
 
     local current =
@@ -1469,6 +1478,10 @@ local function hideStarVisual(item)
     if name:find("hatch", 1, true)
         or name:find("itemreward", 1, true)
         or name:find("item_reward", 1, true)
+        or name:find("unitreward", 1, true)
+        or name:find("unit_reward", 1, true)
+        or name:find("capsuleopening", 1, true)
+        or name:find("openingresult", 1, true)
     then
         pcall(function()
             if item:IsA("ScreenGui") then
@@ -1489,37 +1502,44 @@ local function installStarVisualHooks()
 
     StarVisualHooksInstalled = true
 
-    local getConnections = rawget(Env, "getconnections")
-        or rawget(_G, "getconnections")
+    local getConnections =
+        executorGlobalFunction("getconnections")
 
     if type(getConnections) == "function" then
         local folder = getEndpointFolder("server_to_client")
 
-        for _, name in ipairs({
-            "show_item_hatch_effect",
-            "show_unit_and_item_rewards",
-        }) do
-            local remote = folder
-                and folder:FindFirstChild(name)
+        if folder then
+            for _, remote in ipairs(folder:GetChildren()) do
+                if remote:IsA("RemoteEvent") then
+                    local name =
+                        tostring(remote.Name or ""):lower()
 
-            if remote and remote:IsA("RemoteEvent") then
-                local ok, connections =
-                    pcall(
-                        getConnections,
-                        remote.OnClientEvent
-                    )
+                    local visualOnly =
+                        name:find("hatch", 1, true) ~= nil
+                        or name == "show_unit_and_item_rewards"
+                        or name == "show_item_rewards"
+                        or name == "show_unit_rewards"
 
-                if ok and type(connections) == "table" then
-                    for _, connection in ipairs(connections) do
-                        if type(connection.Disable) == "function" then
-                            local disabled = pcall(function()
-                                connection:Disable()
-                            end)
+                    if visualOnly then
+                        local ok, connections =
+                            pcall(
+                                getConnections,
+                                remote.OnClientEvent
+                            )
 
-                            if disabled then
-                                DisabledStarConnections[
-                                    #DisabledStarConnections + 1
-                                ] = connection
+                        if ok and type(connections) == "table" then
+                            for _, connection in ipairs(connections) do
+                                if type(connection.Disable) == "function" then
+                                    local disabled = pcall(function()
+                                        connection:Disable()
+                                    end)
+
+                                    if disabled then
+                                        DisabledStarConnections[
+                                            #DisabledStarConnections + 1
+                                        ] = connection
+                                    end
+                                end
                             end
                         end
                     end
@@ -1612,9 +1632,7 @@ local function processStarOnce(manual)
         -- never ten individual remote calls.
         if remaining > 0 then
             task.wait(
-                useTen
-                    and math.max(0.12, State.StarDelay)
-                    or math.max(0.08, State.StarDelay)
+                math.max(0.01, State.StarDelay)
             )
         end
     end
@@ -1633,7 +1651,7 @@ local function processStarOnce(manual)
     )
 
     task.wait(
-        math.max(0.05, State.StarDelay)
+        math.max(0.01, State.StarDelay)
     )
 end
 
@@ -1900,6 +1918,50 @@ UnitDropdown = Tabs.Traits:AddDropdown("RE790_Units", {
     end,
 })
 
+Tabs.Traits:AddToggle("RE790_SelectAllUnits", {
+    Title = "Select All Characters",
+    Default = false,
+    Callback = function(value)
+        State.SelectAllUnits = value == true
+        State.TraitCompleted = {}
+
+        if State.SelectAllUnits then
+            refreshUnits(false)
+
+            local labels = {}
+            table.clear(State.SelectedUnits)
+
+            for label, uuid in pairs(UnitMap) do
+                labels[label] = true
+                State.SelectedUnits[uuid] = true
+            end
+
+            if UnitDropdown and UnitDropdown.SetValue then
+                pcall(function()
+                    UnitDropdown:SetValue(labels)
+                end)
+            end
+
+            setTraitStatus(
+                string.format(
+                    "%d characters selected",
+                    #selectedUnitUUIDs()
+                )
+            )
+        else
+            table.clear(State.SelectedUnits)
+
+            if UnitDropdown and UnitDropdown.SetValue then
+                pcall(function()
+                    UnitDropdown:SetValue({})
+                end)
+            end
+
+            setTraitStatus("Select characters")
+        end
+    end,
+})
+
 Tabs.Traits:AddButton({
     Title = "Refresh Characters",
     Icon = "solar/refresh-bold",
@@ -1927,6 +1989,35 @@ Tabs.Traits:AddDropdown("RE790_TraitSource", {
         State.TraitSource = value or "Tokens"
     end,
 })
+
+if type(Tabs.Traits.AddSlider) == "function" then
+    Tabs.Traits:AddSlider("RE790_TraitDelay", {
+        Title = "Time Between Trait Rerolls",
+        Default = 0.08,
+        Min = 0.01,
+        Max = 2,
+        Rounding = 3,
+        Callback = function(value)
+            State.TraitDelay = math.max(
+                0.01,
+                tonumber(value) or 0.08
+            )
+        end,
+    })
+else
+    Tabs.Traits:AddInput("RE790_TraitDelay", {
+        Title = "Time Between Trait Rerolls",
+        Default = "0.08",
+        Placeholder = "0.08",
+        Numeric = true,
+        Callback = function(value)
+            State.TraitDelay = math.max(
+                0.01,
+                tonumber(value) or 0.08
+            )
+        end,
+    })
+end
 
 Tabs.Traits:AddDropdown("RE790_TraitTargets", {
     Title = "Wanted Traits",
@@ -1991,7 +2082,7 @@ StarsStatus = Tabs.Stars:AddParagraph({
     Content = "Uses the game's native Use 10 flow; larger amounts run in native x10 chunks"
 })
 
-Tabs.Stars:AddDropdown("RE790_Capsules", {
+CapsuleDropdown = Tabs.Stars:AddDropdown("RE790_Capsules", {
     Title = "Capsules",
     Values = CapsuleValues,
     Multi = true,
@@ -1999,6 +2090,39 @@ Tabs.Stars:AddDropdown("RE790_Capsules", {
     DropdownOutsideWindow = true,
     Callback = function(value)
         copySelection(State.CapsuleTargets, value)
+    end,
+})
+
+Tabs.Stars:AddToggle("RE790_SelectAllCapsules", {
+    Title = "Select All Capsules",
+    Default = false,
+    Callback = function(value)
+        State.SelectAllCapsules = value == true
+        table.clear(State.CapsuleTargets)
+
+        local labels = {}
+
+        if State.SelectAllCapsules then
+            for _, label in ipairs(CapsuleValues) do
+                State.CapsuleTargets[label] = true
+                labels[label] = true
+            end
+        end
+
+        if CapsuleDropdown and CapsuleDropdown.SetValue then
+            pcall(function()
+                CapsuleDropdown:SetValue(labels)
+            end)
+        end
+
+        setStarsStatus(
+            State.SelectAllCapsules
+                and string.format(
+                    "%d capsules selected",
+                    #CapsuleValues
+                )
+                or "Select capsules"
+        )
     end,
 })
 
@@ -2019,12 +2143,12 @@ if type(Tabs.Stars.AddSlider) == "function" then
     Tabs.Stars:AddSlider("RE790_StarDelay", {
         Title = "Time Between Openings",
         Default = 0.65,
-        Min = 0.05,
+        Min = 0.01,
         Max = 5,
-        Rounding = 2,
+        Rounding = 3,
         Callback = function(value)
             State.StarDelay = math.max(
-                0.05,
+                0.01,
                 tonumber(value) or 0.65
             )
         end,
@@ -2037,7 +2161,7 @@ else
         Numeric = true,
         Callback = function(value)
             State.StarDelay = math.max(
-                0.05,
+                0.01,
                 tonumber(value) or 0.65
             )
         end,
@@ -2045,7 +2169,7 @@ else
 end
 
 Tabs.Stars:AddToggle("RE790_SkipStarAnimations", {
-    Title = "Skip Opening Animations",
+    Title = "Block Opening Animations",
     Default = true,
     Callback = function(value)
         setSkipStarAnimations(value == true)
@@ -2182,7 +2306,7 @@ task.spawn(function()
             end)
         end
 
-        task.wait(0.12)
+        task.wait(0.03)
     end
 end)
 
@@ -2208,7 +2332,7 @@ task.spawn(function()
             end)
         end
 
-        task.wait(0.12)
+        task.wait(0.03)
     end
 end)
 
