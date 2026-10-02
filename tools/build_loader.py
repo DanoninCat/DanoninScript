@@ -6,6 +6,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 PAYLOADS = {
+    105596644794991: {
+        "raw_file": "UntitledDefense105/Main.lua",
+        "default_key": 211,
+    },
     79073563583903: {
         "raw_file": "ReAdventures790/Main.lua",
         "default_key": 197,
