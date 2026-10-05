@@ -11,6 +11,10 @@ local VirtualUser = game:GetService("VirtualUser")
 local HttpService = game:GetService("HttpService")
 local CollectionService = game:GetService("CollectionService")
 local LocalPlayer = Players.LocalPlayer
+local StateManager
+pcall(function()
+    StateManager = require(ReplicatedStorage:WaitForChild("Omni"):WaitForChild("Utils"):WaitForChild("StateManager"))
+end)
 local Env = (getgenv and getgenv()) or _G
 local LOADER_COMMAND = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Loader/Loader.lua", true))()]]
 
@@ -59,16 +63,21 @@ local State = {
     AutoFarm = false,
     FarmTarget = nil,
     FarmTargetTeleported = false,
+    FarmTargetEngaged = false,
     AutoQuestWorlds = false,
     QuestTarget = nil,
     QuestTargetTeleported = false,
+    QuestTargetEngaged = false,
     NextQuestAction = 0,
     SelectedIsland = nil,
     ReturnPosition = nil,
     AutoReturn = false,
-    LastAutoReturn = 0,
+    PendingAutoReturn = false,
     AutoDungeon = false,
     AutoTrial = false,
+    AutoLeaveWave = false,
+    LeaveWave = 10,
+    LeaveTriggeredSession = nil,
     WasInGamemode = false,
     LastJoinCheck = {Dungeon = 0, Trial = 0},
     LastDoorScan = 0,
@@ -76,6 +85,7 @@ local State = {
     AutoStars = false,
     StarRequest = 0,
     NextStarRoll = 0,
+    StarNativeRequestedAt = 0,
     SelectedGacha = nil,
     AutoGacha = false,
     GachaRequest = 0,
@@ -288,6 +298,7 @@ local function refreshNPCs(force)
         LastNPCSignature = signature
         State.FarmTarget = nil
         State.FarmTargetTeleported = false
+        State.FarmTargetEngaged = false
         local dropdown = Controls.NPCs
         if dropdown and dropdown.SetValues then
             local selected = {}
@@ -298,7 +309,10 @@ local function refreshNPCs(force)
             end
             pcall(function()
                 dropdown:SetValues(names)
-                dropdown:SetValue(selected)
+                dropdown:SetValue({})
+                if next(selected) ~= nil then
+                    dropdown:SetValue(selected)
+                end
             end)
         end
     end
@@ -326,11 +340,22 @@ local function getEnemyPosition(enemy)
 end
 
 local function enemyValid(enemy, useSelection, wantedName)
-    if not enemy or not enemy.Parent then
+    if not enemy or not enemy.Parent or not enemy:IsA("BasePart") or not enemy:IsDescendantOf(workspace) then
         return false
     end
-    if enemy:GetAttribute("Died") == true or enemy:GetAttribute("Shielded") == true then
+    if enemy:GetAttribute("Died") == true then
         return false
+    end
+    local active = Omni.Data.Gamemode
+    local session = Omni.Data.GamemodeSession
+    if type(active) == "string" and active ~= "" and session ~= nil and session ~= "" then
+        if enemy:GetAttribute("SessionID") ~= session or enemy:GetAttribute("Gamemode") ~= active then
+            return false
+        end
+    else
+        if enemy:GetAttribute("SessionID") ~= nil or enemy:GetAttribute("MapName") ~= currentMap() then
+            return false
+        end
     end
     local name = enemyName(enemy)
     if not name then
@@ -377,7 +402,8 @@ local function attackEnemy(enemy, teleportOnce)
     local cf = getEnemyPosition(enemy)
     local root = getRoot()
     if teleportOnce and root and cf then
-        root.CFrame = cf * CFrame.new(0, 4, 2)
+        root.CFrame = cf * CFrame.new(0, 0, 3)
+        task.wait()
     end
     local fighterIds = {}
     local okFighters, available = pcall(function()
@@ -386,18 +412,29 @@ local function attackEnemy(enemy, teleportOnce)
     if okFighters and type(available) == "table" then
         fighterIds = available
     end
+    local assigned = false
     if #fighterIds > 0 then
-        invoke("General", "Combat", "FighterAttack", id, fighterIds)
+        local sending = fighterIds
+        if not (Omni.Data.Settings and Omni.Data.Settings["Send All Fighters"] == true) then
+            sending = {fighterIds[1]}
+        end
+        local ok, result = invoke("General", "Combat", "FighterAttack", id, sending)
+        assigned = ok and result ~= false
     end
     fire("General", "Combat", "PlayerAttack")
-    return true
+    return assigned
+end
+
+local function resetFarmTarget()
+    State.FarmTarget = nil
+    State.FarmTargetTeleported = false
+    State.FarmTargetEngaged = false
 end
 
 local function farmStep(useSelection)
     local target = State.FarmTarget
     if not enemyValid(target, useSelection, nil) then
-        State.FarmTarget = nil
-        State.FarmTargetTeleported = false
+        resetFarmTarget()
         target = findEnemy(useSelection)
         if target then
             State.FarmTarget = target
@@ -406,14 +443,19 @@ local function farmStep(useSelection)
     if not target then
         return false
     end
+    if State.FarmTargetEngaged then
+        return true
+    end
     local firstAttack = State.FarmTargetTeleported ~= true
     local attacked = attackEnemy(target, firstAttack)
-    if attacked and firstAttack then
+    if firstAttack then
         State.FarmTargetTeleported = true
     end
+    if attacked then
+        State.FarmTargetEngaged = true
+    end
     if not enemyValid(target, useSelection, nil) then
-        State.FarmTarget = nil
-        State.FarmTargetTeleported = false
+        resetFarmTarget()
     end
     return attacked
 end
@@ -454,6 +496,7 @@ end
 local function resetQuestTarget()
     State.QuestTarget = nil
     State.QuestTargetTeleported = false
+    State.QuestTargetEngaged = false
 end
 
 local function questFarmEnemy(name)
@@ -468,10 +511,16 @@ local function questFarmEnemy(name)
     if not target then
         return false
     end
+    if State.QuestTargetEngaged then
+        return true
+    end
     local firstAttack = State.QuestTargetTeleported ~= true
     local attacked = attackEnemy(target, firstAttack)
-    if attacked and firstAttack then
+    if firstAttack then
         State.QuestTargetTeleported = true
+    end
+    if attacked then
+        State.QuestTargetEngaged = true
     end
     if not enemyValid(target, false, name) then
         resetQuestTarget()
@@ -587,7 +636,7 @@ local function openNearbyDungeonDoors()
     end
 end
 
-local function findGamemode(kind)
+local function gamemodeCandidates(kind)
     local candidates = {}
     for name, info in pairs(Omni.Shared.Gamemodes.List or {}) do
         if type(info) == "table" and info.Type == kind then
@@ -603,7 +652,7 @@ local function findGamemode(kind)
         end
         return av < bv
     end)
-    return candidates[1]
+    return candidates
 end
 
 local function tryJoinGamemode(kind)
@@ -612,27 +661,20 @@ local function tryJoinGamemode(kind)
         return false
     end
     State.LastJoinCheck[kind] = os.clock()
-    local mode = findGamemode(kind)
-    if not mode then
-        return false
-    end
     local active = Omni.Data.Gamemode
-    if active == mode.Name then
-        return true
-    end
     if type(active) == "string" and active ~= "" then
         return false
     end
-    if mode.Info.MapName and currentMap() ~= mode.Info.MapName then
-        teleportMap(mode.Info.MapName)
-        return false
-    end
-    local ok, preview = invoke("General", "Gamemodes", "Preview", mode.Name)
-    if ok and type(preview) == "table" and preview.Status == "Opened" then
-        local closesAt = tonumber(preview.EntryClosesAt)
-        if not closesAt or workspace:GetServerTimeNow() < closesAt then
-            local joinedOk, joined = invoke("General", "Gamemodes", "Join", mode.Name)
-            return joinedOk and joined ~= false
+    for _, mode in ipairs(gamemodeCandidates(kind)) do
+        if not mode.Info.MapName or ownsMap(mode.Info.MapName) then
+            local ok, preview = invoke("General", "Gamemodes", "Preview", mode.Name)
+            if ok and type(preview) == "table" and preview.GamemodeName == mode.Name and preview.Status == "Opened" then
+                local closesAt = tonumber(preview.EntryClosesAt)
+                if not closesAt or workspace:GetServerTimeNow() < closesAt then
+                    local joinedOk, joined = invoke("General", "Gamemodes", "Join", mode.Name)
+                    return joinedOk and joined ~= false
+                end
+            end
         end
     end
     return false
@@ -643,13 +685,128 @@ local function gamemodeKind(name)
     return info and info.Type or nil
 end
 
-local function starStep()
-    local name = State.SelectedStar
-    if type(name) ~= "string" or not Omni.Shared.Stars.List[name] then
+local function getGamemodeState()
+    if not StateManager then
+        return nil
+    end
+    local name = Omni.Data.Gamemode
+    local session = Omni.Data.GamemodeSession
+    local info = type(name) == "string" and Omni.Shared.Gamemodes.List[name] or nil
+    if not info or type(session) ~= "string" or session == "" then
+        return nil
+    end
+    local client = workspace:FindFirstChild("Client")
+    local maps = client and client:FindFirstChild("Maps")
+    local map = maps and maps:FindFirstChild(info.MapName or currentMap() or "")
+    local sessions = map and map:FindFirstChild("GamemodeSessions")
+    local holder = sessions and sessions:FindFirstChild(session)
+    if not holder then
+        return nil
+    end
+    local ok, manager = pcall(StateManager.Get, holder)
+    if ok then
+        return manager
+    end
+    return nil
+end
+
+local function currentGamemodeProgress(kind)
+    local manager = getGamemodeState()
+    if not manager or type(manager.GetState) ~= "function" then
+        return nil
+    end
+    local key = kind == "Dungeon" and "RoomsCleared" or "CurrentWave"
+    local ok, value = pcall(function()
+        return manager:GetState(key)
+    end)
+    if ok and type(value) == "number" then
+        return value
+    end
+    return nil
+end
+
+local function autoLeaveGamemode(kind)
+    if not State.AutoLeaveWave or (tonumber(State.LeaveWave) or 0) <= 0 then
         return false
     end
-    if os.clock() < State.NextStarRoll then
+    local session = Omni.Data.GamemodeSession
+    if type(session) ~= "string" or session == "" or State.LeaveTriggeredSession == session then
         return false
+    end
+    local progress = currentGamemodeProgress(kind)
+    if type(progress) == "number" and progress >= State.LeaveWave then
+        State.LeaveTriggeredSession = session
+        fire("General", "Gamemodes", "Leave")
+        return true
+    end
+    return false
+end
+
+local function starController()
+    return Omni.Scripts and Omni.Scripts.Interface and Omni.Scripts.Interface.Stars
+end
+
+local function stopNativeStars()
+    local controller = starController()
+    if not controller then
+        return
+    end
+    if type(controller.CancelAutoRoll) == "function" then
+        pcall(controller.CancelAutoRoll)
+    end
+    if type(controller.CloseUI) == "function" then
+        pcall(controller.CloseUI)
+    end
+end
+
+local function requestNativeStars()
+    local name = State.SelectedStar
+    local info = type(name) == "string" and Omni.Shared.Stars.List[name] or nil
+    local controller = starController()
+    if not info or not controller then
+        return false
+    end
+    local remoteAccess = Omni.Data.Gamepasses and Omni.Data.Gamepasses["Remote Access"] == true
+    if not remoteAccess or not ownsMap(info.MapName) then
+        return false
+    end
+    if type(controller.OpenUI) ~= "function" or type(controller.StartAutoRoll) ~= "function" then
+        return false
+    end
+    State.StarNativeRequestedAt = os.clock()
+    local ok = pcall(function()
+        controller.OpenUI(name, true)
+        controller.StartAutoRoll()
+    end)
+    if not ok then
+        return false
+    end
+    if type(controller.IsAutoRolling) == "function" then
+        local checkOk, active = pcall(controller.IsAutoRolling)
+        return checkOk and active == true
+    end
+    return true
+end
+
+local function starStep()
+    local name = State.SelectedStar
+    if type(name) ~= "string" or not Omni.Shared.Stars.List[name] or os.clock() < State.NextStarRoll then
+        return false
+    end
+    local controller = State.AutoStars and starController() or nil
+    if controller and type(controller.IsAutoRolling) == "function" then
+        local ok, active = pcall(controller.IsAutoRolling)
+        if ok and active == true then
+            State.NextStarRoll = os.clock() + 0.5
+            return true
+        end
+    end
+    if State.AutoStars and State.StarNativeRequestedAt <= 0 then
+        if requestNativeStars() then
+            State.NextStarRoll = os.clock() + 0.5
+            return true
+        end
+        State.StarNativeRequestedAt = os.clock()
     end
     local freeSlots = 1
     pcall(function()
@@ -657,25 +814,18 @@ local function starStep()
         freeSlots = free
     end)
     if type(freeSlots) == "number" and freeSlots <= 0 then
-        State.AutoStars = false
-        if Controls.AutoStars and Controls.AutoStars.SetValue then
-            pcall(function() Controls.AutoStars:SetValue(false) end)
-        end
-        notify("Inventário cheio; Auto Stars foi parado")
         return false
     end
-    local amount = 1
     local cooldown = 3.5
     pcall(function()
-        amount = math.max(1, math.floor(Omni.Utils.PlayerStats.MaxStarOpens(Omni.Data, Omni.Instance)))
         local speed = Omni.Utils.PlayerStats.StarOpenSpeed(Omni.Data, Omni.Instance)
         if type(speed) == "number" and speed > 0 then
             cooldown = 3.5 / speed
         end
     end)
     State.StarRequest = State.StarRequest + 1
-    fire("General", "Stars", "Roll", name, amount, State.StarRequest)
-    State.NextStarRoll = os.clock() + math.max(0.15, cooldown + 0.08)
+    fire("General", "Stars", "Roll", name, 1, State.StarRequest)
+    State.NextStarRoll = os.clock() + math.max(0.2, cooldown + 0.08)
     return true
 end
 
@@ -756,13 +906,13 @@ local function gachaStep()
     if not info or os.clock() < State.NextGachaRoll then
         return false
     end
-    if not canPay(info.Price) then
-        State.AutoGacha = false
-        if Controls.AutoGacha and Controls.AutoGacha.SetValue then
-            pcall(function() Controls.AutoGacha:SetValue(false) end)
+    local controller = State.AutoGacha and Omni.Scripts and Omni.Scripts.Interface and Omni.Scripts.Interface.Gacha or nil
+    if controller and type(controller.Resume) == "function" then
+        local ok = pcall(controller.Resume, name)
+        if ok then
+            State.NextGachaRoll = os.clock() + 2
+            return true
         end
-        notify("Saldo insuficiente; Auto Gacha foi parado")
-        return false
     end
     local cooldown = 2
     pcall(function()
@@ -770,8 +920,15 @@ local function gachaStep()
     end)
     State.GachaRequest = State.GachaRequest + 1
     fire("General", "Gacha", "Roll", name, nil, State.GachaRequest)
-    State.NextGachaRoll = os.clock() + math.max(0.12, (tonumber(cooldown) or 2) + 0.08)
+    State.NextGachaRoll = os.clock() + math.max(0.2, (tonumber(cooldown) or 2) + 0.08)
     return true
+end
+
+local function stopNativeGacha()
+    local controller = Omni.Scripts and Omni.Scripts.Interface and Omni.Scripts.Interface.Gacha
+    if controller and type(controller.Stop) == "function" then
+        pcall(controller.Stop)
+    end
 end
 
 local function equipBest()
@@ -822,15 +979,6 @@ local function applyAnimationVisibility(enabled)
     invoke("General", "Settings", "Set", "Hide Gacha Animation", enabled == true)
 end
 
-local function closeGameFrames()
-    if not State.AutoCloseUI then
-        return
-    end
-    pcall(function()
-        Omni.Frame:CloseAll()
-    end)
-end
-
 local function closeScriptWindow()
     if not State.AutoCloseUI or not WindowRef or ScriptWindowAutoClosed then
         return
@@ -849,8 +997,7 @@ local function claimLevelRewards()
     local levelData = Omni.Data.Level
     local shared = Omni.Shared.PlayerLevel and Omni.Shared.PlayerLevel.List
     if type(levelData) ~= "table" or type(shared) ~= "table" or type(shared.Rewards) ~= "table" then
-        return
-    end
+        return    end
     local current = tonumber(levelData.Amount) or 0
     local claimed = levelData.Rewards or {}
     for _, reward in ipairs(shared.Rewards) do
@@ -930,7 +1077,10 @@ local function refreshFighters(force)
             end
             pcall(function()
                 Controls.Fighters:SetValues(values)
-                Controls.Fighters:SetValue(selectedLabels)
+                Controls.Fighters:SetValue({})
+                if next(selectedLabels) ~= nil then
+                    Controls.Fighters:SetValue(selectedLabels)
+                end
             end)
         end
     end
@@ -997,7 +1147,8 @@ local function traitStep()
                     pcall(function() Controls.AutoTraits:SetValue(false) end)
                 end
                 notify("Trait Shards insuficientes; Auto Traits foi parado")
-                return false            end
+                return false
+            end
             local cooldown = 2
             pcall(function()
                 cooldown = Omni.Utils.PlayerStats.TraitsCooldown(Omni.Data, Omni.Instance)
@@ -1150,6 +1301,8 @@ local function configSnapshot()
         ReturnPosition = cframeToArray(State.ReturnPosition),
         AutoDungeon = State.AutoDungeon,
         AutoTrial = State.AutoTrial,
+        AutoLeaveWave = State.AutoLeaveWave,
+        LeaveWave = State.LeaveWave,
         SelectedStar = State.SelectedStar,
         AutoStars = State.AutoStars,
         SelectedGacha = State.SelectedGacha,
@@ -1215,6 +1368,8 @@ local function applyConfig(data)
     if cf then State.ReturnPosition = cf end
     if type(data.AutoDungeon) == "boolean" then setControl("AutoDungeon", data.AutoDungeon) end
     if type(data.AutoTrial) == "boolean" then setControl("AutoTrial", data.AutoTrial) end
+    if type(data.AutoLeaveWave) == "boolean" then setControl("AutoLeaveWave", data.AutoLeaveWave) end
+    if type(data.LeaveWave) == "number" then setControl("LeaveWave", tostring(data.LeaveWave)) end
     if type(data.SelectedStar) == "string" then setControl("Star", data.SelectedStar) end
     if type(data.AutoStars) == "boolean" then setControl("AutoStars", data.AutoStars) end
     if type(data.SelectedGacha) == "string" then setControl("Gacha", data.SelectedGacha) end
@@ -1403,8 +1558,8 @@ Controls.NPCs = Tabs.Farm:AddDropdown("CE106_NPCs", {
     Title = "NPCs",
     Values = {},
     Multi = true,
-    Default = {},
-    DropdownOutsideWindow = true,
+    Default = nil,
+    DropdownOutsideWindow = false,
     Callback = function(value)
         table.clear(State.SelectedNPCs)
         if type(value) == "table" then
@@ -1418,8 +1573,7 @@ Controls.NPCs = Tabs.Farm:AddDropdown("CE106_NPCs", {
         elseif type(value) == "string" then
             State.SelectedNPCs[value] = true
         end
-        State.FarmTarget = nil
-        State.FarmTargetTeleported = false
+        resetFarmTarget()
     end,
 })
 Tabs.Farm:AddButton({
@@ -1434,8 +1588,7 @@ Controls.AutoFarm = Tabs.Farm:AddToggle("CE106_AutoFarm", {
     Default = false,
     Callback = function(value)
         State.AutoFarm = value == true
-        State.FarmTarget = nil
-        State.FarmTargetTeleported = false
+        resetFarmTarget()
         if State.AutoFarm and State.AutoQuestWorlds and Controls.AutoQuestWorlds and Controls.AutoQuestWorlds.SetValue then
             pcall(function()
                 Controls.AutoQuestWorlds:SetValue(false)
@@ -1455,12 +1608,12 @@ Controls.AutoQuestWorlds = Tabs.Farm:AddToggle("CE106_AutoQuestWorlds", {
 })
 
 local mapValues = orderedMaps()
-State.SelectedIsland = mapValues[1]
+State.SelectedIsland = nil
 Controls.Island = Tabs.Travel:AddDropdown("CE106_Island", {
     Title = "Island",
     Values = mapValues,
-    Default = State.SelectedIsland,
-    DropdownOutsideWindow = true,
+    Default = nil,
+    DropdownOutsideWindow = false,
     Callback = function(value)
         State.SelectedIsland = value
     end,
@@ -1474,33 +1627,6 @@ Tabs.Travel:AddButton({
         end
     end,
 })
-Tabs.Travel:AddSection("Position")
-Tabs.Travel:AddButton({
-    Title = "Set Position",
-    Icon = "solar/map-point-add-bold",
-    Callback = savePosition,
-})
-Tabs.Travel:AddButton({
-    Title = "Return Position",
-    Icon = "solar/rewind-back-bold",
-    Callback = function()
-        if not returnPosition() then
-            notify("Nenhuma posição salva")
-        end
-    end,
-})
-Controls.AutoReturn = Tabs.Travel:AddToggle("CE106_AutoReturn", {
-    Title = "Auto Return Position",
-    Default = false,
-    Callback = function(value)
-        State.AutoReturn = value == true
-        State.LastAutoReturn = 0
-        if State.AutoReturn then
-            returnPosition()
-        end
-    end,
-})
-
 Controls.AutoDungeon = Tabs.Modes:AddToggle("CE106_AutoDungeon", {
     Title = "Auto Dungeons",
     Default = false,
@@ -1517,16 +1643,67 @@ Controls.AutoTrial = Tabs.Modes:AddToggle("CE106_AutoTrial", {
         State.LastJoinCheck.Trial = 0
     end,
 })
+Tabs.Modes:AddSection("Return")
+Tabs.Modes:AddButton({
+    Title = "Save Position",
+    Icon = "solar/map-point-add-bold",
+    Callback = savePosition,
+})
+Tabs.Modes:AddButton({
+    Title = "Return Position",
+    Icon = "solar/rewind-back-bold",
+    Callback = function()
+        if not returnPosition() then
+            notify("Nenhuma posição salva")
+        end
+    end,
+})
+Controls.AutoReturn = Tabs.Modes:AddToggle("CE106_AutoReturn", {
+    Title = "Auto Return Position",
+    Default = false,
+    Callback = function(value)
+        State.AutoReturn = value == true
+        if not State.AutoReturn then
+            State.PendingAutoReturn = false
+        end
+    end,
+})
+Tabs.Modes:AddSection("Auto Leave")
+Controls.LeaveWave = Tabs.Modes:AddInput("CE106_LeaveWave", {
+    Title = "Leave At Wave / Room",
+    Default = tostring(State.LeaveWave),
+    Placeholder = "10",
+    Numeric = true,
+    Finished = true,
+    Callback = function(value)
+        State.LeaveWave = math.max(1, math.floor(tonumber(value) or 10))
+    end,
+})
+Controls.AutoLeaveWave = Tabs.Modes:AddToggle("CE106_AutoLeaveWave", {
+    Title = "Auto Leave Wave",
+    Default = false,
+    Callback = function(value)
+        State.AutoLeaveWave = value == true
+        State.LeaveTriggeredSession = nil
+    end,
+})
 local starValues = orderedStars()
-State.SelectedStar = starValues[1]
+State.SelectedStar = nil
 Controls.Star = Tabs.Stars:AddDropdown("CE106_Star", {
     Title = "Star",
     Values = starValues,
-    Default = State.SelectedStar,
-    DropdownOutsideWindow = true,
+    Default = nil,
+    DropdownOutsideWindow = false,
     Callback = function(value)
+        if State.AutoStars then
+            stopNativeStars()
+        end
         State.SelectedStar = value
         State.NextStarRoll = 0
+        State.StarNativeRequestedAt = 0
+        if State.AutoStars and type(value) == "string" then
+            task.defer(requestNativeStars)
+        end
     end,
 })
 Controls.AutoStars = Tabs.Stars:AddToggle("CE106_AutoStars", {
@@ -1535,9 +1712,12 @@ Controls.AutoStars = Tabs.Stars:AddToggle("CE106_AutoStars", {
     Callback = function(value)
         State.AutoStars = value == true
         State.NextStarRoll = 0
+        State.StarNativeRequestedAt = 0
         if State.AutoStars then
             applyAnimationVisibility(true)
-            closeGameFrames()
+            task.defer(requestNativeStars)
+        else
+            stopNativeStars()
         end
         if State.AutoStars and State.AutoGacha then
             setControl("AutoGacha", false)
@@ -1554,12 +1734,12 @@ Tabs.Stars:AddButton({
 })
 
 local gachaValues = orderedGachas()
-State.SelectedGacha = gachaValues[1]
+State.SelectedGacha = nil
 Controls.Gacha = Tabs.Gacha:AddDropdown("CE106_Gacha", {
     Title = "Machine",
     Values = gachaValues,
-    Default = State.SelectedGacha,
-    DropdownOutsideWindow = true,
+    Default = nil,
+    DropdownOutsideWindow = false,
     Callback = function(value)
         State.SelectedGacha = value
         State.NextGachaRoll = 0
@@ -1573,7 +1753,9 @@ Controls.AutoGacha = Tabs.Gacha:AddToggle("CE106_AutoGacha", {
         State.NextGachaRoll = 0
         if State.AutoGacha then
             applyAnimationVisibility(true)
-            closeGameFrames()
+            task.defer(gachaStep)
+        else
+            stopNativeGacha()
         end
         if State.AutoGacha and State.AutoStars then
             setControl("AutoStars", false)
@@ -1613,8 +1795,8 @@ Controls.Fighters = Tabs.Traits:AddDropdown("CE106_Fighters", {
     Title = "Fighters",
     Values = {},
     Multi = true,
-    Default = {},
-    DropdownOutsideWindow = true,
+    Default = nil,
+    DropdownOutsideWindow = false,
     Callback = function(value)
         table.clear(State.SelectedFighters)
         if type(value) == "table" then
@@ -1647,8 +1829,8 @@ Controls.TraitTargets = Tabs.Traits:AddDropdown("CE106_TraitTargets", {
     Title = "Wanted Traits",
     Values = orderedTraits(),
     Multi = true,
-    Default = {},
-    DropdownOutsideWindow = true,
+    Default = nil,
+    DropdownOutsideWindow = false,
     Callback = function(value)
         table.clear(State.TraitTargets)
         if type(value) == "table" then
@@ -1679,8 +1861,8 @@ Controls.Upgrades = Tabs.Upgrade:AddDropdown("CE106_Upgrades", {
     Title = "Upgrades",
     Values = orderedUpgrades(),
     Multi = true,
-    Default = {},
-    DropdownOutsideWindow = true,
+    Default = nil,
+    DropdownOutsideWindow = false,
     Callback = function(value)
         table.clear(State.SelectedUpgrades)
         if type(value) == "table" then
@@ -1755,10 +1937,7 @@ Controls.AutoCloseUI = Tabs.Settings:AddToggle("CE106_AutoCloseUI", {
         State.AutoCloseUI = value == true
         if not State.AutoCloseUI then
             ScriptWindowAutoClosed = false
-        end
-        applyAnimationVisibility(State.AutoCloseUI)
-        if State.AutoCloseUI then
-            closeGameFrames()
+        else
             task.defer(closeScriptWindow)
         end
     end,
@@ -1776,7 +1955,7 @@ Tabs.Settings:AddDropdown("CE106_Theme", {
     Title = "Theme",
     Values = Fluent.Themes,
     Default = "Dark",
-    DropdownOutsideWindow = true,
+    DropdownOutsideWindow = false,
     Callback = function(value)
         pcall(function() Fluent:SetTheme(value) end)
     end,
@@ -1797,7 +1976,7 @@ Controls.ConfigProfiles = Tabs.Configs:AddDropdown("CE106_ConfigProfiles", {
     Title = "Saved Profiles",
     Values = {},
     Default = nil,
-    DropdownOutsideWindow = true,
+    DropdownOutsideWindow = false,
     Callback = function(value)
         if type(value) == "string" and value ~= "" then
             State.ActiveProfile = value
@@ -1817,8 +1996,7 @@ Tabs.Configs:AddButton({
 })
 Tabs.Configs:AddButton({
     Title = "Create Profile",
-    Icon = "solar/add-circle-bold",
-    Callback = function()
+    Icon = "solar/add-circle-bold",    Callback = function()
         local name = cleanProfileName(State.ProfileName)
         if isfile and isfile(configPath(name)) then
             notify("Profile já existe: " .. name)
@@ -1889,7 +2067,9 @@ local function cleanup()
     State.AutoDungeon = false
     State.AutoTrial = false
     State.AutoStars = false
+    pcall(stopNativeStars)
     State.AutoGacha = false
+    pcall(stopNativeGacha)
     State.AutoTraits = false
     State.AutoUpgrade = false
     pcall(function()
@@ -1979,7 +2159,6 @@ end
 task.spawn(function()
     local lastNPCRefresh = 0
     local lastFighterRefresh = 0
-    local lastClose = 0
     while State.Running do
         local now = os.clock()
         if now - lastNPCRefresh >= 1 then
@@ -1989,19 +2168,6 @@ task.spawn(function()
         if now - lastFighterRefresh >= 3 then
             lastFighterRefresh = now
             pcall(refreshFighters, false)
-        end
-        if State.AutoCloseUI and now - lastClose >= 0.2 then
-            lastClose = now
-            pcall(closeGameFrames)
-        end
-        if State.AutoReturn
-            and State.ReturnPosition
-            and not State.AutoFarm            and not State.AutoQuestWorlds
-            and not Omni.Data.Gamemode
-            and now - State.LastAutoReturn >= 0.4
-        then
-            State.LastAutoReturn = now
-            pcall(returnPosition)
         end
         task.wait(0.1)
     end
@@ -2014,15 +2180,26 @@ task.spawn(function()
         local inHandledMode = kind == "Dungeon" or kind == "Trial"
         if inHandledMode then
             State.WasInGamemode = true
-            pcall(openNearbyDungeonDoors)
-            pcall(farmStep, false)
+            State.PendingAutoReturn = false
+            pcall(autoLeaveGamemode, kind)
+            if kind == "Dungeon" and State.AutoDungeon then
+                pcall(openNearbyDungeonDoors)
+            end
+            local enabled = (kind == "Dungeon" and State.AutoDungeon)
+                or (kind == "Trial" and State.AutoTrial)
+            if enabled then
+                pcall(farmStep, false)
+            end
         else
             if State.WasInGamemode then
                 State.WasInGamemode = false
-                State.FarmTarget = nil
-                State.FarmTargetTeleported = false
-                if State.AutoReturn and State.ReturnPosition then
-                    task.delay(0.5, returnPosition)
+                State.LeaveTriggeredSession = nil
+                resetFarmTarget()
+                State.PendingAutoReturn = State.AutoReturn and typeof(State.ReturnPosition) == "CFrame"
+            end
+            if State.PendingAutoReturn and State.AutoReturn and not Omni.Data.Gamemode then
+                if returnPosition() then
+                    State.PendingAutoReturn = false
                 end
             end
             if State.AutoDungeon then
@@ -2052,10 +2229,10 @@ end)
 
 task.spawn(function()
     while State.Running do
-        if State.AutoGacha then
+        if State.AutoGacha and os.clock() >= State.NextGachaRoll then
             pcall(gachaStep)
         end
-        task.wait(0.08)
+        task.wait(0.25)
     end
 end)
 
@@ -2093,7 +2270,5 @@ task.spawn(function()
 end)
 
 if State.AutoCloseUI then
-    applyAnimationVisibility(true)
-    task.defer(closeGameFrames)
     task.defer(closeScriptWindow)
 end
