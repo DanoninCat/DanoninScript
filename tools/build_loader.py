@@ -14,6 +14,10 @@ PAYLOADS = {
         "raw_file": "ReAdventures790/Main.lua",
         "default_key": 197,
     },
+    106198175232796: {
+        "remote_file": "Game106/Main.lua",
+        "default_key": 149,
+    },
     93466613073564: {
         "raw_file": "ScopedV2/Main.lua",
         "default_key": 173,
@@ -21,6 +25,9 @@ PAYLOADS = {
 }
 
 def payload(spec):
+    remote_file = spec.get("remote_file")
+    if remote_file:
+        return ('loadstring(game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/' + remote_file + '", true))()').encode()
     raw_file = spec.get("raw_file")
     if raw_file:
         return (ROOT / raw_file).read_text().encode()
