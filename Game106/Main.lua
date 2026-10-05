@@ -323,6 +323,46 @@ local function isSelectedNPC(name)
     return next(State.SelectedNPCs) ~= nil and State.SelectedNPCs[name] == true
 end
 
+local function syncNPCSelectionFromControl()
+    local control = Controls.NPCs
+    local value = control and control.Value
+    if type(value) ~= "table" and type(value) ~= "string" then
+        return
+    end
+    table.clear(State.SelectedNPCs)
+    if type(value) == "string" then
+        if value ~= "" then
+            State.SelectedNPCs[value] = true
+        end
+        return
+    end
+    for key, item in pairs(value) do
+        if type(key) == "string" and item == true then
+            State.SelectedNPCs[key] = true
+        elseif type(item) == "string" then
+            State.SelectedNPCs[item] = true
+        end
+    end
+end
+
+local function selectedStarName()
+    local control = Controls.Star
+    local value = control and control.Value
+    if type(value) == "string" and value ~= "" then
+        State.SelectedStar = value
+    end
+    return State.SelectedStar
+end
+
+local function selectedGachaName()
+    local control = Controls.Gacha
+    local value = control and control.Value
+    if type(value) == "string" and value ~= "" then
+        State.SelectedGacha = value
+    end
+    return State.SelectedGacha
+end
+
 local function getEnemyPosition(enemy)
     local id = enemy:GetAttribute("EnemyID")
     if type(id) == "string" and Omni.Utils and Omni.Utils.Enemies then
@@ -343,7 +383,7 @@ local function enemyValid(enemy, useSelection, wantedName)
     if not enemy or not enemy.Parent or not enemy:IsA("BasePart") or not enemy:IsDescendantOf(workspace) then
         return false
     end
-    if enemy:GetAttribute("Died") == true then
+    if enemy:GetAttribute("Died") == true or enemy:GetAttribute("Shielded") == true then
         return false
     end
     local active = Omni.Data.Gamemode
@@ -403,26 +443,71 @@ local function attackEnemy(enemy, teleportOnce)
     local root = getRoot()
     if teleportOnce and root and cf then
         root.CFrame = cf * CFrame.new(0, 0, 3)
-        task.wait()
+        task.wait(0.18)
     end
-    local fighterIds = {}
-    local okFighters, available = pcall(function()
+
+    local function isAssigned()
+        local okTargets, targets = pcall(function()
+            return Omni.Utils.PlayerStats.GetFighterTargets(Omni.Data, Omni.Instance)
+        end)
+        if okTargets and type(targets) == "table" then
+            for _, targetId in pairs(targets) do
+                if targetId == id then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    if isAssigned() then
+        return true
+    end
+
+    local okAvailable, available = pcall(function()
         return Omni.Utils.PlayerStats.GetAvailableFightersForTarget(id, Omni.Data, Omni.Instance)
     end)
-    if okFighters and type(available) == "table" then
-        fighterIds = available
+    if not okAvailable or type(available) ~= "table" or next(available) == nil then
+        return isAssigned()
     end
-    local assigned = false
-    if #fighterIds > 0 then
-        local sending = fighterIds
-        if not (Omni.Data.Settings and Omni.Data.Settings["Send All Fighters"] == true) then
-            sending = {fighterIds[1]}
+
+    local nativeController
+    pcall(function()
+        local enemies = Omni.Scripts and Omni.Scripts.Rendering and Omni.Scripts.Rendering.Enemies
+        if enemies and type(enemies.Get) == "function" then
+            nativeController = enemies.Get(id)
         end
-        local ok, result = invoke("General", "Combat", "FighterAttack", id, sending)
-        assigned = ok and result ~= false
+    end)
+
+    local called = false
+    if nativeController and type(nativeController.Clicked) == "function" then
+        called = pcall(function()
+            nativeController:Clicked()
+        end)
+    else
+        local sending = available
+        if not (Omni.Data.Settings and Omni.Data.Settings["Send All Fighters"] == true) then
+            sending = {available[1]}
+        end
+        called = select(1, invoke("General", "Combat", "FighterAttack", id, sending))
     end
-    fire("General", "Combat", "PlayerAttack")
-    return assigned
+
+    if called then
+        task.wait(0.08)
+    end
+    if isAssigned() then
+        return true
+    end
+
+    local sending = available
+    if not (Omni.Data.Settings and Omni.Data.Settings["Send All Fighters"] == true) then
+        sending = {available[1]}
+    end
+    local okInvoke = select(1, invoke("General", "Combat", "FighterAttack", id, sending))
+    if okInvoke then
+        task.wait(0.08)
+    end
+    return isAssigned()
 end
 
 local function resetFarmTarget()
@@ -432,6 +517,12 @@ local function resetFarmTarget()
 end
 
 local function farmStep(useSelection)
+    if useSelection then
+        syncNPCSelectionFromControl()
+        if next(State.SelectedNPCs) == nil then
+            return false
+        end
+    end
     local target = State.FarmTarget
     if not enemyValid(target, useSelection, nil) then
         resetFarmTarget()
@@ -760,7 +851,7 @@ local function stopNativeStars()
 end
 
 local function requestNativeStars()
-    local name = State.SelectedStar
+    local name = selectedStarName()
     local info = type(name) == "string" and Omni.Shared.Stars.List[name] or nil
     local controller = starController()
     if not info or not controller then
@@ -789,7 +880,7 @@ local function requestNativeStars()
 end
 
 local function starStep()
-    local name = State.SelectedStar
+    local name = selectedStarName()
     if type(name) ~= "string" or not Omni.Shared.Stars.List[name] or os.clock() < State.NextStarRoll then
         return false
     end
@@ -901,21 +992,12 @@ local function canPay(price)
 end
 
 local function gachaStep()
-    local name = State.SelectedGacha
+    local name = selectedGachaName()
     local info = name and Omni.Shared.Gacha.List[name]
     if not info or os.clock() < State.NextGachaRoll then
         return false
     end
-    local controller = State.AutoGacha and Omni.Scripts and Omni.Scripts.Interface and Omni.Scripts.Interface.Gacha or nil
-    if controller and type(controller.Resume) == "function" then
-        local ok = pcall(controller.Resume, name)
-        if ok then
-            State.NextGachaRoll = os.clock() + 2
-            return true
-        end
-    end
-    local cooldown = 2
-    pcall(function()
+    local cooldown = 2    pcall(function()
         cooldown = Omni.Utils.PlayerStats.GachaCooldown(Omni.Data, Omni.Instance, name)
     end)
     State.GachaRequest = State.GachaRequest + 1
@@ -997,7 +1079,8 @@ local function claimLevelRewards()
     local levelData = Omni.Data.Level
     local shared = Omni.Shared.PlayerLevel and Omni.Shared.PlayerLevel.List
     if type(levelData) ~= "table" or type(shared) ~= "table" or type(shared.Rewards) ~= "table" then
-        return    end
+        return
+    end
     local current = tonumber(levelData.Amount) or 0
     local claimed = levelData.Rewards or {}
     for _, reward in ipairs(shared.Rewards) do
@@ -1168,14 +1251,31 @@ local function traitStep()
 end
 
 local UPGRADE_SYSTEM = "Adventurer Upgrades"
+local UPGRADE_VALUES = {
+    "Player Damage",
+    "Fighter Damage",
+    "Yen",
+    "Player Exp",
+    "Drops",
+    "Luck",
+    "Gacha Luck",
+    "Attack Range",
+}
 
 local function orderedUpgrades()
-    local system = Omni.Shared.Upgrade.List[UPGRADE_SYSTEM]
+    local upgrade = Omni.Shared and Omni.Shared.Upgrade
+    local list = type(upgrade) == "table" and upgrade.List or nil
+    local system = type(list) == "table" and list[UPGRADE_SYSTEM] or nil
     local rows = {}
-    if system and type(system.Upgrades) == "table" then
+    if type(system) == "table" and type(system.Upgrades) == "table" then
         for name, info in pairs(system.Upgrades) do
-            rows[#rows + 1] = {Name = name, Index = tonumber(info.Index) or 999}
+            if type(name) == "string" and type(info) == "table" then
+                rows[#rows + 1] = {Name = name, Index = tonumber(info.Index) or 999}
+            end
         end
+    end
+    if #rows == 0 then
+        return table.clone(UPGRADE_VALUES)
     end
     table.sort(rows, function(a, b)
         if a.Index == b.Index then
@@ -1194,7 +1294,9 @@ local function upgradeStep()
     if os.clock() < State.NextUpgrade then
         return false
     end
-    local system = Omni.Shared.Upgrade.List[UPGRADE_SYSTEM]
+    local upgrade = Omni.Shared and Omni.Shared.Upgrade
+    local list = type(upgrade) == "table" and upgrade.List or nil
+    local system = type(list) == "table" and list[UPGRADE_SYSTEM] or nil
     if not system then
         return false
     end
@@ -1221,12 +1323,12 @@ local function upgradeStep()
         local info = system.Upgrades[name]
         local level = 0
         pcall(function()
-            level = Omni.Shared.Upgrade.GetCurrentLevel(UPGRADE_SYSTEM, name, Omni.Data)
+            level = upgrade.GetCurrentLevel(UPGRADE_SYSTEM, name, Omni.Data)
         end)
         if level < info.MaxLevel then
             local nextInfo
             pcall(function()
-                nextInfo = Omni.Shared.Upgrade.GetLevelInformation(UPGRADE_SYSTEM, name, level + 1)
+                nextInfo = upgrade.GetLevelInformation(UPGRADE_SYSTEM, name, level + 1)
             end)
             if nextInfo and canPay(nextInfo.Price) then
                 fire("General", "Upgrade", "Upgrade", UPGRADE_SYSTEM, name)
@@ -1711,6 +1813,7 @@ Controls.AutoStars = Tabs.Stars:AddToggle("CE106_AutoStars", {
     Default = false,
     Callback = function(value)
         State.AutoStars = value == true
+        selectedStarName()
         State.NextStarRoll = 0
         State.StarNativeRequestedAt = 0
         if State.AutoStars then
@@ -1750,6 +1853,7 @@ Controls.AutoGacha = Tabs.Gacha:AddToggle("CE106_AutoGacha", {
     Default = false,
     Callback = function(value)
         State.AutoGacha = value == true
+        selectedGachaName()
         State.NextGachaRoll = 0
         if State.AutoGacha then
             applyAnimationVisibility(true)
@@ -1892,8 +1996,7 @@ Tabs.Upgrade:AddButton({
 Controls.AutoUpgrade = Tabs.Upgrade:AddToggle("CE106_AutoUpgrade", {
     Title = "Auto Adventures Upgrade",
     Default = false,
-    Callback = function(value)
-        State.AutoUpgrade = value == true
+    Callback = function(value)        State.AutoUpgrade = value == true
         State.NextUpgrade = 0
     end,
 })
@@ -1996,7 +2099,8 @@ Tabs.Configs:AddButton({
 })
 Tabs.Configs:AddButton({
     Title = "Create Profile",
-    Icon = "solar/add-circle-bold",    Callback = function()
+    Icon = "solar/add-circle-bold",
+    Callback = function()
         local name = cleanProfileName(State.ProfileName)
         if isfile and isfile(configPath(name)) then
             notify("Profile já existe: " .. name)
