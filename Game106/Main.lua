@@ -325,12 +325,68 @@ local function recheckNativeEnemies()
     end)
 end
 
+local function preloadWorldEnemyDefinitions()
+    pcall(function()
+        local omniFolder = ReplicatedStorage:FindFirstChild("Omni")
+        local sharedFolder = omniFolder and omniFolder:FindFirstChild("Shared")
+        local mapsFolder = sharedFolder and sharedFolder:FindFirstChild("Maps")
+        if not mapsFolder then
+            return
+        end
+        for _, mapFolder in ipairs(mapsFolder:GetChildren()) do
+            local enemiesModule = mapFolder:FindFirstChild("Enemies")
+            if enemiesModule and enemiesModule:IsA("ModuleScript") then
+                pcall(require, enemiesModule)
+            end
+        end
+    end)
+end
+
+local function detectedWorldMap()
+    local root = getRoot()
+    local candidates = {}
+    for _, enemy in ipairs(CollectionService:GetTagged("Enemy")) do
+        if enemy:IsA("BasePart") and enemy:IsDescendantOf(workspace) and enemy:GetAttribute("SessionID") == nil then
+            local mapName = enemy:GetAttribute("MapName")
+            if type(mapName) == "string" and mapName ~= "" and Omni.Shared.Maps and Omni.Shared.Maps.List and Omni.Shared.Maps.List[mapName] then
+                local row = candidates[mapName]
+                if not row then
+                    row = {Count = 0, Distance = math.huge}
+                    candidates[mapName] = row
+                end
+                row.Count = row.Count + 1
+                if root then
+                    local distance = (root.Position - enemy.Position).Magnitude
+                    if distance < row.Distance then
+                        row.Distance = distance
+                    end
+                end
+            end
+        end
+    end
+    local current = currentMap()
+    if not root and current and candidates[current] then
+        return current
+    end
+    local bestName, bestDistance, bestCount
+    for mapName, row in pairs(candidates) do
+        local distance = row.Distance or math.huge
+        local count = row.Count or 0
+        if not bestName or distance < bestDistance or (distance == bestDistance and count > bestCount) then
+            bestName = mapName
+            bestDistance = distance
+            bestCount = count
+        end
+    end
+    return bestName or current
+end
+
 local function refreshNPCs(force)
-    local here = currentMap()
+    local here = detectedWorldMap()
     if not here then
         if force then
             task.spawn(function()
-                local resolved = waitForCurrentMap(15)
+                local resolved = detectedWorldMap() or waitForCurrentMap(15)
                 if resolved and State.Running then
                     ensureMapEnemyDefinitions(resolved)
                     recheckNativeEnemies()
@@ -496,7 +552,7 @@ local function enemyValid(enemy, useSelection, wantedName)
             return false
         end
     else
-        if enemy:GetAttribute("SessionID") ~= nil or enemy:GetAttribute("MapName") ~= currentMap() then
+        if enemy:GetAttribute("SessionID") ~= nil or enemy:GetAttribute("MapName") ~= detectedWorldMap() then
             return false
         end
     end
@@ -977,29 +1033,28 @@ local function requestNativeStars()
     local name = selectedStarName()
     local info = type(name) == "string" and Omni.Shared.Stars.List[name] or nil
     local controller = starController()
-    if not info or not controller then
+    if not info or not controller or not ownsMap(info.MapName) then
         return false
     end
-    local remoteAccess = Omni.Data.Gamepasses and Omni.Data.Gamepasses["Remote Access"] == true
-    if not remoteAccess or not ownsMap(info.MapName) then
-        return false
-    end
-    if type(controller.OpenUI) ~= "function" or type(controller.StartAutoRoll) ~= "function" then
+    if type(controller.Resume) ~= "function" or type(controller.RefreshCloseStars) ~= "function" then
         return false
     end
     State.StarNativeRequestedAt = os.clock()
-    local ok = pcall(function()
-        controller.OpenUI(name, true)
-        controller.StartAutoRoll()
-    end)
+    local ok = pcall(controller.Resume, name)
     if not ok then
         return false
     end
-    if type(controller.IsAutoRolling) == "function" then
-        local checkOk, active = pcall(controller.IsAutoRolling)
-        return checkOk and active == true
+    for _ = 1, 4 do
+        pcall(controller.RefreshCloseStars)
+        if type(controller.IsAutoRolling) == "function" then
+            local checkOk, active = pcall(controller.IsAutoRolling)
+            if checkOk and active == true then
+                return true
+            end
+        end
+        task.wait(0.05)
     end
-    return true
+    return false
 end
 
 local function starStep()
@@ -1015,7 +1070,7 @@ local function starStep()
             return true
         end
     end
-    if State.AutoStars and State.StarNativeRequestedAt <= 0 then
+    if State.AutoStars and (State.StarNativeRequestedAt <= 0 or os.clock() - State.StarNativeRequestedAt >= 1) then
         if requestNativeStars() then
             State.NextStarRoll = os.clock() + 0.5
             return true
@@ -1269,13 +1324,13 @@ local function refreshFighters(force)
     local fighters = Omni.Data.Fighters and Omni.Data.Fighters.List or {}
     local ordered = {}
     for id, fighter in pairs(fighters) do
-        if type(id) == "string" and type(fighter) == "table" then
+        if id ~= nil and type(fighter) == "table" and type(fighter.Name) == "string" then
             ordered[#ordered + 1] = {ID = id, Fighter = fighter, Name = fighterDisplayName(fighter)}
         end
     end
     table.sort(ordered, function(a, b)
         if a.Name == b.Name then
-            return a.ID < b.ID
+            return tostring(a.ID) < tostring(b.ID)
         end
         return a.Name < b.Name
     end)
@@ -1815,9 +1870,9 @@ local Window = Fluent:CreateWindow({
 })
 WindowRef = Window
 
-local function addVisibleTab(title)
+local function addVisibleTab(title, icon)
     local ok, tab = pcall(function()
-        return Window:AddTab({Title = title})
+        return Window:AddTab({Title = title, Icon = icon})
     end)
     if ok and tab then
         return tab
@@ -1826,17 +1881,17 @@ local function addVisibleTab(title)
 end
 
 local Tabs = {}
-Tabs.Farm = addVisibleTab("Farm")
-Tabs.Travel = addVisibleTab("Travel")
-Tabs.Modes = addVisibleTab("Dungeons")
-Tabs.Stars = addVisibleTab("Stars")
-Tabs.Gacha = addVisibleTab("Gachas")
-Tabs.Team = addVisibleTab("Team")
-Tabs.Traits = addVisibleTab("Traits")
-Tabs.Upgrade = addVisibleTab("Upgrades")
-Tabs.Rewards = addVisibleTab("Rewards")
-Tabs.Settings = addVisibleTab("Settings")
-Tabs.Configs = addVisibleTab("Profiles")
+Tabs.Farm = addVisibleTab("Farm", "solar/refresh-bold")
+Tabs.Travel = addVisibleTab("Travel", "solar/map-arrow-right-bold")
+Tabs.Modes = addVisibleTab("Dungeons", "solar/cup-star-bold")
+Tabs.Stars = addVisibleTab("Stars", "solar/stars-bold")
+Tabs.Gacha = addVisibleTab("Gachas", "solar/refresh-bold")
+Tabs.Team = addVisibleTab("Team", "solar/checklist-minimalistic-bold")
+Tabs.Traits = addVisibleTab("Traits", "solar/stars-bold")
+Tabs.Upgrade = addVisibleTab("Upgrades", "solar/add-circle-bold")
+Tabs.Rewards = addVisibleTab("Rewards", "solar/gift-bold")
+Tabs.Settings = addVisibleTab("Settings", "solar/checklist-minimalistic-bold")
+Tabs.Configs = Tabs.Settings
 
 local function normalizeTabNavigation()
     pcall(function()
@@ -1899,7 +1954,17 @@ Tabs.Farm:AddButton({
     Title = "Refresh NPCs",
     Icon = "solar/refresh-bold",
     Callback = function()
-        refreshNPCs(true)
+        task.spawn(function()
+            preloadWorldEnemyDefinitions()
+            for _ = 1, 20 do
+                recheckNativeEnemies()
+                local values = refreshNPCs(true)
+                if #values > 0 then
+                    return
+                end
+                task.wait(0.25)
+            end
+        end)
     end,
 })
 Controls.AutoFarm = Tabs.Farm:AddToggle("CE106_AutoFarm", {
@@ -2115,6 +2180,30 @@ local function startCoreWorkers()
     end
     State.CoreWorkersStarted = true
 
+    preloadWorldEnemyDefinitions()
+
+    pcall(function()
+        local connection = Omni:OnDataChanged({"Fighters", "List"}, function()
+            task.defer(function()
+                refreshFighters(true)
+            end)
+        end)
+        if connection then
+            Connections[#Connections + 1] = connection
+        end
+    end)
+
+    pcall(function()
+        local connection = Omni:OnDataChanged({"Fighters"}, function()
+            task.defer(function()
+                refreshFighters(true)
+            end)
+        end)
+        if connection then
+            Connections[#Connections + 1] = connection
+        end
+    end)
+
     pcall(function()
         local connection = Omni:OnDataChanged({"Maps"}, function()
             task.defer(function()
@@ -2280,7 +2369,15 @@ Tabs.Traits:AddButton({
     Title = "Refresh Fighters",
     Icon = "solar/refresh-bold",
     Callback = function()
-        refreshFighters(true)
+        task.spawn(function()
+            for _ = 1, 20 do
+                local values = refreshFighters(true)
+                if #values > 0 then
+                    return
+                end
+                task.wait(0.25)
+            end
+        end)
     end,
 })
 Controls.TraitTargets = Tabs.Traits:AddDropdown("CE106_TraitTargets", {
@@ -2428,9 +2525,9 @@ uiSafe("Settings", function()
     })
 end)
 
-uiSafe("Profiles", function()
-    Tabs.Configs:AddSection("Profiles")
-    Controls.ProfileName = Tabs.Configs:AddInput("CE106_ProfileName", {
+uiSafe("Settings Profiles", function()
+    Tabs.Settings:AddSection("Profiles")
+    Controls.ProfileName = Tabs.Settings:AddInput("CE106_ProfileName", {
         Title = "Profile Name",
         Default = State.ProfileName,
         Placeholder = "Profile",
@@ -2440,7 +2537,7 @@ uiSafe("Profiles", function()
             State.ProfileName = cleanProfileName(value)
         end,
     })
-    Controls.ConfigProfiles = Tabs.Configs:AddDropdown("CE106_ConfigProfiles", {
+    Controls.ConfigProfiles = Tabs.Settings:AddDropdown("CE106_ConfigProfiles", {
         Title = "Saved Profiles",
         Values = {},
         Default = nil,
@@ -2455,12 +2552,12 @@ uiSafe("Profiles", function()
             end
         end,
     })
-    Tabs.Configs:AddButton({
+    Tabs.Settings:AddButton({
         Title = "Refresh Profiles",
         Icon = "solar/refresh-bold",
         Callback = function() refreshConfigs(true) end,
     })
-    Tabs.Configs:AddButton({
+    Tabs.Settings:AddButton({
         Title = "Create Profile",
         Icon = "solar/add-circle-bold",
         Callback = function()
@@ -2472,26 +2569,26 @@ uiSafe("Profiles", function()
             if saveConfig(name) then refreshConfigs(true) end
         end,
     })
-    Tabs.Configs:AddButton({
+    Tabs.Settings:AddButton({
         Title = "Save Profile",
         Icon = "solar/diskette-bold",
         Callback = function()
             if saveConfig(State.ActiveProfile or State.ProfileName) then refreshConfigs(true) end
         end,
     })
-    Tabs.Configs:AddButton({
+    Tabs.Settings:AddButton({
         Title = "Load Profile",
         Icon = "solar/folder-open-bold",
         Callback = function() loadConfig(State.ActiveProfile or State.ProfileName, false) end,
     })
-    Tabs.Configs:AddButton({
+    Tabs.Settings:AddButton({
         Title = "Delete Profile",
         Icon = "solar/trash-bin-trash-bold",
         Callback = function()
             if deleteConfig(State.ActiveProfile or State.ProfileName) then refreshConfigs(true) end
         end,
     })
-    Controls.AutoLoadConfig = Tabs.Configs:AddToggle("CE106_AutoLoadConfig", {
+    Controls.AutoLoadConfig = Tabs.Settings:AddToggle("CE106_AutoLoadConfig", {
         Title = "Auto Load Config",
         Default = false,
         Callback = function(value)
@@ -2509,7 +2606,7 @@ uiSafe("Profiles", function()
             end
         end,
     })
-    Tabs.Configs:AddButton({
+    Tabs.Settings:AddButton({
         Title = "Unload CAT EMPIRE",
         Icon = "solar/power-bold",
         Callback = function()
@@ -2595,6 +2692,8 @@ if promptOverlay then
     end)
 end
 
+preloadWorldEnemyDefinitions()
+recheckNativeEnemies()
 refreshNPCs(true)
 refreshFighters(true)
 refreshConfigs(true)
