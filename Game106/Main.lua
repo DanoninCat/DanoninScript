@@ -1815,20 +1815,64 @@ local Window = Fluent:CreateWindow({
 })
 WindowRef = Window
 
-local Tabs = {
-    Farm = Window:AddTab({Title = "Farm", Icon = "solar/target-bold"}),
-    Travel = Window:AddTab({Title = "Travel", Icon = "solar/map-point-bold"}),
-    Modes = Window:AddTab({Title = "Dungeons", Icon = "solar/shield-bold"}),
-    Stars = Window:AddTab({Title = "Stars", Icon = "solar/stars-bold"}),
-    Gacha = Window:AddTab({Title = "Gachas", Icon = "solar/widget-4-bold"}),
-    Team = Window:AddTab({Title = "Team", Icon = "solar/users-group-rounded-bold"}),
-    Traits = Window:AddTab({Title = "Traits", Icon = "solar/magic-stick-3-bold"}),
-    Upgrade = Window:AddTab({Title = "Upgrades", Icon = "solar/graph-up-bold"}),
-    Rewards = Window:AddTab({Title = "Rewards", Icon = "solar/gift-bold"}),
-    Settings = Window:AddTab({Title = "Settings", Icon = "solar/settings-bold"}),
-    Configs = Window:AddTab({Title = "Profiles", Icon = "solar/diskette-bold"}),
-}
+local function addVisibleTab(title)
+    local ok, tab = pcall(function()
+        return Window:AddTab({Title = title})
+    end)
+    if ok and tab then
+        return tab
+    end
+    error("tab creation failed: " .. tostring(title))
+end
 
+local Tabs = {}
+Tabs.Farm = addVisibleTab("Farm")
+Tabs.Travel = addVisibleTab("Travel")
+Tabs.Modes = addVisibleTab("Dungeons")
+Tabs.Stars = addVisibleTab("Stars")
+Tabs.Gacha = addVisibleTab("Gachas")
+Tabs.Team = addVisibleTab("Team")
+Tabs.Traits = addVisibleTab("Traits")
+Tabs.Upgrade = addVisibleTab("Upgrades")
+Tabs.Rewards = addVisibleTab("Rewards")
+Tabs.Settings = addVisibleTab("Settings")
+Tabs.Configs = addVisibleTab("Profiles")
+
+local function normalizeTabNavigation()
+    pcall(function()
+        local api = Window.TabsAPI
+        if api and type(api.Tabs) == "table" then
+            for index, tab in ipairs(api.Tabs) do
+                if tab.Frame then
+                    tab.Frame.Visible = true
+                    tab.Frame.LayoutOrder = index
+                end
+                tab._origOrder = index
+            end
+            api.ListOrderCounter = #api.Tabs
+        end
+        local holder = Window.TabHolder
+        local container = Window.TabListContainer
+        if holder then
+            holder.ScrollingEnabled = true
+            holder.ScrollBarThickness = 4
+            holder.CanvasPosition = Vector2.new(0, 0)
+        end
+        if holder and container then
+            local layout = container:FindFirstChildWhichIsA("UIListLayout")
+            if layout then
+                holder.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20)
+            end
+        end
+    end)
+end
+
+normalizeTabNavigation()
+task.defer(normalizeTabNavigation)
+task.delay(0.5, normalizeTabNavigation)
+task.delay(1.5, normalizeTabNavigation)
+
+uiSafe("Farm", function()
 Controls.NPCs = Tabs.Farm:AddDropdown("CE106_NPCs", {
     Title = "NPCs",
     Values = {},
@@ -1881,7 +1925,9 @@ Controls.AutoQuestWorlds = Tabs.Farm:AddToggle("CE106_AutoQuestWorlds", {
         setAutoQuestWorlds(value == true)
     end,
 })
+end)
 
+uiSafe("Travel", function()
 local mapValues = orderedMaps()
 State.SelectedIsland = nil
 Controls.Island = Tabs.Travel:AddDropdown("CE106_Island", {
@@ -1902,6 +1948,9 @@ Tabs.Travel:AddButton({
         end
     end,
 })
+end)
+
+uiSafe("Dungeons", function()
 Controls.AutoDungeon = Tabs.Modes:AddToggle("CE106_AutoDungeon", {
     Title = "Auto Dungeons",
     Default = false,
@@ -1962,6 +2011,9 @@ Controls.AutoLeaveWave = Tabs.Modes:AddToggle("CE106_AutoLeaveWave", {
         State.LeaveTriggeredSession = nil
     end,
 })
+end)
+
+uiSafe("Stars", function()
 local starValues = orderedStars()
 State.SelectedStar = nil
 Controls.Star = Tabs.Stars:AddDropdown("CE106_Star", {
@@ -2008,7 +2060,9 @@ Tabs.Stars:AddButton({
         task.spawn(starStep)
     end,
 })
+end)
 
+uiSafe("Gachas", function()
 local gachaValues = orderedGachas()
 State.SelectedGacha = nil
 Controls.Gacha = Tabs.Gacha:AddDropdown("CE106_Gacha", {
@@ -2053,6 +2107,7 @@ Tabs.Gacha:AddButton({
         task.spawn(gachaRollOnce)
     end,
 })
+end)
 
 local function startCoreWorkers()
     if State.CoreWorkersStarted then
@@ -2171,6 +2226,7 @@ end
 
 startCoreWorkers()
 
+uiSafe("Team", function()
 Tabs.Team:AddParagraph({
     Title = "Best Team",
     Content = "Mantém os melhores Fighters e a melhor Weapon equipados.",
@@ -2190,7 +2246,9 @@ Controls.AutoEquipBest = Tabs.Team:AddToggle("CE106_AutoEquipBest", {
         State.LastBestEquip = 0
     end,
 })
+end)
 
+uiSafe("Traits", function()
 Controls.Fighters = Tabs.Traits:AddDropdown("CE106_Fighters", {
     Title = "Fighters",
     Values = {},
@@ -2256,6 +2314,7 @@ Controls.AutoTraits = Tabs.Traits:AddToggle("CE106_AutoTraits", {
         State.TraitCursor = 0
     end,
 })
+end)
 
 uiSafe("Upgrades", function()
     Tabs.Upgrade:AddSection("Adventurer Upgrades")
