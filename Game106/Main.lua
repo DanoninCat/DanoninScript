@@ -86,6 +86,10 @@ local State = {
     LastJoinCheck = {Dungeon = 0, Trial = 0},
     LastDoorScan = 0,
     LastDungeonDoorKey = nil,
+    DungeonDoorAttempts = {},
+    DungeonDoorPhase = nil,
+    DungeonDoorRetryAt = 0,
+    LastLeaveAttempt = 0,
     SelectedStar = nil,
     AutoStars = false,
     StarRequest = 0,
@@ -559,6 +563,9 @@ local function enemyValid(enemy, useSelection, wantedName)
     if enemy:GetAttribute("Died") == true then
         return false
     end
+    if enemy:GetAttribute("Shielded") == true then
+        return false
+    end
     local data = enemy:FindFirstChild("Data")
     local health = data and data:FindFirstChild("Health")
     if health and tonumber(health.Value) and health.Value <= 0 then
@@ -627,6 +634,71 @@ local function fightersAssignedToEnemy(id)
     return false
 end
 
+local function safeCharacterTeleport(targetCF, standDistance)
+    local character = LocalPlayer.Character
+    local root = getRoot()
+    if not character or not root or typeof(targetCF) ~= "CFrame" then
+        return false
+    end
+    standDistance = tonumber(standDistance) or 5
+    local targetPos = targetCF.Position
+    local flat = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
+    if flat.Magnitude < 0.1 then
+        local look = targetCF.LookVector
+        flat = Vector3.new(-look.X, 0, -look.Z)
+    end
+    if flat.Magnitude < 0.1 then
+        flat = Vector3.new(0, 0, 1)
+    end
+    flat = flat.Unit
+    local candidate = targetPos + flat * standDistance + Vector3.new(0, 8, 0)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local ignored = {character}
+    for _, enemyPart in ipairs(CollectionService:GetTagged("Enemy")) do
+        ignored[#ignored + 1] = enemyPart
+    end
+    params.FilterDescendantsInstances = ignored
+    params.IgnoreWater = true
+    local hit = workspace:Raycast(candidate + Vector3.new(0, 20, 0), Vector3.new(0, -80, 0), params)
+    local halfHeight = math.max(2.5, root.Size.Y * 0.5 + 1.5)
+    local safeY = targetPos.Y + 4
+    if hit then
+        safeY = hit.Position.Y + halfHeight
+    end
+    local safePos = Vector3.new(candidate.X, safeY, candidate.Z)
+    local lookAt = Vector3.new(targetPos.X, safePos.Y, targetPos.Z)
+    if (lookAt - safePos).Magnitude < 0.05 then
+        lookAt = safePos + Vector3.new(0, 0, -1)
+    end
+    local destination = CFrame.lookAt(safePos, lookAt)
+    local ok = pcall(function()
+        character:PivotTo(destination)
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+    if not ok then
+        return false
+    end
+    task.wait(0.08)
+    root = getRoot()
+    if root and (root.Position.Y < safeY - 6 or (root.Position - targetPos).Magnitude > math.max(standDistance + 18, 28)) then
+        pcall(function()
+            character:PivotTo(destination + Vector3.new(0, 2.5, 0))
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+    return true
+end
+
+local function safeTeleportToPart(part, distance)
+    if not part or not part:IsA("BasePart") then
+        return false
+    end
+    return safeCharacterTeleport(part.CFrame, distance or 3)
+end
+
 local function attackEnemy(enemy, teleportOnce)
     if not enemyValid(enemy, false, nil) then
         return false
@@ -635,14 +707,10 @@ local function attackEnemy(enemy, teleportOnce)
     if type(id) ~= "string" or id == "" then
         return false
     end
-    if enemy:GetAttribute("Shielded") == true then
-        return false
-    end
     local cf = getEnemyPosition(enemy)
-    local root = getRoot()
-    if teleportOnce and root and cf then
-        root.CFrame = cf * CFrame.new(0, 0, 3)
-        task.wait(0.18)
+    if teleportOnce and cf then
+        safeCharacterTeleport(cf, 5)
+        task.wait(0.1)
     end
     if fightersAssignedToEnemy(id) then
         return true
@@ -936,54 +1004,84 @@ local function aliveGamemodeEnemyCount()
     return count
 end
 
-local function findDungeonDoorPrompt()
+local function collectDungeonDoorPrompts()
     local root = getRoot()
-    local best, bestDistance
+    local rows = {}
+    local session = tostring(Omni.Data.GamemodeSession or "")
     for _, item in ipairs(workspace:GetDescendants()) do
-        if item:IsA("ProximityPrompt") and item.Enabled then
+        if item:IsA("ProximityPrompt") and item.Enabled and item:IsDescendantOf(workspace) then
             local room = item:GetAttribute("RoomIndex") or (item.Parent and item.Parent:GetAttribute("RoomIndex"))
             local child = item:GetAttribute("ChildIndex") or (item.Parent and item.Parent:GetAttribute("ChildIndex"))
             if type(room) == "number" and type(child) == "number" then
                 local holder = item.Parent
                 local part = holder and (holder:IsA("BasePart") and holder or holder:FindFirstAncestorWhichIsA("BasePart"))
-                local distance = math.huge
-                if root and part then
-                    distance = (root.Position - part.Position).Magnitude
-                end
-                if not best or distance < bestDistance then
-                    best = {Prompt = item, Part = part, Room = room, Child = child}
-                    bestDistance = distance
+                if part then
+                    local distance = root and (root.Position - part.Position).Magnitude or math.huge
+                    if distance <= 120 then
+                        local key = table.concat({session, tostring(room), tostring(child)}, ":")
+                        rows[#rows + 1] = {
+                            Prompt = item,
+                            Part = part,
+                            Room = room,
+                            Child = child,
+                            Key = key,
+                            Distance = distance,
+                            TriedAt = State.DungeonDoorAttempts[key],
+                        }
+                    end
                 end
             end
         end
     end
-    return best
+    table.sort(rows, function(a, b)
+        local aTried = a.TriedAt ~= nil
+        local bTried = b.TriedAt ~= nil
+        if aTried ~= bTried then
+            return not aTried
+        end
+        if aTried and bTried and a.TriedAt ~= b.TriedAt then
+            return a.TriedAt < b.TriedAt
+        end
+        return a.Distance < b.Distance
+    end)
+    return rows
 end
 
 local function dungeonDoorStep()
-    if os.clock() - State.LastDoorScan < 0.25 then
+    if os.clock() - State.LastDoorScan < 0.2 then
         return false
     end
     State.LastDoorScan = os.clock()
     local alive = aliveGamemodeEnemyCount()
-    if alive == nil or alive > 0 then
-        State.LastDungeonDoorKey = nil
+    if type(alive) == "number" and alive > 0 then
         return false
     end
-    local door = findDungeonDoorPrompt()
-    if not door then
+    if alive == nil then
         return false
     end
-    local session = tostring(Omni.Data.GamemodeSession or "")
-    local key = table.concat({session, tostring(door.Room), tostring(door.Child)}, ":")
-    if State.LastDungeonDoorKey ~= key then
-        local root = getRoot()
-        if root and door.Part then
-            root.CFrame = door.Part.CFrame * CFrame.new(0, 0, 2)
-            State.LastDungeonDoorKey = key
-            task.wait(0.12)
+    local doors = collectDungeonDoorPrompts()
+    if #doors == 0 then
+        return false
+    end
+    local door
+    for _, row in ipairs(doors) do
+        if row.TriedAt == nil then
+            door = row
+            break
         end
     end
+    if not door then
+        local candidate = doors[1]
+        if candidate.TriedAt and os.clock() - candidate.TriedAt >= 2 then
+            door = candidate
+        else
+            return false
+        end
+    end
+    State.DungeonDoorAttempts[door.Key] = os.clock()
+    local distance = math.max(2.5, math.min(5, (door.Prompt.MaxActivationDistance or 8) * 0.45))
+    safeTeleportToPart(door.Part, distance)
+    task.wait(0.08)
     for _ = 1, 5 do
         if not door.Prompt.Parent or not door.Prompt.Enabled then
             return true
@@ -992,7 +1090,8 @@ local function dungeonDoorStep()
         if ok and result == true then
             return true
         end
-        task.wait(0.2)
+        fire("General", "Gamemodes", "OpenDoor", door.Room, door.Child)
+        task.wait(0.18)
     end
     return false
 end
@@ -1078,13 +1177,20 @@ local function getGamemodeState()
             end
         end
     end
-    if not holder then
-        return nil
+    if holder then
+        holder:WaitForChild("StateManager", 2)
+        local ok, manager = pcall(StateManager.Get, holder)
+        if ok and manager then
+            return manager
+        end
     end
-    holder:WaitForChild("StateManager", 2)
-    local ok, manager = pcall(StateManager.Get, holder)
-    if ok then
-        return manager
+    local direct = maps:FindFirstChild(name)
+    if direct then
+        direct:WaitForChild("StateManager", 0.5)
+        local ok, manager = pcall(StateManager.Get, direct)
+        if ok and manager then
+            return manager
+        end
     end
     return nil
 end
@@ -1109,16 +1215,23 @@ local function autoLeaveGamemode(kind)
         return false
     end
     local session = Omni.Data.GamemodeSession
-    if type(session) ~= "string" or session == "" or State.LeaveTriggeredSession == session then
+    if type(session) ~= "string" or session == "" then
         return false
     end
     local progress = currentGamemodeProgress(kind)
-    if type(progress) == "number" and progress >= State.LeaveWave then
+    if type(progress) ~= "number" or progress < State.LeaveWave then
+        return false
+    end
+    if State.LeaveTriggeredSession ~= session then
         State.LeaveTriggeredSession = session
-        fire("General", "Gamemodes", "Leave")
+        State.LastLeaveAttempt = 0
+    end
+    if os.clock() - (State.LastLeaveAttempt or 0) < 0.5 then
         return true
     end
-    return false
+    State.LastLeaveAttempt = os.clock()
+    fire("General", "Gamemodes", "Leave")
+    return true
 end
 
 local function starController()
@@ -2368,6 +2481,10 @@ local function startCoreWorkers()
                 if State.WasInGamemode then
                     State.WasInGamemode = false
                     State.LeaveTriggeredSession = nil
+                    State.LastLeaveAttempt = 0
+                    State.DungeonDoorAttempts = {}
+                    State.DungeonDoorPhase = nil
+                    State.DungeonDoorRetryAt = 0
                     resetFarmTarget()
                     State.PendingAutoReturn = State.AutoReturn and typeof(State.ReturnPosition) == "CFrame"
                 end
