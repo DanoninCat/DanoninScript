@@ -997,7 +997,8 @@ local function requestNativeStars()
     end
     if type(controller.IsAutoRolling) == "function" then
         local checkOk, active = pcall(controller.IsAutoRolling)
-        return checkOk and active == true    end
+        return checkOk and active == true
+    end
     return true
 end
 
@@ -1996,7 +1997,8 @@ Controls.AutoStars = Tabs.Stars:AddToggle("CE106_AutoStars", {
         end
         if State.AutoStars and State.AutoGacha then
             setControl("AutoGacha", false)
-        end    end,
+        end
+    end,
 })
 Tabs.Stars:AddButton({
     Title = "Open Now",
