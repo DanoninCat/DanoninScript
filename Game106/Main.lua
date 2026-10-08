@@ -112,6 +112,8 @@ local State = {
     SelectedFighters = {},
     TraitTargets = {},
     AutoTraits = false,
+    AutoRollTraits = false,
+    NativeTraitFighter = nil,
     TraitRequest = 0,
     TraitCursor = 0,
     NextTraitRoll = 0,
@@ -133,6 +135,7 @@ local FighterLookup = {}
 local ConfigLookup = {}
 local LastNPCSignature = ""
 local LastFighterSignature = ""
+local LastTraitSignature = ""
 local LastConfigSignature = ""
 local OriginalAnimationSettings = {
     Star = Omni.Data.Settings and Omni.Data.Settings["Hide Star Animation"] == true,
@@ -365,6 +368,12 @@ local function preloadWorldEnemyDefinitions()
     end)
 end
 
+local WORLD_NPCS = {
+    ["Heaven Island"] = {"Kume", "Robin Lucco", "Buggo", "Kuzon", "Hawk Eyes", "Anel"},
+    ["Slayers Village"] = {"Kaigako", "Gyotaro", "Hantengue", "Akeza", "Doume", "Kukushibe"},
+    ["Cursed Academy"] = {"Jogu", "Toje", "Mahita", "Lyu", "Kashimu", "Sokona"},
+}
+
 local function detectedWorldMap()
     local root = getRoot()
     local candidates = {}
@@ -388,7 +397,7 @@ local function detectedWorldMap()
         end
     end
     local current = currentMap()
-    if not root and current and candidates[current] then
+    if current and candidates[current] then
         return current
     end
     local bestName, bestDistance, bestCount
@@ -435,13 +444,18 @@ local function refreshNPCs(force)
         end
     end
 
+    local fallback = WORLD_NPCS[here]
+    if type(fallback) == "table" then
+        for _, name in ipairs(fallback) do
+            addName(name)
+        end
+    end
+
     local sharedEnemies = Omni.Shared.Enemies and Omni.Shared.Enemies.List or {}
     local mapEnemies = sharedEnemies[here]
     if type(mapEnemies) == "table" then
-        for name, info in pairs(mapEnemies) do
-            if type(info) == "table" then
-                addName(name)
-            end
+        for name in pairs(mapEnemies) do
+            addName(name)
         end
     end
 
@@ -634,6 +648,25 @@ local function fightersAssignedToEnemy(id)
     return false
 end
 
+local function rootFloorOffset(character, root)
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    return math.max(2.5, root.Size.Y * 0.5 + (humanoid and humanoid.HipHeight or 1.5))
+end
+
+local function teleportCharacterTo(destination)
+    local character = LocalPlayer.Character
+    local root = getRoot()
+    if not character or not root or typeof(destination) ~= "CFrame" then
+        return false
+    end
+    local ok = pcall(function()
+        character:PivotTo(destination)
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+    return ok
+end
+
 local function safeCharacterTeleport(targetCF, standDistance)
     local character = LocalPlayer.Character
     local root = getRoot()
@@ -651,7 +684,7 @@ local function safeCharacterTeleport(targetCF, standDistance)
         flat = Vector3.new(0, 0, 1)
     end
     flat = flat.Unit
-    local candidate = targetPos + flat * standDistance + Vector3.new(0, 8, 0)
+    local candidate = targetPos + flat * standDistance
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     local ignored = {character}
@@ -660,43 +693,68 @@ local function safeCharacterTeleport(targetCF, standDistance)
     end
     params.FilterDescendantsInstances = ignored
     params.IgnoreWater = true
-    local hit = workspace:Raycast(candidate + Vector3.new(0, 20, 0), Vector3.new(0, -80, 0), params)
-    local halfHeight = math.max(2.5, root.Size.Y * 0.5 + 1.5)
-    local safeY = targetPos.Y + 4
-    if hit then
-        safeY = hit.Position.Y + halfHeight
+    local offset = rootFloorOffset(character, root)
+    local hit = workspace:Raycast(candidate + Vector3.new(0, 4, 0), Vector3.new(0, -18, 0), params)
+    local safeY
+    if hit and hit.Normal.Y > 0.45 and hit.Position.Y <= targetPos.Y + 2 then
+        safeY = hit.Position.Y + offset
+    elseif math.abs(root.Position.Y - targetPos.Y) <= 14 then
+        safeY = root.Position.Y
+    else
+        safeY = targetPos.Y + offset
     end
     local safePos = Vector3.new(candidate.X, safeY, candidate.Z)
-    local lookAt = Vector3.new(targetPos.X, safePos.Y, targetPos.Z)
+    local lookAt = Vector3.new(targetPos.X, safeY, targetPos.Z)
     if (lookAt - safePos).Magnitude < 0.05 then
         lookAt = safePos + Vector3.new(0, 0, -1)
     end
     local destination = CFrame.lookAt(safePos, lookAt)
-    local ok = pcall(function()
-        character:PivotTo(destination)
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end)
-    if not ok then
+    if not teleportCharacterTo(destination) then
         return false
     end
-    task.wait(0.08)
+    task.wait(0.06)
     root = getRoot()
-    if root and (root.Position.Y < safeY - 6 or (root.Position - targetPos).Magnitude > math.max(standDistance + 18, 28)) then
-        pcall(function()
-            character:PivotTo(destination + Vector3.new(0, 2.5, 0))
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
+    if root and root.Position.Y < safeY - 4 then
+        teleportCharacterTo(destination + Vector3.new(0, 1.5, 0))
     end
     return true
 end
 
-local function safeTeleportToPart(part, distance)
-    if not part or not part:IsA("BasePart") then
+local function safeDoorTeleport(door)
+    local character = LocalPlayer.Character
+    local root = getRoot()
+    local part = door and door.Part
+    local prompt = door and door.Prompt
+    if not character or not root or not part or not part:IsA("BasePart") or not prompt then
         return false
     end
-    return safeCharacterTeleport(part.CFrame, distance or 3)
+    local maxDistance = tonumber(prompt.MaxActivationDistance) or 8
+    local standDistance = math.max(1.5, math.min(3.5, maxDistance * 0.35))
+    local targetPos = part.Position
+    local flat = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
+    if flat.Magnitude < 0.1 then
+        local look = part.CFrame.LookVector
+        flat = Vector3.new(-look.X, 0, -look.Z)
+    end
+    if flat.Magnitude < 0.1 then
+        flat = Vector3.new(0, 0, 1)
+    end
+    flat = flat.Unit
+    local candidate = targetPos + flat * standDistance
+    local interactionY = targetPos.Y
+    local promptParent = prompt.Parent
+    if promptParent and promptParent:IsA("Attachment") then
+        interactionY = promptParent.WorldPosition.Y
+    elseif promptParent and promptParent:IsA("BasePart") then
+        interactionY = promptParent.Position.Y
+    end
+    local safeY = interactionY
+    local safePos = Vector3.new(candidate.X, safeY, candidate.Z)
+    local lookAt = Vector3.new(targetPos.X, safeY, targetPos.Z)
+    if (lookAt - safePos).Magnitude < 0.05 then
+        lookAt = safePos + Vector3.new(0, 0, -1)
+    end
+    return teleportCharacterTo(CFrame.lookAt(safePos, lookAt))
 end
 
 local function attackEnemy(enemy, teleportOnce)
@@ -1079,12 +1137,16 @@ local function dungeonDoorStep()
         end
     end
     State.DungeonDoorAttempts[door.Key] = os.clock()
-    local distance = math.max(2.5, math.min(5, (door.Prompt.MaxActivationDistance or 8) * 0.45))
-    safeTeleportToPart(door.Part, distance)
+    safeDoorTeleport(door)
     task.wait(0.08)
     for _ = 1, 5 do
         if not door.Prompt.Parent or not door.Prompt.Enabled then
             return true
+        end
+        local root = getRoot()
+        if root and door.Part and (root.Position - door.Part.Position).Magnitude > (tonumber(door.Prompt.MaxActivationDistance) or 8) then
+            safeDoorTeleport(door)
+            task.wait(0.06)
         end
         local ok, result = invoke("General", "Gamemodes", "OpenDoor", door.Room, door.Child)
         if ok and result == true then
@@ -1251,39 +1313,93 @@ local function stopNativeStars()
     end
 end
 
+local function isNativeStarRolling(controller)
+    if not controller or type(controller.IsAutoRolling) ~= "function" then
+        return false
+    end
+    local ok, active = pcall(controller.IsAutoRolling)
+    return ok and active == true
+end
+
+local function directStarRoll(name)
+    if os.clock() < State.NextStarRoll then
+        return false
+    end
+    local info = type(name) == "string" and Omni.Shared.Stars.List[name] or nil
+    if not info then
+        return false
+    end
+    local freeSlots = 1
+    pcall(function()
+        local _, _, free = Omni.Utils.PlayerStats.FightersInventory(Omni.Data, Omni.Instance)
+        freeSlots = free
+    end)
+    if type(freeSlots) == "number" and freeSlots <= 0 then
+        return false
+    end
+    local amount = 1
+    pcall(function()
+        amount = math.max(1, tonumber(Omni.Utils.PlayerStats.MaxStarOpens(Omni.Data, Omni.Instance)) or 1)
+    end)
+    local cooldown = 3.5
+    pcall(function()
+        local speed = Omni.Utils.PlayerStats.StarOpenSpeed(Omni.Data, Omni.Instance)
+        if type(speed) == "number" and speed > 0 then
+            cooldown = 3.5 / speed
+        end
+    end)
+    State.StarRequest = State.StarRequest + 1
+    fire("General", "Stars", "Roll", name, amount, State.StarRequest)
+    State.NextStarRoll = os.clock() + math.max(0.2, cooldown + 0.08)
+    return true
+end
+
 local function requestNativeStars()
     local name = selectedStarName()
     local info = type(name) == "string" and Omni.Shared.Stars.List[name] or nil
     local controller = starController()
-    if not info or not controller or not ownsMap(info.MapName) then
-        return false
-    end
-    if not (Omni.Data.Gamepasses and Omni.Data.Gamepasses["Remote Access"] == true) then
-        return false
-    end
-    if type(controller.Start) ~= "function" or type(controller.StartAutoRoll) ~= "function" then
+    if not info or not controller then
         return false
     end
     State.StarNativeRequestedAt = os.clock()
-    local okStart = pcall(controller.Start, name)
-    if not okStart then
-        return false
+    pcall(function()
+        Omni.Signal:FireSelf("Interface", "Stars", "Resume", name)
+    end)
+    if type(controller.Resume) == "function" then
+        pcall(controller.Resume, name)
+    end
+    if type(controller.RefreshCloseStars) == "function" then
+        for _ = 1, 15 do
+            pcall(controller.RefreshCloseStars)
+            if isNativeStarRolling(controller) then
+                return true
+            end
+            task.wait(0.05)
+        end
+    end
+    if type(controller.Start) == "function" then
+        pcall(controller.Start, name)
+    elseif type(controller.OpenUI) == "function" then
+        pcall(controller.OpenUI, name, true)
     end
     task.wait()
-    local okAuto = pcall(controller.StartAutoRoll)
-    if not okAuto then
-        return false
+    if type(controller.StartAutoRoll) == "function" then
+        pcall(controller.StartAutoRoll)
     end
     task.wait()
-    local active = true
-    if type(controller.IsAutoRolling) == "function" then
-        local ok, value = pcall(controller.IsAutoRolling)
-        active = ok and value == true
+    if isNativeStarRolling(controller) then
+        if type(controller.Roll) == "function" then
+            pcall(controller.Roll)
+        end
+        return true
     end
-    if active and type(controller.CloseUI) == "function" then
-        pcall(controller.CloseUI)
+    if type(controller.Roll) == "function" then
+        pcall(controller.Roll)
     end
-    return active
+    if type(controller.RefreshCloseStars) == "function" then
+        pcall(controller.RefreshCloseStars)
+    end
+    return isNativeStarRolling(controller)
 end
 
 local function starAutoStep()
@@ -1295,16 +1411,21 @@ local function starAutoStep()
         return false
     end
     local controller = starController()
-    if controller and type(controller.IsAutoRolling) == "function" then
-        local ok, active = pcall(controller.IsAutoRolling)
-        if ok and active == true then
+    if isNativeStarRolling(controller) then
+        return true
+    end
+    if State.StarNativeRequestedAt <= 0 or os.clock() - State.StarNativeRequestedAt >= 1 then
+        if requestNativeStars() then
             return true
         end
     end
-    if State.StarNativeRequestedAt <= 0 or os.clock() - State.StarNativeRequestedAt >= 1 then
-        return requestNativeStars()
+    if controller and type(controller.Roll) == "function" and os.clock() >= State.NextStarRoll then
+        local ok = pcall(controller.Roll)
+        if ok then
+            State.NextStarRoll = os.clock() + 0.35
+        end
     end
-    return false
+    return directStarRoll(name)
 end
 
 local function orderedStars()
@@ -1533,8 +1654,11 @@ local function refreshFighters(force)
     local fighters = Omni.Data.Fighters and Omni.Data.Fighters.List or {}
     local ordered = {}
     for id, fighter in pairs(fighters) do
-        if id ~= nil and type(fighter) == "table" and type(fighter.Name) == "string" then
-            ordered[#ordered + 1] = {ID = id, Fighter = fighter, Name = fighterDisplayName(fighter)}
+        if id ~= nil and type(fighter) == "table" then
+            local rawName = fighter.Name
+            if type(rawName) == "string" and rawName ~= "" then
+                ordered[#ordered + 1] = {ID = id, Fighter = fighter, Name = fighterDisplayName(fighter), RawName = rawName}
+            end
         end
     end
     table.sort(ordered, function(a, b)
@@ -1545,9 +1669,10 @@ local function refreshFighters(force)
     end)
     for _, row in ipairs(ordered) do
         counts[row.Name] = (counts[row.Name] or 0) + 1
+        local duplicateCount = counts[row.Name]
         local label = row.Name
-        if counts[row.Name] > 1 then
-            label = string.format("%s #%d", row.Name, counts[row.Name])
+        if duplicateCount > 1 then
+            label = string.format("%s #%d", row.Name, duplicateCount)
         end
         local trait = currentTrait(row.Fighter)
         if trait then
@@ -1556,7 +1681,7 @@ local function refreshFighters(force)
         values[#values + 1] = label
         lookup[label] = row.ID
     end
-    local signature = table.concat(values, "|")
+    local signature = tostring(#values) .. "|" .. table.concat(values, "|")
     if force or signature ~= LastFighterSignature then
         local old = {}
         for id in pairs(State.SelectedFighters) do
@@ -1573,26 +1698,44 @@ local function refreshFighters(force)
             end
             pcall(function()
                 Controls.Fighters:SetValues(values)
-                Controls.Fighters:SetValue({})
-                if next(selectedLabels) ~= nil then
-                    Controls.Fighters:SetValue(selectedLabels)
-                end
+                Controls.Fighters:SetValue(selectedLabels)
             end)
         end
     end
     return values
 end
 
+local TRAIT_FALLBACK = {
+    "Genius I", "Rich I", "Strong I", "Lucky I", "Genius II", "Rich II", "Strong II", "Sorcerer I",
+    "Genius III", "Rich III", "Strong III", "Sorcerer II", "Lucky II", "Sorcerer III", "Tank", "Speedy",
+    "Giant", "Tiny", "Collector", "Lucky III", "Prodigy", "Leprechaun", "Mercenary", "Blessing",
+}
+
 local function orderedTraits()
     local rows = {}
-    for name, info in pairs(Omni.Shared.Traits.List or {}) do
+    local seen = {}
+    local list = Omni.Shared.Traits and Omni.Shared.Traits.List or {}
+    local function add(name)
+        if type(name) ~= "string" or name == "" or seen[name] then
+            return
+        end
+        seen[name] = true
+        local info = type(list) == "table" and list[name] or nil
         rows[#rows + 1] = {
             Name = name,
-            Rarity = info.Rarity or "Common",
-            Chance = tonumber(info.Chance) or 0,
+            Rarity = type(info) == "table" and info.Rarity or "Common",
+            Chance = type(info) == "table" and tonumber(info.Chance) or 0,
         }
     end
-    local rarityOrder = {Common = 1, Uncommon = 2, Rare = 3, Epic = 4, Legendary = 5, Mythical = 6, Secret = 7}
+    if type(list) == "table" then
+        for name in pairs(list) do
+            add(name)
+        end
+    end
+    for _, name in ipairs(TRAIT_FALLBACK) do
+        add(name)
+    end
+    local rarityOrder = {Common = 1, Uncommon = 2, Rare = 3, Epic = 4, Legendary = 5, Mythical = 6, Secret = 7, Exclusive = 8}
     table.sort(rows, function(a, b)
         local ar = rarityOrder[a.Rarity] or 99
         local br = rarityOrder[b.Rarity] or 99
@@ -1611,6 +1754,49 @@ local function orderedTraits()
     return out
 end
 
+local function refreshTraitOptions(force)
+    local values = orderedTraits()
+    local signature = tostring(#values) .. "|" .. table.concat(values, "|")
+    if force or signature ~= LastTraitSignature then
+        LastTraitSignature = signature
+        if Controls.TraitTargets and Controls.TraitTargets.SetValues then
+            local selected = {}
+            for _, name in ipairs(values) do
+                if State.TraitTargets[name] then
+                    selected[name] = true
+                end
+            end
+            pcall(function()
+                Controls.TraitTargets:SetValues(values)
+                Controls.TraitTargets:SetValue(selected)
+            end)
+        end
+    end
+    return values
+end
+
+local function refreshFightersUntilStable(seconds)
+    local deadline = os.clock() + (seconds or 8)
+    local lastSignature = nil
+    local stable = 0
+    local values = {}
+    repeat
+        values = refreshFighters(true)
+        local signature = tostring(#values) .. "|" .. table.concat(values, "|")
+        if signature == lastSignature then
+            stable = stable + 1
+        else
+            stable = 0
+            lastSignature = signature
+        end
+        if stable >= 15 then
+            break
+        end
+        task.wait(0.2)
+    until not State.Running or os.clock() >= deadline
+    return values
+end
+
 local function selectedFighterIds()
     local out = {}
     for id, enabled in pairs(State.SelectedFighters) do
@@ -1618,8 +1804,78 @@ local function selectedFighterIds()
             out[#out + 1] = id
         end
     end
-    table.sort(out)
+    table.sort(out, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
     return out
+end
+
+local function traitController()
+    return Omni.Scripts and Omni.Scripts.Interface and Omni.Scripts.Interface.Traits
+end
+
+local function stopNativeTraitAuto()
+    local controller = traitController()
+    if controller and type(controller.CancelAuto) == "function" then
+        pcall(controller.CancelAuto)
+    end
+    State.NativeTraitFighter = nil
+end
+
+local function syncNativeTraitTargets()
+    local data = Omni.Data.Traits
+    local autoStop = type(data) == "table" and data.AutoStop or {}
+    for _, name in ipairs(orderedTraits()) do
+        local wanted = State.TraitTargets[name] == true
+        local current = type(autoStop) == "table" and autoStop[name] == true
+        if wanted ~= current then
+            fire("General", "Traits", "SetAutoStop", name, wanted)
+            task.wait(0.02)
+        end
+    end
+end
+
+local function nextNativeTraitFighter()
+    if next(State.TraitTargets) == nil then
+        return nil
+    end
+    for _, id in ipairs(selectedFighterIds()) do
+        local fighter = Omni.Data.Fighters and Omni.Data.Fighters.List and Omni.Data.Fighters.List[id]
+        local trait = fighter and currentTrait(fighter) or nil
+        if not trait or State.TraitTargets[trait] ~= true then
+            return id
+        end
+    end
+    return nil
+end
+
+local function startNativeTraitAuto()
+    if not State.AutoRollTraits then
+        return false
+    end
+    local id = nextNativeTraitFighter()
+    if not id then
+        stopNativeTraitAuto()
+        return false
+    end
+    local controller = traitController()
+    if not controller then
+        return false
+    end
+    syncNativeTraitTargets()
+    State.NativeTraitFighter = id
+    if type(controller.Resume) == "function" then
+        local ok = pcall(controller.Resume, id)
+        if ok then
+            return true
+        end
+    end
+    if type(controller.SelectFighter) == "function" and type(controller.StartAuto) == "function" then
+        pcall(controller.SelectFighter, id)
+        task.wait()
+        return pcall(controller.StartAuto)
+    end
+    return false
 end
 
 local function traitStep()
@@ -1835,6 +2091,7 @@ local function configSnapshot()
         SelectedFighters = encodeSelection(State.SelectedFighters),
         TraitTargets = encodeSelection(State.TraitTargets),
         AutoTraits = State.AutoTraits,
+        AutoRollTraits = State.AutoRollTraits,
         SelectedUpgrades = encodeSelection(State.SelectedUpgrades),
         AutoUpgrade = State.AutoUpgrade,
         AutoLoadConfig = State.AutoLoadConfig,
@@ -1913,6 +2170,7 @@ local function applyConfig(data)
         setControl("Fighters", selectedLabels)
     end
     if type(data.AutoTraits) == "boolean" then setControl("AutoTraits", data.AutoTraits) end
+    if type(data.AutoRollTraits) == "boolean" then setControl("AutoRollTraits", data.AutoRollTraits) end
     if type(data.SelectedUpgrades) == "table" then
         table.clear(State.SelectedUpgrades)
         local wanted = {}
@@ -2162,15 +2420,25 @@ Tabs.Farm:AddButton({
     Icon = "solar/refresh-bold",
     Callback = function()
         task.spawn(function()
+            local deadline = os.clock() + 8
+            local lastSignature = nil
+            local stable = 0
             preloadWorldEnemyDefinitions()
-            for _ = 1, 20 do
+            repeat
                 recheckNativeEnemies()
                 local values = refreshNPCs(true)
-                if #values > 0 then
-                    return
+                local signature = table.concat(values, "|")
+                if signature == lastSignature then
+                    stable = stable + 1
+                else
+                    stable = 0
+                    lastSignature = signature
                 end
-                task.wait(0.25)
-            end
+                if stable >= 10 then
+                    break
+                end
+                task.wait(0.2)
+            until not State.Running or os.clock() >= deadline
         end)
     end,
 })
@@ -2556,6 +2824,10 @@ Controls.Fighters = Tabs.Traits:AddDropdown("CE106_Fighters", {
             State.SelectedFighters[FighterLookup[value]] = true
         end
         State.NextTraitRoll = 0
+        if State.AutoRollTraits then
+            stopNativeTraitAuto()
+            task.defer(startNativeTraitAuto)
+        end
     end,
 })
 Tabs.Traits:AddButton({
@@ -2563,13 +2835,7 @@ Tabs.Traits:AddButton({
     Icon = "solar/refresh-bold",
     Callback = function()
         task.spawn(function()
-            for _ = 1, 20 do
-                local values = refreshFighters(true)
-                if #values > 0 then
-                    return
-                end
-                task.wait(0.25)
-            end
+            refreshFightersUntilStable(5)
         end)
     end,
 })
@@ -2593,6 +2859,16 @@ Controls.TraitTargets = Tabs.Traits:AddDropdown("CE106_TraitTargets", {
             State.TraitTargets[value] = true
         end
         State.NextTraitRoll = 0
+        if State.AutoRollTraits then
+            task.spawn(syncNativeTraitTargets)
+        end
+    end,
+})
+Tabs.Traits:AddButton({
+    Title = "Refresh Traits",
+    Icon = "solar/refresh-bold",
+    Callback = function()
+        refreshTraitOptions(true)
     end,
 })
 Controls.AutoTraits = Tabs.Traits:AddToggle("CE106_AutoTraits", {
@@ -2602,17 +2878,30 @@ Controls.AutoTraits = Tabs.Traits:AddToggle("CE106_AutoTraits", {
         State.AutoTraits = value == true
         State.NextTraitRoll = 0
         State.TraitCursor = 0
+        if State.AutoTraits and State.AutoRollTraits then
+            setControl("AutoRollTraits", false)
+        end
+    end,
+})
+Controls.AutoRollTraits = Tabs.Traits:AddToggle("CE106_AutoRollTraits", {
+    Title = "Auto Roll Traits",
+    Default = false,
+    Callback = function(value)
+        State.AutoRollTraits = value == true
+        if State.AutoRollTraits then
+            if State.AutoTraits then
+                setControl("AutoTraits", false)
+            end
+            task.spawn(startNativeTraitAuto)
+        else
+            stopNativeTraitAuto()
+        end
     end,
 })
 
 task.spawn(function()
-    for _ = 1, 40 do
-        local values = refreshFighters(true)
-        if #values > 0 then
-            break
-        end
-        task.wait(0.15)
-    end
+    refreshFightersUntilStable(6)
+    refreshTraitOptions(true)
 end)
 end)
 
@@ -2813,6 +3102,8 @@ local function cleanup()
     State.AutoGacha = false
     pcall(stopNativeGacha)
     State.AutoTraits = false
+    State.AutoRollTraits = false
+    pcall(stopNativeTraitAuto)
     State.AutoUpgrade = false
     pcall(function()
         invoke("General", "Settings", "Set", "Hide Star Animation", OriginalAnimationSettings.Star)
@@ -2927,6 +3218,30 @@ task.spawn(function()
             pcall(claimLevelRewards)
         end
         task.wait(0.2)
+    end
+end)
+
+task.spawn(function()
+    while State.Running do
+        pcall(refreshFighters, false)
+        pcall(refreshTraitOptions, false)
+        task.wait(0.75)
+    end
+end)
+
+task.spawn(function()
+    while State.Running do
+        if State.AutoRollTraits then
+            local activeId = State.NativeTraitFighter
+            local fighter = activeId and Omni.Data.Fighters and Omni.Data.Fighters.List and Omni.Data.Fighters.List[activeId]
+            local trait = fighter and currentTrait(fighter) or nil
+            if activeId == nil or (trait and State.TraitTargets[trait] == true) or not fighter then
+                stopNativeTraitAuto()
+                task.wait(0.05)
+                pcall(startNativeTraitAuto)
+            end
+        end
+        task.wait(0.35)
     end
 end)
 
