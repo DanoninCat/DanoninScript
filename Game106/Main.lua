@@ -85,6 +85,7 @@ local State = {
     WasInGamemode = false,
     LastJoinCheck = {Dungeon = 0, Trial = 0},
     LastDoorScan = 0,
+    LastDungeonDoorKey = nil,
     SelectedStar = nil,
     AutoStars = false,
     StarRequest = 0,
@@ -289,9 +290,27 @@ local function orderedMaps()
 end
 
 local function enemyName(instance)
-    local value = instance and instance:GetAttribute("EnemyName")
+    if not instance then
+        return nil
+    end
+    local value = instance:GetAttribute("Name")
     if type(value) == "string" and value ~= "" then
         return value
+    end
+    value = instance:GetAttribute("EnemyName")
+    if type(value) == "string" and value ~= "" then
+        return value
+    end
+    local id = instance:GetAttribute("EnemyID")
+    if id ~= nil then
+        local ok, name = pcall(function()
+            local renderer = Omni.Scripts and Omni.Scripts.Rendering and Omni.Scripts.Rendering.Enemies
+            local controller = renderer and type(renderer.Get) == "function" and renderer.Get(id) or nil
+            return controller and controller.Name
+        end)
+        if ok and type(name) == "string" and name ~= "" then
+            return name
+        end
     end
     return nil
 end
@@ -890,20 +909,92 @@ local function autoQuestWorldStep()
     return false
 end
 
-local function openNearbyDungeonDoors()
-    if os.clock() - State.LastDoorScan < 0.9 then
-        return
+local function getGamemodeEnemyFolder()
+    local mode = Omni.Data.Gamemode
+    local session = Omni.Data.GamemodeSession
+    if type(mode) ~= "string" or mode == "" or type(session) ~= "string" or session == "" then
+        return nil
     end
-    State.LastDoorScan = os.clock()
+    local server = workspace:FindFirstChild("Server")
+    local enemies = server and server:FindFirstChild("Enemies")
+    local gamemodes = enemies and enemies:FindFirstChild("Gamemodes")
+    local modeFolder = gamemodes and gamemodes:FindFirstChild(mode)
+    return modeFolder and modeFolder:FindFirstChild(session) or nil
+end
+
+local function aliveGamemodeEnemyCount()
+    local folder = getGamemodeEnemyFolder()
+    if not folder then
+        return nil
+    end
+    local count = 0
+    for _, item in ipairs(folder:GetChildren()) do
+        if item:IsA("BasePart") and item:GetAttribute("Died") ~= true then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function findDungeonDoorPrompt()
+    local root = getRoot()
+    local best, bestDistance
     for _, item in ipairs(workspace:GetDescendants()) do
-        if item:IsA("ProximityPrompt") then
+        if item:IsA("ProximityPrompt") and item.Enabled then
             local room = item:GetAttribute("RoomIndex") or (item.Parent and item.Parent:GetAttribute("RoomIndex"))
             local child = item:GetAttribute("ChildIndex") or (item.Parent and item.Parent:GetAttribute("ChildIndex"))
             if type(room) == "number" and type(child) == "number" then
-                invoke("General", "Gamemodes", "OpenDoor", room, child)
+                local holder = item.Parent
+                local part = holder and (holder:IsA("BasePart") and holder or holder:FindFirstAncestorWhichIsA("BasePart"))
+                local distance = math.huge
+                if root and part then
+                    distance = (root.Position - part.Position).Magnitude
+                end
+                if not best or distance < bestDistance then
+                    best = {Prompt = item, Part = part, Room = room, Child = child}
+                    bestDistance = distance
+                end
             end
         end
     end
+    return best
+end
+
+local function dungeonDoorStep()
+    if os.clock() - State.LastDoorScan < 0.25 then
+        return false
+    end
+    State.LastDoorScan = os.clock()
+    local alive = aliveGamemodeEnemyCount()
+    if alive == nil or alive > 0 then
+        State.LastDungeonDoorKey = nil
+        return false
+    end
+    local door = findDungeonDoorPrompt()
+    if not door then
+        return false
+    end
+    local session = tostring(Omni.Data.GamemodeSession or "")
+    local key = table.concat({session, tostring(door.Room), tostring(door.Child)}, ":")
+    if State.LastDungeonDoorKey ~= key then
+        local root = getRoot()
+        if root and door.Part then
+            root.CFrame = door.Part.CFrame * CFrame.new(0, 0, 2)
+            State.LastDungeonDoorKey = key
+            task.wait(0.12)
+        end
+    end
+    for _ = 1, 5 do
+        if not door.Prompt.Parent or not door.Prompt.Enabled then
+            return true
+        end
+        local ok, result = invoke("General", "Gamemodes", "OpenDoor", door.Room, door.Child)
+        if ok and result == true then
+            return true
+        end
+        task.wait(0.2)
+    end
+    return false
 end
 
 local function gamemodeCandidates(kind)
@@ -967,12 +1058,30 @@ local function getGamemodeState()
     end
     local client = workspace:FindFirstChild("Client")
     local maps = client and client:FindFirstChild("Maps")
-    local map = maps and maps:FindFirstChild(info.MapName or currentMap() or "")
-    local sessions = map and map:FindFirstChild("GamemodeSessions")
-    local holder = sessions and sessions:FindFirstChild(session)
+    if not maps then
+        return nil
+    end
+    local holder
+    local function findIn(container)
+        local sessions = container and container:FindFirstChild("GamemodeSessions")
+        return sessions and sessions:FindFirstChild(session) or nil
+    end
+    holder = findIn(maps:FindFirstChild(name))
+    if not holder and type(info.MapName) == "string" then
+        holder = findIn(maps:FindFirstChild(info.MapName))
+    end
+    if not holder then
+        for _, candidate in ipairs(maps:GetChildren()) do
+            holder = findIn(candidate)
+            if holder then
+                break
+            end
+        end
+    end
     if not holder then
         return nil
     end
+    holder:WaitForChild("StateManager", 2)
     local ok, manager = pcall(StateManager.Get, holder)
     if ok then
         return manager
@@ -1036,66 +1145,53 @@ local function requestNativeStars()
     if not info or not controller or not ownsMap(info.MapName) then
         return false
     end
-    if type(controller.Resume) ~= "function" or type(controller.RefreshCloseStars) ~= "function" then
+    if not (Omni.Data.Gamepasses and Omni.Data.Gamepasses["Remote Access"] == true) then
+        return false
+    end
+    if type(controller.Start) ~= "function" or type(controller.StartAutoRoll) ~= "function" then
         return false
     end
     State.StarNativeRequestedAt = os.clock()
-    local ok = pcall(controller.Resume, name)
-    if not ok then
+    local okStart = pcall(controller.Start, name)
+    if not okStart then
         return false
     end
-    for _ = 1, 4 do
-        pcall(controller.RefreshCloseStars)
-        if type(controller.IsAutoRolling) == "function" then
-            local checkOk, active = pcall(controller.IsAutoRolling)
-            if checkOk and active == true then
-                return true
-            end
-        end
-        task.wait(0.05)
+    task.wait()
+    local okAuto = pcall(controller.StartAutoRoll)
+    if not okAuto then
+        return false
     end
-    return false
+    task.wait()
+    local active = true
+    if type(controller.IsAutoRolling) == "function" then
+        local ok, value = pcall(controller.IsAutoRolling)
+        active = ok and value == true
+    end
+    if active and type(controller.CloseUI) == "function" then
+        pcall(controller.CloseUI)
+    end
+    return active
 end
 
-local function starStep()
-    local name = selectedStarName()
-    if type(name) ~= "string" or not Omni.Shared.Stars.List[name] or os.clock() < State.NextStarRoll then
+local function starAutoStep()
+    if not State.AutoStars then
         return false
     end
-    local controller = State.AutoStars and starController() or nil
+    local name = selectedStarName()
+    if type(name) ~= "string" or not Omni.Shared.Stars.List[name] then
+        return false
+    end
+    local controller = starController()
     if controller and type(controller.IsAutoRolling) == "function" then
         local ok, active = pcall(controller.IsAutoRolling)
         if ok and active == true then
-            State.NextStarRoll = os.clock() + 0.5
             return true
         end
     end
-    if State.AutoStars and (State.StarNativeRequestedAt <= 0 or os.clock() - State.StarNativeRequestedAt >= 1) then
-        if requestNativeStars() then
-            State.NextStarRoll = os.clock() + 0.5
-            return true
-        end
-        State.StarNativeRequestedAt = os.clock()
+    if State.StarNativeRequestedAt <= 0 or os.clock() - State.StarNativeRequestedAt >= 1 then
+        return requestNativeStars()
     end
-    local freeSlots = 1
-    pcall(function()
-        local _, _, free = Omni.Utils.PlayerStats.FightersInventory(Omni.Data, Omni.Instance)
-        freeSlots = free
-    end)
-    if type(freeSlots) == "number" and freeSlots <= 0 then
-        return false
-    end
-    local cooldown = 3.5
-    pcall(function()
-        local speed = Omni.Utils.PlayerStats.StarOpenSpeed(Omni.Data, Omni.Instance)
-        if type(speed) == "number" and speed > 0 then
-            cooldown = 3.5 / speed
-        end
-    end)
-    State.StarRequest = State.StarRequest + 1
-    fire("General", "Stars", "Roll", name, 1, State.StarRequest)
-    State.NextStarRoll = os.clock() + math.max(0.2, cooldown + 0.08)
-    return true
+    return false
 end
 
 local function orderedStars()
@@ -1881,16 +1977,14 @@ local function addVisibleTab(title, icon)
 end
 
 local Tabs = {}
-Tabs.Farm = addVisibleTab("Farm", "solar/refresh-bold")
-Tabs.Travel = addVisibleTab("Travel", "solar/map-arrow-right-bold")
-Tabs.Modes = addVisibleTab("Dungeons", "solar/cup-star-bold")
-Tabs.Stars = addVisibleTab("Stars", "solar/stars-bold")
-Tabs.Gacha = addVisibleTab("Gachas", "solar/refresh-bold")
-Tabs.Team = addVisibleTab("Team", "solar/checklist-minimalistic-bold")
-Tabs.Traits = addVisibleTab("Traits", "solar/stars-bold")
-Tabs.Upgrade = addVisibleTab("Upgrades", "solar/add-circle-bold")
-Tabs.Rewards = addVisibleTab("Rewards", "solar/gift-bold")
-Tabs.Settings = addVisibleTab("Settings", "solar/checklist-minimalistic-bold")
+Tabs.Farm = addVisibleTab("Farm", "lucide/swords")
+Tabs.Travel = addVisibleTab("Travel", "lucide/map")
+Tabs.Modes = addVisibleTab("Dungeons", "lucide/castle")
+Tabs.Stars = addVisibleTab("Stars", "lucide/star")
+Tabs.Gacha = addVisibleTab("Gachas", "lucide/dices")
+Tabs.Traits = addVisibleTab("Traits", "lucide/sparkles")
+Tabs.Upgrade = addVisibleTab("Upgrades", "lucide/trending-up")
+Tabs.Settings = addVisibleTab("Settings", "lucide/settings")
 Tabs.Configs = Tabs.Settings
 
 local function normalizeTabNavigation()
@@ -2117,14 +2211,6 @@ Controls.AutoStars = Tabs.Stars:AddToggle("CE106_AutoStars", {
         end
     end,
 })
-Tabs.Stars:AddButton({
-    Title = "Open Now",
-    Icon = "solar/stars-bold",
-    Callback = function()
-        State.NextStarRoll = 0
-        task.spawn(starStep)
-    end,
-})
 end)
 
 uiSafe("Gachas", function()
@@ -2162,14 +2248,6 @@ Controls.AutoGacha = Tabs.Gacha:AddToggle("CE106_AutoGacha", {
         if State.AutoGacha and State.AutoStars then
             setControl("AutoStars", false)
         end
-    end,
-})
-Tabs.Gacha:AddButton({
-    Title = "Roll Now",
-    Icon = "solar/refresh-bold",
-    Callback = function()
-        State.NextGachaRoll = 0
-        task.spawn(gachaRollOnce)
     end,
 })
 end)
@@ -2217,6 +2295,21 @@ local function startCoreWorkers()
     end)
 
     pcall(function()
+        local added = CollectionService:GetInstanceAddedSignal("Enemy"):Connect(function(enemy)
+            if enemy:IsA("BasePart") and enemy:GetAttribute("SessionID") == nil then
+                task.defer(function() refreshNPCs(true) end)
+            end
+        end)
+        Connections[#Connections + 1] = added
+        local removed = CollectionService:GetInstanceRemovedSignal("Enemy"):Connect(function(enemy)
+            if enemy:IsA("BasePart") and enemy:GetAttribute("SessionID") == nil then
+                task.defer(function() refreshNPCs(true) end)
+            end
+        end)
+        Connections[#Connections + 1] = removed
+    end)
+
+    pcall(function()
         local connection = Omni:OnDataChanged({"Quests"}, function()
             if State.AutoQuestWorlds then
                 State.NextQuestAction = 0
@@ -2257,14 +2350,19 @@ local function startCoreWorkers()
             if inHandledMode then
                 State.WasInGamemode = true
                 State.PendingAutoReturn = false
-                pcall(autoLeaveGamemode, kind)
-                if kind == "Dungeon" and State.AutoDungeon then
-                    pcall(openNearbyDungeonDoors)
-                end
-                local enabled = (kind == "Dungeon" and State.AutoDungeon)
-                    or (kind == "Trial" and State.AutoTrial)
-                if enabled then
-                    pcall(farmStep, false)
+                local leaving = false
+                pcall(function()
+                    leaving = autoLeaveGamemode(kind) == true
+                end)
+                if not leaving then
+                    if kind == "Dungeon" and State.AutoDungeon then
+                        pcall(dungeonDoorStep)
+                    end
+                    local enabled = (kind == "Dungeon" and State.AutoDungeon)
+                        or (kind == "Trial" and State.AutoTrial)
+                    if enabled then
+                        pcall(farmStep, false)
+                    end
                 end
             else
                 if State.WasInGamemode then
@@ -2297,7 +2395,7 @@ local function startCoreWorkers()
     task.spawn(function()
         while State.Running do
             if State.AutoStars then
-                pcall(starStep)
+                pcall(starAutoStep)
             end
             task.wait(0.08)
         end
@@ -2314,28 +2412,6 @@ local function startCoreWorkers()
 end
 
 startCoreWorkers()
-
-uiSafe("Team", function()
-Tabs.Team:AddParagraph({
-    Title = "Best Team",
-    Content = "Mantém os melhores Fighters e a melhor Weapon equipados.",
-})
-Tabs.Team:AddButton({
-    Title = "Equip Best Now",
-    Icon = "solar/cup-star-bold",
-    Callback = function()
-        task.spawn(equipBest)
-    end,
-})
-Controls.AutoEquipBest = Tabs.Team:AddToggle("CE106_AutoEquipBest", {
-    Title = "Auto Equip Best Fighters And Weapons",
-    Default = false,
-    Callback = function(value)
-        State.AutoEquipBest = value == true
-        State.LastBestEquip = 0
-    end,
-})
-end)
 
 uiSafe("Traits", function()
 Controls.Fighters = Tabs.Traits:AddDropdown("CE106_Fighters", {
@@ -2411,6 +2487,16 @@ Controls.AutoTraits = Tabs.Traits:AddToggle("CE106_AutoTraits", {
         State.TraitCursor = 0
     end,
 })
+
+task.spawn(function()
+    for _ = 1, 40 do
+        local values = refreshFighters(true)
+        if #values > 0 then
+            break
+        end
+        task.wait(0.15)
+    end
+end)
 end)
 
 uiSafe("Upgrades", function()
@@ -2454,24 +2540,6 @@ uiSafe("Upgrades", function()
         Callback = function(value)
             State.AutoUpgrade = value == true
             State.NextUpgrade = 0
-        end,
-    })
-end)
-
-uiSafe("Rewards", function()
-    Controls.AutoClaimLevel = Tabs.Rewards:AddToggle("CE106_AutoClaimLevel", {
-        Title = "Auto Claim Rewards Level",
-        Default = false,
-        Callback = function(value)
-            State.AutoClaimLevel = value == true
-            State.LastRewardClaim = 0
-        end,
-    })
-    Tabs.Rewards:AddButton({
-        Title = "Claim Available Now",
-        Icon = "solar/gift-bold",
-        Callback = function()
-            task.spawn(claimLevelRewards)
         end,
     })
 end)
@@ -2719,7 +2787,7 @@ task.spawn(function()
     local lastFighterRefresh = 0
     while State.Running do
         local now = os.clock()
-        if now - lastFighterRefresh >= 3 then
+        if now - lastFighterRefresh >= 1 then
             lastFighterRefresh = now
             pcall(refreshFighters, false)
         end
