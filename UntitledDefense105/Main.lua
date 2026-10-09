@@ -1,8 +1,21 @@
 -- Source tracked: UntitledDefense105/Main.lua
 if game.PlaceId ~= 105596644794991 and game.GameId ~= 105596644794991 then
-    warn("[CAT EMPIRE] Unexpected game: " .. tostring(game.PlaceId) ..
-        " (universe " .. tostring(game.GameId) .. ")")
-    return
+    local storage = game:GetService("ReplicatedStorage")
+    local remotes = storage:FindFirstChild("Remotes")
+    local compatible = remotes
+        and remotes:FindFirstChild("InventoryRequest")
+        and remotes:FindFirstChild("InventoryResult")
+        and remotes:FindFirstChild("TraitRerollRequest")
+        and remotes:FindFirstChild("HalloweenShop")
+        and storage:FindFirstChild("TraitData")
+        and storage:FindFirstChild("UnitData")
+        and storage:FindFirstChild("ItemData")
+        and storage:FindFirstChild("HalloweenData")
+    if not compatible then
+        error("[CAT EMPIRE] Game mismatch: PlaceId=" .. tostring(game.PlaceId) ..
+            " GameId=" .. tostring(game.GameId) ..
+            " - wrong RE Adventures instance", 0)
+    end
 end
 
 local Players = game:GetService("Players")
