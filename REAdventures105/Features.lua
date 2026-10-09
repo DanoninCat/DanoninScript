@@ -285,9 +285,17 @@ local function activeSection(section)
 end
 local function processSection(section)
     local cfg=newSection(section)
-    if not activeSection(section) then return end
+    if not S.Running or modeForMatch()~=section or Runtime.macroPlaying then return end
     local map,key=sectionMap(section)
     local roundKey=section..":"..key..":"..toText(Runtime.round)
+    if not isInMatch() then
+        local st=(Runtime.match or {}).state
+        if cfg.autoReplay and (st==MatchConfig.STATE.VICTORY or st==MatchConfig.STATE.DEFEAT) and not Runtime.last["replay:"..roundKey] then
+            setLast("replay:"..roundKey)
+            send(MatchAction,"replay",nil,nil)
+        end
+        return
+    end
     if cfg.autoPlace and PlaceRequest and not Runtime.busy.place and cooldown("place",1) then
         for index,marker in ipairs(map) do
             local pos=tableToVec(marker.position)
