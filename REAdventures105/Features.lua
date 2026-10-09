@@ -957,14 +957,12 @@ end
 refreshMarkerLists()
 updateStatUnits()
 updateMiscAvatar()
-local oldCleanup=Env.__SARTEX_UD105_CLEANUP
-Env.__SARTEX_UD105_CLEANUP=function()
+Env.__CE_RE105_EXTRA_CLEANUP=function()
     Runtime.macroPlaying=false
     Runtime.macroRecording=false
     Env.__CE105_MACRO_RECORD=nil
     for _,connection in ipairs(Links) do pcall(function()connection:Disconnect()end)end
     if markerFolder.Parent then markerFolder:Destroy() end
-    if type(oldCleanup)=="function" then oldCleanup() end
 end
 return true
 end
