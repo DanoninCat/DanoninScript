@@ -133,7 +133,8 @@ local function mapKey()
         attr(map,"LevelId"),attr(map,"MapId"),attr(map,"StageId"),
         map and map.Name
     }
-    for _,value in ipairs(keys) do
+    for i=1,12 do
+        local value=keys[i]
         if value~=nil and toText(value)~="" then return toText(value) end
     end
     return "current-map"
@@ -144,7 +145,8 @@ local function modeForMatch()
         m.mode,m.Mode,m.matchType,m.MatchType,m.gameMode,m.GameMode,m.raidKey,
         attr(LocalPlayer,"MatchMode"),attr(LocalPlayer,"GameMode"),attr(workspace,"MatchMode")
     }
-    for _,raw in ipairs(values) do
+    for i=1,9 do
+        local raw=values[i]
         local text=toText(raw):lower()
         for word,section in pairs(ModeLookup) do
             if text:find(word,1,true) then return section end
@@ -466,7 +468,7 @@ local statLastId=nil
 local statNext=0
 local statResultAt=0
 local statFailure=0
-local StatList={"All","Damage","Range","SPA"}
+local StatList={"All","Attack","Range","Cooldown"}
 local StatChoices={}
 local function updateStatUnits()
     local values={}
@@ -511,7 +513,7 @@ task.spawn(function()
                 if not statResultPending then
                     statResultPending=true
                     statResultAt=os.clock()
-                    local stat=Config.stat.stat~="All" and Config.stat.stat:lower() or nil
+                    local stat=Config.stat.stat~="All" and Config.stat.stat or nil
                     if not send(StatRerollRequest,{id=unit,stat=stat}) then statResultPending=false end
                     statNext=os.clock()+1.2
                 end
@@ -571,6 +573,7 @@ local function recordAction(action)
     local macro=Config.macros[name]
     if not macro then return end
     action.time=math.max(0,os.clock()-Runtime.macroStart)
+    action._idx=#macro.actions+1
     macro.actions[#macro.actions+1]=action
 end
 local function currentPlaceIndex(placeId)
@@ -771,9 +774,8 @@ task.spawn(function()
             for code in pairs(CodeCandidates) do
                 if not Config.codeDone[code] then
                     local ok,result=pcall(function()return RedeemCode:InvokeServer(code)end)
-                    if ok and type(result)=="table" and (result.success==true or result.alreadyRedeemed==true) then
-                        Config.codeDone[code]=true
-                    end
+                    Config.codeDone[code]=true
+                    if not ok then Env.__CE_RE105_LAST_ERROR="Code redemption failed" end
                     break
                 end
             end
@@ -929,10 +931,11 @@ task.spawn(function()
                 end
             end
         end
-        if Runtime.autoMacro and not Runtime.macroPlaying and isInMatch() and cooldown("macro",10) then
+        local macroRunKey="macroRound:"..tostring(Runtime.round)
+        if Runtime.autoMacro and not Runtime.macroPlaying and isInMatch() and not Runtime.last[macroRunKey] then
             local macro=Config.macros[safeName(Config.macroName)]
             if macro and macro.map==mapKey() and macro.mode==modeForMatch() and #macro.actions>0 then
-                setLast("macro")
+                setLast(macroRunKey)
                 task.spawn(replayMacro)
             end
         end
