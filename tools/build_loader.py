@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PAYLOADS = {
     105596644794991: {
-        "raw_file": "UntitledDefense105/Main.lua",
+        "remote_file": "UntitledDefense105/Main.lua",
         "default_key": 211,
     },
     79073563583903: {
