@@ -1196,7 +1196,7 @@ end
 Env.__SARTEX_UD105_CLEANUP = cleanup
 
 local Window = Fluent:CreateWindow({
-    Title = "SARTEX INTERNAL",
+    Title = "CAT EMPIRE",
     SubTitle = "RE Adventures",
     TabWidth = 150,
     Size = UDim2.fromOffset(760, 470),
@@ -1213,6 +1213,9 @@ local Tabs = {
     Story = Window:AddTab({Title = "Story Mode", Icon = "solar/flag-bold"}),
     Lobby = Window:AddTab({Title = "Lobby", Icon = "solar/home-2-bold"}),
     Modes = Window:AddTab({Title = "Modes", Icon = "solar/gamepad-bold"}),
+    Raids = Window:AddTab({Title = "Raids", Icon = "solar/shield-bold"}),
+    Castle = Window:AddTab({Title = "Infinite Castle", Icon = "solar/buildings-bold"}),
+    Portals = Window:AddTab({Title = "Portals", Icon = "solar/bolt-bold"}),
     Webhook = Window:AddTab({Title = "Webhook", Icon = "solar/link-bold"}),
     Macro = Window:AddTab({Title = "Macro", Icon = "solar/play-circle-bold"}),
     Misc = Window:AddTab({Title = "Misc", Icon = "solar/user-bold"}),
@@ -1701,7 +1704,7 @@ Tabs.Settings:AddDropdown(
 )
 
 Tabs.Settings:AddButton({
-    Title = "Unload SARTEX INTERNAL",
+    Title = "Unload CAT EMPIRE",
     Icon = "solar/power-bold",
     Callback = cleanup,
 })
