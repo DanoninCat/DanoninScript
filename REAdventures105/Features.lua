@@ -7,6 +7,7 @@ local CollectionService = game:GetService("CollectionService")
 local RunService = game:GetService("RunService")
 local RS = game:GetService("ReplicatedStorage")
 local MatchConfig = require(RS:WaitForChild("MatchConfig"))
+local LevelData = require(RS:WaitForChild("LevelData"))
 local PlacementConfig = require(RS:WaitForChild("PlacementConfig"))
 local PlaceRequest = Remotes:FindFirstChild("PlaceRequest")
 local MatchAction = Remotes:FindFirstChild("MatchAction")
@@ -125,31 +126,33 @@ local function attr(instance,key)
     return ok and v or nil
 end
 local function mapKey()
-    local map=workspace:FindFirstChild("map")
     local m=Runtime.match or {}
-    local keys={
-        m.levelId,m.LevelId,m.stageId,m.StageId,m.mapId,m.MapId,
-        attr(LocalPlayer,"MatchLevelId"),attr(LocalPlayer,"CurrentMapId"),
-        attr(map,"LevelId"),attr(map,"MapId"),attr(map,"StageId"),
-        map and map.Name
-    }
-    for i=1,12 do
-        local value=keys[i]
-        if value~=nil and toText(value)~="" then return toText(value) end
-    end
-    return "current-map"
+    local map=workspace:FindFirstChild("map")
+    local key=m.levelId or m.LevelId or m.stageId or m.StageId or m.mapId or m.MapId
+        or workspace:GetAttribute("MatchLevelId")
+        or attr(LocalPlayer,"MatchLevelId")
+        or attr(LocalPlayer,"CurrentMapId")
+        or attr(map,"LevelId") or attr(map,"MapId")
+        or (map and map.Name) or "current-map"
+    return toText(key)
 end
 local function modeForMatch()
     local m=Runtime.match or {}
-    local values={
-        m.mode,m.Mode,m.matchType,m.MatchType,m.gameMode,m.GameMode,m.raidKey,
-        attr(LocalPlayer,"MatchMode"),attr(LocalPlayer,"GameMode"),attr(workspace,"MatchMode")
-    }
-    for i=1,9 do
-        local raw=values[i]
-        local text=toText(raw):lower()
-        for word,section in pairs(ModeLookup) do
-            if text:find(word,1,true) then return section end
+    local raw=m.mode or m.Mode or m.kind or m.Kind or m.matchType or m.MatchType
+        or m.gameMode or m.GameMode or m.raidKey or attr(LocalPlayer,"MatchMode")
+        or workspace:GetAttribute("MatchMode")
+    local label=toText(raw):lower()
+    for word,section in pairs(ModeLookup) do
+        if label:find(word,1,true) then return section end
+    end
+    -- MatchLevelId is published as a workspace attribute by the native client.
+    local id=workspace:GetAttribute("MatchLevelId") or m.levelId or m.LevelId
+    if id~=nil then
+        local ok,level=pcall(LevelData.byId,id)
+        if ok and type(level)=="table" then
+            if level.raid then return "Raids" end
+            if level.portal then return "Portals" end
+            if level.castle or level.id=="infinity_castle" then return "Infinite Castle" end
         end
     end
     return "Story Mode"
@@ -474,7 +477,6 @@ addSectionUI(Tabs.Portals,"Portals")
 
 -- The Modes tab is navigation/start only. Every automation belongs to its dedicated tab.
 local LobbyRoomAction = Remotes:FindFirstChild("LobbyRoomAction")
-local LevelData = require(RS:WaitForChild("LevelData"))
 local MadokaData = require(RS:WaitForChild("MadokaData"))
 local RaidLevelMap = {}
 local RaidLevelNames = {}
