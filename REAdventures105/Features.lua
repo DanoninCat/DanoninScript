@@ -864,23 +864,74 @@ UI.PlayerAvatar=Tabs.Misc:AddParagraph({Title="Player Avatar",Content=LocalPlaye
 Tabs.Misc:AddSection("Automation")
 toggle(Tabs.Misc,"AutoLuck","Auto Luck Potion",false,function(v)Config.luck=v==true end)
 toggle(Tabs.Misc,"AutoCodes","Auto Redeem Codes",false,function(v)Config.codes=v==true end)
-local CodeCandidates={}
-local function refreshCodes()
-    table.clear(CodeCandidates)
-    for _,name in ipairs({"CodeData","CodesData","RedeemCodes","Codes"}) do
-        local instance=RS:FindFirstChild(name)
-        if instance and instance:IsA("ModuleScript") then
-            local ok,data=pcall(require,instance)
-            if ok and type(data)=="table" then
-                for k,v in pairs(data) do
-                    if type(k)=="string" and (v==true or type(v)=="table") then
-                        CodeCandidates[k]=true
-                    elseif type(v)=="string" then CodeCandidates[v]=true end
-                end
+-- Publicly documented RE Adventures codes, reviewed 2026-10-09.
+-- The game's RedeemCode RemoteFunction remains the authority on validity.
+local CodeCandidates={
+    "TYFORTHESUPPORT",
+    "HIIMSLOWIMATWORKNOWSOBESAFE",
+    "ISTHISTHEEND",
+    "UPDATESOON",
+    "PLEASEUPDATE",
+    "2MVisits!",
+    "GETTO50KMEMBERS",
+    "SORRYFORDRAMA",
+    "CCU13KW",
+    "CCU9KTY",
+    "CCU10KOMGILYTY",
+}
+local codeFile=ProfilesFolder.."/codes_"..toText(LocalPlayer.UserId)..".json"
+local codeRetry={}
+local codeAttemptCursor=0
+local function hydrateRedeemedCodes()
+    local saved=readJSON(codeFile)
+    if type(saved)=="table" then
+        Config.codeDone=Config.codeDone or {}
+        for name,status in pairs(saved) do
+            if type(name)=="string" and
+                (status==true or status=="redeemed" or status=="already") then
+                Config.codeDone[name]=status
             end
         end
     end
 end
+local function recordCodeResult(code,state)
+    Config.codeDone[code]=state
+    writeJSON(codeFile,Config.codeDone)
+end
+local function runNextCode()
+    if not RedeemCode or not RedeemCode:IsA("RemoteFunction") then return end
+    if #CodeCandidates==0 then return end
+    for _=1,#CodeCandidates do
+        codeAttemptCursor=(codeAttemptCursor%#CodeCandidates)+1
+        local code=CodeCandidates[codeAttemptCursor]
+        if not Config.codeDone[code] and os.clock()>=(codeRetry[code] or 0) then
+            local ok,response=pcall(function() return RedeemCode:InvokeServer(code) end)
+            if not ok or type(response)~="table" then
+                codeRetry[code]=os.clock()+120
+                Env.__CE_RE105_LAST_CODE_RESULT=code.." | network error"
+            elseif response.success==true then
+                recordCodeResult(code,"redeemed")
+                Env.__CE_RE105_LAST_CODE_RESULT=code.." | redeemed: "..toText(response.message)
+            else
+                local reason=toText(response.reason or response.message or "unknown"):lower()
+                Env.__CE_RE105_LAST_CODE_RESULT=code.." | "..reason
+                if reason:find("already",1,true) or reason:find("redeemed",1,true)
+                    or reason:find("used",1,true) then
+                    recordCodeResult(code,"already")
+                elseif reason:find("expired",1,true) or reason:find("invalid",1,true)
+                    or reason:find("not exist",1,true) then
+                    -- Treat only clear server-side terminal errors as permanently invalid.
+                    recordCodeResult(code,"expired")
+                else
+                    -- Level requirements, temporary errors and unknown replies are retryable.
+                    codeRetry[code]=os.clock()+180
+                end
+            end
+            return
+        end
+    end
+end
+hydrateRedeemedCodes()
 local luckLast=0
 local codeLast=0
 task.spawn(function()
@@ -898,15 +949,7 @@ task.spawn(function()
         end
         if Config.codes and not isInMatch() and RedeemCode and os.clock()-codeLast>15 then
             codeLast=os.clock()
-            refreshCodes()
-            for code in pairs(CodeCandidates) do
-                if not Config.codeDone[code] then
-                    local ok,result=pcall(function()return RedeemCode:InvokeServer(code)end)
-                    Config.codeDone[code]=true
-                    if not ok then Env.__CE_RE105_LAST_ERROR="Code redemption failed" end
-                    break
-                end
-            end
+            runNextCode()
         end
         task.wait(2)
     end
@@ -943,6 +986,7 @@ local function loadProfile(name)
     Config.luck=prev.luck==true
     Config.codes=prev.codes==true
     Config.codeDone=prev.codeDone or {}
+    hydrateRedeemedCodes()
     local old=data.existing or {}
     for _,key in ipairs({"SelectedUnits","TraitTargets","CapsuleTargets"}) do
         if type(old[key])=="table" then S[key]=copyPlain(old[key],0) end
