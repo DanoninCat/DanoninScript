@@ -1,46 +1,84 @@
 local TARGET = 105596644794991
 local BASE = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/"
-local currentPlace = game.PlaceId
-local universe = game.GameId
-if currentPlace ~= TARGET and universe ~= TARGET then
-    return loadstring(game:HttpGet(BASE .. "Loader/Legacy.lua", true))()
-end
 local env = (getgenv and getgenv()) or _G
-env.__CE_RE105_BOOT_STAGE = "Starting"
+env.__CE_RE105_BOOT_STAGE = "Router"
 env.__CE_RE105_BOOT_ERROR = nil
+env.__CE_RE105_FEATURES_ERROR = nil
+env.__CE_RE105_PLACE_ID = game.PlaceId
+env.__CE_RE105_UNIVERSE_ID = game.GameId
 
-local function module(path, stage)
+local function matchesREAdventures105()
+    if game.PlaceId == TARGET or game.GameId == TARGET then
+        return true, "Target ID"
+    end
+    -- Some RE Adventures lobbies and match instances use different PlaceIds.
+    -- Recognize only this game's exact client modules and remote contract.
+    local storage = game:GetService("ReplicatedStorage")
+    local remotes = storage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = storage:WaitForChild("Remotes", 5)
+    end
+    if not remotes then
+        return false, "Remotes missing"
+    end
+    for _, name in ipairs({
+        "InventoryRequest", "InventoryResult", "TraitRerollRequest",
+        "TraitRerollResult", "HalloweenShop"
+    }) do
+        if not remotes:FindFirstChild(name) then
+            return false, "Missing " .. name
+        end
+    end
+    for _, name in ipairs({"TraitData", "UnitData", "ItemData", "HalloweenData"}) do
+        if not storage:FindFirstChild(name) then
+            return false, "Missing " .. name
+        end
+    end
+    return true, "Client fingerprint"
+end
+
+local function loadModule(path, stage)
     env.__CE_RE105_BOOT_STAGE = stage
-    local ok, source = pcall(function()
+    local ok, body = pcall(function()
         return game:HttpGet(BASE .. path, true)
     end)
     if not ok then
-        error(stage .. ": HTTP failure: " .. tostring(source), 0)
+        error(stage .. ": HTTP failure: " .. tostring(body), 0)
     end
-    if type(source) ~= "string" or #source == 0 then
+    if type(body) ~= "string" or #body == 0 then
         error(stage .. ": empty file: " .. path, 0)
     end
-    local chunk, syntaxError = loadstring(source)
+    local chunk, syntaxError = loadstring(body)
     if not chunk then
-        error(stage .. ": invalid script: " .. tostring(syntaxError), 0)
+        error(stage .. ": invalid Lua: " .. tostring(syntaxError), 0)
     end
     return chunk()
 end
 
 local ok, result = pcall(function()
-    local fluentSource = module("Loader/FluentPayload.lua", "Loading UI")
+    local isTarget, reason = matchesREAdventures105()
+    env.__CE_RE105_ROUTE = reason
+    if not isTarget then
+        env.__CE_RE105_BOOT_STAGE = "Legacy - different game"
+        return loadModule("Loader/Legacy.lua", "Loading another CAT EMPIRE game")
+    end
+    env.__CE_RE105_BOOT_STAGE = "Loading UI"
+    local fluentSource = loadModule("Loader/FluentPayload.lua", "Loading UI")
     if type(fluentSource) ~= "string" or #fluentSource == 0 then
-        error("UI module did not return source", 0)
+        error("UI module returned an invalid source", 0)
     end
     env.__CE_F_91A7 = fluentSource
-    return module("UntitledDefense105/Main.lua", "Loading CAT EMPIRE")
+    return loadModule("UntitledDefense105/Main.lua", "Loading RE Adventures")
 end)
 env.__CE_F_91A7 = nil
 if not ok then
-    local diagnostic = "[CAT EMPIRE RE Adventures] " .. tostring(result)
+    local diagnostic = "[CAT EMPIRE] " .. tostring(result)
     env.__CE_RE105_BOOT_ERROR = diagnostic
+    env.__CE_RE105_BOOT_STAGE = "Error"
     warn(diagnostic)
     error(diagnostic, 0)
 end
-env.__CE_RE105_BOOT_STAGE = "Loaded"
+if env.__CE_RE105_BOOT_STAGE ~= "Loading another CAT EMPIRE game" then
+    env.__CE_RE105_BOOT_STAGE = "Loaded"
+end
 return result
