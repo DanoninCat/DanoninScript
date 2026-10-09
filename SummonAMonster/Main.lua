@@ -29,6 +29,8 @@ local S = {
     AttackInterval = 0.25, Target = nil, AutoCollect = false,
     CollectNormal = true, CollectRadiant = true, CollectShiny = true,
     AutoEquipCores = false, AutoEquipGear = false, AutoCraftBest = false,
+    AutoEvolve = false, ConfirmEvolve = false, EvolveType = "",
+    InventoryCache = nil, InventoryUpdated = 0, LastEvolve = 0,
     AutoDaily = false, AutoGroup = false, AutoHeal = false,
     AutoTower = false, AutoNative = false, AutoSell = false,
     SellDuplicates = false, SellRarity = 1, ConfirmSell = false,
@@ -263,6 +265,54 @@ end
 local function inventory(action, ...)
     return remote("InventarioAcao", action, ...)
 end
+
+local function evolveOnce()
+    if not S.ConfirmEvolve or not S.InventoryCache then return end
+    if os.clock() - S.InventoryUpdated > 25 then
+        inventory("Sincronizar")
+        return
+    end
+    if os.clock() - S.LastEvolve < 9 then return end
+    local groups = {}
+    local items = S.InventoryCache.Inventario
+    if type(items) ~= "table" then return end
+    for _, item in pairs(items) do
+        if type(item) == "table" and item.Categoria == "Nucleo"
+            and type(item.Tipo) == "string" and type(item.Slot) == "number"
+            and item.Travado ~= true and item.Shiny ~= true and item.Radiante ~= true
+            and ((tonumber(item.Estrelas) or 0) < 5)
+            and (S.EvolveType == "" or item.Tipo == S.EvolveType)
+            and not (type(MonsterData[item.Tipo]) == "table" and MonsterData[item.Tipo].Chefe == true)
+        then
+            groups[item.Tipo] = groups[item.Tipo] or {}
+            table.insert(groups[item.Tipo], item)
+        end
+    end
+    for _, group in pairs(groups) do
+        if #group >= 4 then
+            table.sort(group, function(a, b)
+                local ea, eb = tonumber(a.Estrelas) or 0, tonumber(b.Estrelas) or 0
+                if ea ~= eb then return ea > eb end
+                return (tonumber(a.Qualidade) or 0) > (tonumber(b.Qualidade) or 0)
+            end)
+            local target, fodder = group[1], {}
+            for i = #group, 2, -1 do
+                local item = group[i]
+                if (tonumber(item.Estrelas) or 0) == 0 and #fodder < 3 then
+                    table.insert(fodder, item.Slot)
+                end
+            end
+            if #fodder == 3 then
+                S.LastEvolve = os.clock()
+                inventory("Evoluir", target.Slot, fodder)
+                task.delay(1.5, function()
+                    if S.Running then inventory("Sincronizar") end
+                end)
+                return
+            end
+        end
+    end
+end
 local function dailyTick()
     if os.clock() < S.NextDaily then return end
     S.NextDaily = os.clock() + 65
@@ -393,6 +443,13 @@ action(Tabs.Cores, "Equip Best Nucleos", function()
     inventory("EquiparMelhores", "nucleos")
 end)
 action(Tabs.Cores, "Sync Nucleos", function() inventory("Sincronizar") end)
+Tabs.Cores:AddInput("SAM_EvolveType", {
+    Title = "Evolve Monster Type (empty = any)", Default = "",
+    Callback = function(v) S.EvolveType = tostring(v or "") end,
+})
+toggle(Tabs.Cores, "ConfirmEvolve", "Allow Consuming Normal Cores", "ConfirmEvolve")
+toggle(Tabs.Cores, "AutoEvolve", "Auto Evolve Normal Cores", "AutoEvolve")
+action(Tabs.Cores, "Evolve One Eligible Core", evolveOnce)
 Toggles.AutoNative = Tabs.Cores:AddToggle("SAM_NativeAuto", {
     Title = "Native Auto (Requires Gamepass)", Default = false,
     Callback = function(value)
@@ -489,7 +546,7 @@ Tabs.Settings:AddDropdown("SAM_Theme", {
 local ConfigKeys = {
     "AutoFarm", "AutoAttack", "FollowTarget", "BossOnly", "AutoCollect",
     "CollectNormal", "CollectRadiant", "CollectShiny", "AutoEquipCores",
-    "AutoEquipGear", "AutoCraftBest", "AutoDaily", "AutoGroup", "AutoHeal",
+    "AutoEquipGear", "AutoCraftBest", "AutoEvolve", "ConfirmEvolve", "AutoDaily", "AutoGroup", "AutoHeal",
     "AutoTower", "AutoNative", "AutoSell", "SellDuplicates", "ConfirmSell",
     "ESPMonsters", "ESPCores", "NotifyRare", "AntiAFK",
     "AutoRejoin", "AutoExecute",
@@ -601,6 +658,15 @@ for _, name in ipairs({"Nucleos", "NucleosRaros"}) do
     local folder = workspace:FindFirstChild(name)
     if folder then link(folder.ChildAdded, function(core) task.defer(watchCore, core) end) end
 end
+local invUpdate = RS:FindFirstChild("InventarioAtualizar")
+if invUpdate and invUpdate:IsA("RemoteEvent") then
+    link(invUpdate.OnClientEvent, function(data)
+        if type(data) == "table" and type(data.Inventario) == "table" then
+            S.InventoryCache = data
+            S.InventoryUpdated = os.clock()
+        end
+    end)
+end
 local dailyResponse = RS:FindFirstChild("BonusDiario")
 if dailyResponse and dailyResponse:IsA("RemoteEvent") then
     link(dailyResponse.OnClientEvent, function(command, data)
@@ -656,6 +722,7 @@ worker("AutoHeal", 2, function()
     end
 end)
 worker("AutoEquipCores", 15, function() inventory("EquiparMelhores", "nucleos") end)
+worker("AutoEvolve", 13, evolveOnce)
 worker("AutoEquipGear", 15, function() inventory("EquiparMelhores", "equipamento") end)
 worker("AutoCraftBest", 22, function() remote("CraftingEvento", "CraftarMelhores") end)
 worker("AutoDaily", 6, dailyTick)
@@ -703,4 +770,5 @@ task.spawn(function()
 end)
 
 refreshMonsters(true)
+inventory("Sincronizar")
 notify("Summon A Monster module loaded - select monsters to begin")
