@@ -397,14 +397,13 @@ local function detectedWorldMap()
         end
     end
     local current = currentMap()
-    if current and candidates[current] then
-        return current
-    end
     local bestName, bestDistance, bestCount
     for mapName, row in pairs(candidates) do
         local distance = row.Distance or math.huge
         local count = row.Count or 0
-        if not bestName or distance < bestDistance or (distance == bestDistance and count > bestCount) then
+        if not bestName
+            or distance < bestDistance
+            or (distance == bestDistance and count > bestCount) then
             bestName = mapName
             bestDistance = distance
             bestCount = count
@@ -508,6 +507,37 @@ local function refreshNPCs(force)
         end
     end
     return names
+end
+
+local function manualRefreshNPCs()
+    LastNPCSignature = ""
+    preloadWorldEnemyDefinitions()
+    local deadline = os.clock() + 4
+    local lastSignature = nil
+    local stable = 0
+    local values = {}
+    repeat
+        recheckNativeEnemies()
+        local here = detectedWorldMap() or currentMap()
+        if here then
+            ensureMapEnemyDefinitions(here)
+        end
+        task.wait(0.05)
+        values = refreshNPCs(true)
+        local activeMap = detectedWorldMap() or currentMap() or ""
+        local signature = activeMap .. "|" .. table.concat(values, "|")
+        if signature == lastSignature then
+            stable = stable + 1
+        else
+            lastSignature = signature
+            stable = 0
+        end
+        if stable >= 3 then
+            break
+        end
+        task.wait(0.1)
+    until not State.Running or os.clock() >= deadline
+    return values
 end
 
 local function isSelectedNPC(name)
@@ -1365,29 +1395,18 @@ local function requestNativeStars()
         return true
     end
     State.StarNativeRequestedAt = os.clock()
-    local opened = false
-    if type(controller.Start) == "function" then
-        opened = pcall(controller.Start, name)
-    elseif type(controller.OpenUI) == "function" then
-        opened = pcall(controller.OpenUI, name, true)
+    local saved = false
+    local autoRoll = Omni.AutoRoll
+    if type(autoRoll) == "table" and type(autoRoll.SaveStar) == "function" then
+        saved = pcall(autoRoll.SaveStar, name)
     end
-    if not opened then
-        return false
+    local resumed = pcall(function()
+        Omni.Signal:FireSelf("Interface", "Stars", "Resume", name)
+    end)
+    if not resumed and type(controller.Resume) == "function" then
+        resumed = pcall(controller.Resume, name)
     end
-    task.wait(0.05)
-    if type(controller.StartAutoRoll) == "function" then
-        pcall(controller.StartAutoRoll)
-    end
-    for _ = 1, 8 do
-        if isNativeStarRolling(controller) then
-            if type(controller.CloseUI) == "function" then
-                pcall(controller.CloseUI)
-            end
-            return true
-        end
-        task.wait(0.05)
-    end
-    return false
+    return saved or resumed
 end
 
 local function starAutoStep()
@@ -2399,27 +2418,7 @@ Tabs.Farm:AddButton({
     Title = "Refresh NPCs",
     Icon = "solar/refresh-bold",
     Callback = function()
-        task.spawn(function()
-            local deadline = os.clock() + 8
-            local lastSignature = nil
-            local stable = 0
-            preloadWorldEnemyDefinitions()
-            repeat
-                recheckNativeEnemies()
-                local values = refreshNPCs(true)
-                local signature = table.concat(values, "|")
-                if signature == lastSignature then
-                    stable = stable + 1
-                else
-                    stable = 0
-                    lastSignature = signature
-                end
-                if stable >= 10 then
-                    break
-                end
-                task.wait(0.2)
-            until not State.Running or os.clock() >= deadline
-        end)
+        task.spawn(manualRefreshNPCs)
     end,
 })
 Controls.AutoFarm = Tabs.Farm:AddToggle("CE106_AutoFarm", {
@@ -2567,9 +2566,6 @@ Controls.AutoStars = Tabs.Stars:AddToggle("CE106_AutoStars", {
         else
             stopNativeStars()
         end
-        if State.AutoStars and State.AutoGacha then
-            setControl("AutoGacha", false)
-        end
     end,
 })
 end)
@@ -2605,9 +2601,6 @@ Controls.AutoGacha = Tabs.Gacha:AddToggle("CE106_AutoGacha", {
             task.defer(gachaStep)
         else
             stopNativeGacha()
-        end
-        if State.AutoGacha and State.AutoStars then
-            setControl("AutoStars", false)
         end
     end,
 })
@@ -2749,7 +2742,7 @@ local function startCoreWorkers()
                 end
                 if State.AutoQuestWorlds then
                     pcall(autoQuestWorldStep)
-                elseif State.AutoFarm and not State.AutoStars and not State.AutoGacha then
+                elseif State.AutoFarm then
                     pcall(farmStep, true)
                 end
             end
@@ -2776,7 +2769,6 @@ local function startCoreWorkers()
     end)
 end
 
-startCoreWorkers()
 
 uiSafe("Traits", function()
 Controls.Fighters = Tabs.Traits:AddDropdown("CE106_Fighters", {
@@ -3070,6 +3062,11 @@ uiSafe("Settings Profiles", function()
         end,
     })
 end)
+
+normalizeTabNavigation()
+task.defer(normalizeTabNavigation)
+task.delay(0.5, normalizeTabNavigation)
+startCoreWorkers()
 
 local function cleanup()
     State.Running = false
