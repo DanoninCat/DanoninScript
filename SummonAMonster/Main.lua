@@ -38,7 +38,7 @@ local S = {
     LastFarmResult = "", LastRemoteError = "", LastClaim = 0,
     LastMonsterRefresh = 0, LastTargetKey = "", NextDaily = 0,
     NextTower = 0, NextCollection = 0, NextCraft = 0,
-    LastPity = "", ReforgeZone = "equipamento", ReforgeIndex = 1,
+    LastPity = "", ReforgeZone = "eq", ReforgeIndex = 1,
     CraftRecipe = "", PortalArea = "", ConfigName = "CATEMPIRE_SummonAMonster.json",
 }
 local Links, Highlights, Toggles = {}, {}, {}
@@ -393,7 +393,22 @@ action(Tabs.Cores, "Equip Best Nucleos", function()
     inventory("EquiparMelhores", "nucleos")
 end)
 action(Tabs.Cores, "Sync Nucleos", function() inventory("Sincronizar") end)
-toggle(Tabs.Cores, "NativeAuto", "Native Auto (Requires Gamepass)", "AutoNative")
+Toggles.AutoNative = Tabs.Cores:AddToggle("SAM_NativeAuto", {
+    Title = "Native Auto (Requires Gamepass)", Default = false,
+    Callback = function(value)
+        if value == true and LP:GetAttribute("Passe_Auto") ~= true then
+            S.AutoNative = false
+            notify("Native Auto requires the game's pass")
+            task.defer(function() pcall(function() Toggles.AutoNative:SetValue(false) end) end)
+            return
+        end
+        S.AutoNative = value == true
+        if not S.AutoNative and S.NativeStarted then
+            S.NativeStarted = false
+            remote("AutoEvento", "desligar")
+        end
+    end,
+})
 
 toggle(Tabs.Inventory, "EquipGear", "Auto Equip Best Equipment", "AutoEquipGear")
 action(Tabs.Inventory, "Equip Best Equipment", function()
@@ -422,15 +437,16 @@ action(Tabs.Upgrades, "Craft Selected Recipe", function()
     if S.CraftRecipe == "" then notify("Enter recipe ID"); return end
     remote("CraftingEvento", "Craftar", S.CraftRecipe)
 end)
-Tabs.Upgrades:AddInput("SAM_ReforgeZone", {
-    Title = "Reforge Equipment Zone", Default = "equipamento",
+Tabs.Upgrades:AddDropdown("SAM_ReforgeZone", {
+    Title = "Reforge Nucleo Zone", Values = {"eq", "inv"}, Default = "eq",
+    DropdownOutsideWindow = true,
     Callback = function(v) S.ReforgeZone = tostring(v) end,
 })
 Tabs.Upgrades:AddInput("SAM_ReforgeIndex", {
     Title = "Reforge Equipment Index", Default = "1", Numeric = true,
     Callback = function(v) S.ReforgeIndex = math.max(1, math.floor(tonumber(v) or 1)) end,
 })
-action(Tabs.Upgrades, "Reforge Once (No Locks)", function()
+action(Tabs.Upgrades, "Reforge Nucleo Once (No Locks)", function()
     remote("ReforjaEvento", "Reforjar", S.ReforgeZone, S.ReforgeIndex, {})
 end)
 
@@ -647,7 +663,10 @@ worker("AutoGroup", 120, function() remote("GrupoResgatar") end)
 worker("AutoTower", 12, function() remote("TorreEvento", "Continuar") end)
 worker("AutoNative", 4, function()
     if LP:GetAttribute("Passe_Auto") == true then
-        if LP:GetAttribute("AutoAtivo") ~= true then remote("AutoEvento", "ligar") end
+        if LP:GetAttribute("AutoAtivo") ~= true then
+            local ok = remote("AutoEvento", "ligar")
+            if ok then S.NativeStarted = true end
+        end
     else
         S.AutoNative = false
         pcall(function() Toggles.AutoNative:SetValue(false) end)
