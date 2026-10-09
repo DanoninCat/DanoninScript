@@ -468,9 +468,129 @@ local function addSectionUI(tab,name)
     end})
 end
 addSectionUI(Tabs.Story,"Story Mode")
-addSectionUI(Tabs.Modes,"Raids")
-addSectionUI(Tabs.Modes,"Infinite Castle")
-addSectionUI(Tabs.Modes,"Portals")
+addSectionUI(Tabs.Raids,"Raids")
+addSectionUI(Tabs.Castle,"Infinite Castle")
+addSectionUI(Tabs.Portals,"Portals")
+
+-- The Modes tab is navigation/start only. Every automation belongs to its dedicated tab.
+local LobbyRoomAction = Remotes:FindFirstChild("LobbyRoomAction")
+local LevelData = require(RS:WaitForChild("LevelData"))
+local MadokaData = require(RS:WaitForChild("MadokaData"))
+local RaidLevelMap = {}
+local RaidLevelNames = {}
+local function listRaidLevels()
+    table.clear(RaidLevelMap)
+    table.clear(RaidLevelNames)
+    for _,level in ipairs(LevelData.Levels or {}) do
+        if level.raid and level.id then
+            local label=toText(level.location or "Raid").." / Act "..toText(level.act or 1)..
+                " - "..toText(level.name or level.id)
+            RaidLevelMap[label]=level.id
+            RaidLevelNames[#RaidLevelNames+1]=label
+        end
+    end
+    table.sort(RaidLevelNames)
+    return RaidLevelNames
+end
+local ModeChoice={raidId="",raidDifficulty="Hard",castleDifficulty="Normal",portalId=""}
+Tabs.Modes:AddSection("Raids")
+local raidNames=listRaidLevels()
+dropdown(Tabs.Modes,"Modes_RaidLevel","Raid",raidNames,raidNames[1],function(v)
+    ModeChoice.raidId=RaidLevelMap[toText(v)] or ""
+end)
+if #raidNames>0 then ModeChoice.raidId=RaidLevelMap[raidNames[1]] end
+dropdown(Tabs.Modes,"Modes_RaidDifficulty","Difficulty",{"Normal","Hard","Nightmare"},"Hard",
+    function(v) ModeChoice.raidDifficulty=toText(v) end)
+Tabs.Modes:AddButton({Title="Teleport to Raids",Callback=function()
+    if isInMatch() then return end
+    if not send(LobbyRoomAction,"travel","raid") then notify("Raid travel remote unavailable") end
+end})
+Tabs.Modes:AddButton({Title="Start Raid",Callback=function()
+    if isInMatch() then return end
+    local level=LevelData.byId(ModeChoice.raidId)
+    if not level or not level.raid then notify("Select a valid raid first") return end
+    local difficulty=ModeChoice.raidDifficulty
+    if type(level.difficulties)=="table" and not table.find(level.difficulties,difficulty) then
+        notify("Difficulty is unavailable for this raid") return
+    end
+    if not send(LobbyRoomAction,"matchmake",level.id,difficulty) then
+        notify("Raid matchmaking remote unavailable")
+    end
+end})
+Tabs.Modes:AddSection("Infinite Castle")
+dropdown(Tabs.Modes,"Modes_CastleDifficulty","Difficulty",{"Normal","Hard"},"Normal",
+    function(v) ModeChoice.castleDifficulty=toText(v) end)
+Tabs.Modes:AddButton({Title="Teleport to Infinite Castle",Callback=function()
+    if isInMatch() then return end
+    local npcRoot=nil
+    pcall(function()
+        npcRoot=require(RS:WaitForChild("NpcPrompt")).root("muzan")
+    end)
+    local character=LocalPlayer.Character
+    if npcRoot and character then
+        character:PivotTo(CFrame.new(npcRoot.Position+Vector3.new(0,0,5)))
+    else
+        notify("Infinity Castle NPC is not loaded")
+    end
+end})
+Tabs.Modes:AddButton({Title="Start Infinite Castle",Callback=function()
+    if isInMatch() then return end
+    if not send(LobbyRoomAction,"castle",ModeChoice.castleDifficulty) then
+        notify("Castle entry remote unavailable")
+    end
+end})
+Tabs.Modes:AddSection("Portals")
+local PortalLabels={}
+local PortalIds={}
+local function listOwnedPortals()
+    table.clear(PortalLabels)
+    table.clear(PortalIds)
+    for id,amount in pairs(S.Items or {}) do
+        if tonumber(amount) and tonumber(amount)>0 then
+            local ok,isPortal=pcall(MadokaData.portal,id)
+            if ok and isPortal then
+                local label=toText(id).." ("..toText(amount)..")"
+                PortalIds[label]=toText(id)
+                PortalLabels[#PortalLabels+1]=label
+            end
+        end
+    end
+    table.sort(PortalLabels)
+end
+dropdown(Tabs.Modes,"Modes_Portal","Portal",{},nil,function(v)
+    ModeChoice.portalId=PortalIds[toText(v)] or ""
+end)
+Tabs.Modes:AddButton({Title="Teleport to Portals",Callback=function()
+    if isInMatch() then return end
+    local portals=workspace:FindFirstChild("Portals")
+    local portal=portals and portals:FindFirstChildWhichIsA("Model")
+    local char=LocalPlayer.Character
+    if portal and char then
+        char:PivotTo(portal:GetPivot()*CFrame.new(0,0,6))
+    else notify("Portal area is not loaded") end
+end})
+Tabs.Modes:AddButton({Title="Start Portal",Callback=function()
+    if isInMatch() then return end
+    local id=ModeChoice.portalId
+    if id=="" or tonumber((S.Items or {})[id] or 0)<=0 then
+        notify("Select an owned portal from your inventory") return
+    end
+    if not send(LobbyRoomAction,"portal",id) then notify("Portal entry remote unavailable") end
+end})
+local lastPortalRefresh=0
+task.spawn(function()
+    while S.Running do
+        if os.clock()-lastPortalRefresh>5 then
+            lastPortalRefresh=os.clock()
+            listOwnedPortals()
+            local selectPortal=UI.Modes_Portal
+            if selectPortal and selectPortal.SetValues then
+                pcall(function()selectPortal:SetValues(PortalLabels)end)
+            end
+        end
+        task.wait(1)
+    end
+end)
 local statResultPending=false
 local statLastId=nil
 local statNext=0
