@@ -1,5 +1,7 @@
 -- Source tracked: UntitledDefense105/Main.lua
-if game.PlaceId ~= 105596644794991 then
+if game.PlaceId ~= 105596644794991 and game.GameId ~= 105596644794991 then
+    warn("[CAT EMPIRE] Unexpected game: " .. tostring(game.PlaceId) ..
+        " (universe " .. tostring(game.GameId) .. ")")
     return
 end
 
@@ -20,7 +22,7 @@ end
 
 local FluentSource = Env["__CE_F_91A7"]
 if type(FluentSource) ~= "string" or FluentSource == "" then
-    return
+    error("[CAT EMPIRE] Interface source unavailable. Execute the main loader.", 0)
 end
 
 local okFluent, Fluent = pcall(function()
@@ -28,21 +30,28 @@ local okFluent, Fluent = pcall(function()
 end)
 
 if not okFluent or not Fluent then
-    return
+    error("[CAT EMPIRE] Interface initialization failed: " .. tostring(Fluent), 0)
 end
 
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-local InventoryRequest = Remotes:WaitForChild("InventoryRequest")
-local InventoryResult = Remotes:WaitForChild("InventoryResult")
-local TraitRerollRequest = Remotes:WaitForChild("TraitRerollRequest")
-local TraitRerollResult = Remotes:WaitForChild("TraitRerollResult")
-local HalloweenShop = Remotes:WaitForChild("HalloweenShop")
-local ItemEvents = ReplicatedStorage:WaitForChild("ItemEvents")
+local function required(parent, name)
+    local instance = parent:WaitForChild(name, 12)
+    if not instance then
+        error("[CAT EMPIRE] Missing " .. parent:GetFullName() .. "." .. name, 0)
+    end
+    return instance
+end
+local Remotes = required(ReplicatedStorage, "Remotes")
+local InventoryRequest = required(Remotes, "InventoryRequest")
+local InventoryResult = required(Remotes, "InventoryResult")
+local TraitRerollRequest = required(Remotes, "TraitRerollRequest")
+local TraitRerollResult = required(Remotes, "TraitRerollResult")
+local HalloweenShop = required(Remotes, "HalloweenShop")
+local ItemEvents = required(ReplicatedStorage, "ItemEvents")
 
-local TraitData = require(ReplicatedStorage:WaitForChild("TraitData"))
-local UnitData = require(ReplicatedStorage:WaitForChild("UnitData"))
-local ItemData = require(ReplicatedStorage:WaitForChild("ItemData"))
-local HalloweenData = require(ReplicatedStorage:WaitForChild("HalloweenData"))
+local TraitData = require(required(ReplicatedStorage, "TraitData"))
+local UnitData = require(required(ReplicatedStorage, "UnitData"))
+local ItemData = require(required(ReplicatedStorage, "ItemData"))
+local HalloweenData = require(required(ReplicatedStorage, "HalloweenData"))
 
 local State = {
     Running = true,
@@ -1723,6 +1732,7 @@ local okExtension, extensionError = pcall(function()
 end)
 Env.__CE_RE105_FEATURES_ERROR = not okExtension and tostring(extensionError) or nil
 if not okExtension then
+    warn("[CAT EMPIRE] Additional features failed: " .. tostring(extensionError))
     pcall(function()
         Fluent:Notify({Title="CAT EMPIRE",Content=tostring(extensionError),Duration=7})
     end)
