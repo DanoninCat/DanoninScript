@@ -1361,45 +1361,33 @@ local function requestNativeStars()
     if not info or not controller then
         return false
     end
+    if isNativeStarRolling(controller) then
+        return true
+    end
     State.StarNativeRequestedAt = os.clock()
-    pcall(function()
-        Omni.Signal:FireSelf("Interface", "Stars", "Resume", name)
-    end)
-    if type(controller.Resume) == "function" then
-        pcall(controller.Resume, name)
-    end
-    if type(controller.RefreshCloseStars) == "function" then
-        for _ = 1, 15 do
-            pcall(controller.RefreshCloseStars)
-            if isNativeStarRolling(controller) then
-                return true
-            end
-            task.wait(0.05)
-        end
-    end
+    local opened = false
     if type(controller.Start) == "function" then
-        pcall(controller.Start, name)
+        opened = pcall(controller.Start, name)
     elseif type(controller.OpenUI) == "function" then
-        pcall(controller.OpenUI, name, true)
+        opened = pcall(controller.OpenUI, name, true)
     end
-    task.wait()
+    if not opened then
+        return false
+    end
+    task.wait(0.05)
     if type(controller.StartAutoRoll) == "function" then
         pcall(controller.StartAutoRoll)
     end
-    task.wait()
-    if isNativeStarRolling(controller) then
-        if type(controller.Roll) == "function" then
-            pcall(controller.Roll)
+    for _ = 1, 8 do
+        if isNativeStarRolling(controller) then
+            if type(controller.CloseUI) == "function" then
+                pcall(controller.CloseUI)
+            end
+            return true
         end
-        return true
+        task.wait(0.05)
     end
-    if type(controller.Roll) == "function" then
-        pcall(controller.Roll)
-    end
-    if type(controller.RefreshCloseStars) == "function" then
-        pcall(controller.RefreshCloseStars)
-    end
-    return isNativeStarRolling(controller)
+    return false
 end
 
 local function starAutoStep()
@@ -1415,17 +1403,9 @@ local function starAutoStep()
         return true
     end
     if State.StarNativeRequestedAt <= 0 or os.clock() - State.StarNativeRequestedAt >= 1 then
-        if requestNativeStars() then
-            return true
-        end
+        return requestNativeStars()
     end
-    if controller and type(controller.Roll) == "function" and os.clock() >= State.NextStarRoll then
-        local ok = pcall(controller.Roll)
-        if ok then
-            State.NextStarRoll = os.clock() + 0.35
-        end
-    end
-    return directStarRoll(name)
+    return false
 end
 
 local function orderedStars()
@@ -2397,7 +2377,7 @@ Controls.NPCs = Tabs.Farm:AddDropdown("CE106_NPCs", {
     Title = "NPCs",
     Values = {},
     Multi = true,
-    Default = nil,
+    Default = {},
     DropdownOutsideWindow = false,
     Callback = function(value)
         table.clear(State.SelectedNPCs)
@@ -2803,7 +2783,7 @@ Controls.Fighters = Tabs.Traits:AddDropdown("CE106_Fighters", {
     Title = "Fighters",
     Values = {},
     Multi = true,
-    Default = nil,
+    Default = {},
     DropdownOutsideWindow = false,
     Callback = function(value)
         table.clear(State.SelectedFighters)
@@ -2843,7 +2823,7 @@ Controls.TraitTargets = Tabs.Traits:AddDropdown("CE106_TraitTargets", {
     Title = "Wanted Traits",
     Values = orderedTraits(),
     Multi = true,
-    Default = nil,
+    Default = {},
     DropdownOutsideWindow = false,
     Callback = function(value)
         table.clear(State.TraitTargets)
