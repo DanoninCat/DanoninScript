@@ -143,6 +143,7 @@ local function refreshMonsters(force)
     local signature = table.concat(values, "|")
     if MonsterDropdown and (force or signature ~= S.LastTargetKey) then
         S.LastTargetKey = signature
+        S.UpdatingMonsterUI = true
         MonsterOptions = values
         local selected = {}
         for _, name in ipairs(values) do
@@ -152,6 +153,7 @@ local function refreshMonsters(force)
             MonsterDropdown:SetValues(values)
             MonsterDropdown:SetValue(selected)
         end)
+        S.UpdatingMonsterUI = false
     end
     S.LastMonsterRefresh = os.clock()
     return #values
@@ -263,7 +265,14 @@ local function collectCore()
 end
 
 local function inventory(action, ...)
-    return remote("InventarioAcao", action, ...)
+    local args = table.pack(...)
+    while S.Running and S.InventoryBusy do task.wait(0.06) end
+    if not S.Running then return false end
+    S.InventoryBusy = true
+    local ok, result = remote("InventarioAcao", action, table.unpack(args, 1, args.n))
+    task.wait(action == "Sincronizar" and 0.2 or 0.9)
+    S.InventoryBusy = false
+    return ok, result
 end
 
 local function evolveOnce()
@@ -397,6 +406,7 @@ MonsterDropdown = Tabs.Farm:AddDropdown("SAM_Monsters", {
     Title = "Monsters", Values = {}, Multi = true, Default = {},
     DropdownOutsideWindow = true,
     Callback = function(chosen)
+        if S.UpdatingMonsterUI then return end
         table.clear(S.Selected)
         if type(chosen) == "table" then
             for key, val in pairs(chosen) do
