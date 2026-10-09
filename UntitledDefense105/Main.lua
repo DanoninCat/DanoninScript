@@ -1162,6 +1162,11 @@ if promptOverlay then
 end
 
 local function cleanup()
+    if type(Env.__CE_RE105_EXTRA_CLEANUP) == "function" then
+        local fn = Env.__CE_RE105_EXTRA_CLEANUP
+        Env.__CE_RE105_EXTRA_CLEANUP = nil
+        pcall(fn)
+    end
     State.Running = false
     State.AutoTraits = false
     State.AutoStars = false
@@ -1192,32 +1197,29 @@ Env.__SARTEX_UD105_CLEANUP = cleanup
 
 local Window = Fluent:CreateWindow({
     Title = "SARTEX INTERNAL",
-    SubTitle = "Untitled Defense",
+    SubTitle = "RE Adventures",
     TabWidth = 150,
     Size = UDim2.fromOffset(760, 470),
     Acrylic = true,
     Animated = true,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl,
-    ScreenGuiName = "SARTEX_INTERNAL_UNTITLED_DEFENSE_105",
+    ScreenGuiName = "CAT_EMPIRE_RE_ADVENTURES_105",
 })
 
 WindowRef = Window
 
 local Tabs = {
-    Traits = Window:AddTab({
-        Title = "Traits",
-        Icon = "solar/stars-bold",
-    }),
-    Stars = Window:AddTab({
-        Title = "Stars",
-        Icon = "solar/widget-4-bold",
-    }),
-    Settings = Window:AddTab({
-        Title = "Settings",
-        Icon = "solar/settings-bold",
-    }),
+    Story = Window:AddTab({Title = "Story Mode", Icon = "solar/flag-bold"}),
+    Lobby = Window:AddTab({Title = "Lobby", Icon = "solar/home-2-bold"}),
+    Modes = Window:AddTab({Title = "Modes", Icon = "solar/gamepad-bold"}),
+    Webhook = Window:AddTab({Title = "Webhook", Icon = "solar/link-bold"}),
+    Macro = Window:AddTab({Title = "Macro", Icon = "solar/play-circle-bold"}),
+    Misc = Window:AddTab({Title = "Misc", Icon = "solar/user-bold"}),
+    Settings = Window:AddTab({Title = "Settings", Icon = "solar/settings-bold"}),
 }
+Tabs.Traits = Tabs.Lobby
+Tabs.Stars = Tabs.Lobby
 
 TraitStatus = Tabs.Traits:AddParagraph({
     Title = "Traits",
@@ -1703,6 +1705,25 @@ Tabs.Settings:AddButton({
     Icon = "solar/power-bold",
     Callback = cleanup,
 })
+
+local okExtension, extensionError = pcall(function()
+    local ext = loadstring(game:HttpGet(
+        "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/REAdventures105/Features.lua", true
+    ))()
+    ext({
+        State=State, Tabs=Tabs, Remotes=Remotes, LocalPlayer=LocalPlayer, Players=Players,
+        Fluent=Fluent, Window=Window, Env=Env, UnitData=UnitData,
+        UnitDropdown=UnitDropdown, CapsuleDropdown=CapsuleDropdown,
+        UnitIdToLabel=UnitIdToLabel, AutoTraitsToggle=AutoTraitsToggle,
+        AutoStarsToggle=AutoStarsToggle,
+    })
+end)
+Env.__CE_RE105_FEATURES_ERROR = not okExtension and tostring(extensionError) or nil
+if not okExtension then
+    pcall(function()
+        Fluent:Notify({Title="CAT EMPIRE",Content=tostring(extensionError),Duration=7})
+    end)
+end
 
 requestInventory()
 
