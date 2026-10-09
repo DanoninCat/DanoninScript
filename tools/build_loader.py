@@ -22,6 +22,10 @@ PAYLOADS = {
         "raw_file": "ScopedV2/Main.lua",
         "default_key": 173,
     },
+    84554009750048: {
+        "remote_file": "SummonAMonster/Main.lua",
+        "default_key": 157,
+    },
 }
 
 def payload(spec):
