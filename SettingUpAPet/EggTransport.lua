@@ -79,7 +79,7 @@ return function(ctx)
         local step=math.min(distance,actualSpeed*math.clamp(dt,0,0.09))
         if step<=0 then return false end
         local nextPoint=here+delta.Unit*step
-        part.CFrame=CFrame.lookAt(nextPoint,nextPoint+Vector3.new(delta.X,0,delta.Z).Unit)
+        part.CFrame=CFrame.new(nextPoint)
         return step>=distance-0.1
     end
     local function pilot(dt)
@@ -129,6 +129,12 @@ return function(ctx)
             if t-state.started>3.0 then
                 if state.target then blocked[state.target.Id]=t+8 end
                 reset("Egg not confirmed by server")
+            end
+        elseif state.stage=="awaitBasket" then
+            if count()>0 then
+                transition("return","Returning acquired egg")
+            elseif t-state.started>1.8 then
+                reset("Waiting for egg replication timed out")
             end
         elseif state.stage=="return" then
             if count()==0 then reset("Egg delivered");return end
@@ -182,7 +188,7 @@ return function(ctx)
             if state.stage~="await" then return end
             if id~=nil and state.target and tostring(id)~=tostring(state.target.Id) then return end
             if result=="PickedUp" then
-                transition("return","Pickup acknowledged: "..tostring(name or "egg"))
+                transition("awaitBasket","Pickup acknowledged: "..tostring(name or "egg"))
             elseif result=="Refused" or result=="BasketFull" then
                 if state.target then blocked[state.target.Id]=now()+9 end
                 reset("Pickup refused: "..tostring(result))
