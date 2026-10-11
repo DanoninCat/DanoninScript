@@ -317,6 +317,18 @@ return function(ctx)
         S.AutoClaimFusion=old
     end)
 
+    button(Tabs.Shop,"Buy Selected Items Once",function()
+        for itemId in pairs(S.SelectedItems or {}) do
+            local category,name=itemId:match("^(.-) / (.+)$")
+            if category and name then fire("BuyWithCash",category,name);task.wait(.18) end
+        end
+    end)
+    button(Tabs.Shop,"Buy Selected Food Once",function()
+        for itemId in pairs(S.SelectedFoods or {}) do
+            local category,name=itemId:match("^(.-) / (.+)$")
+            if category and name then fire("BuyWithCash",category,name);task.wait(.18) end
+        end
+    end)
     toggle(Tabs.Shop,"AutoUnlockNests","Auto Unlock Nests",false)
     button(Tabs.Shop,"Claim Offline Earnings",claimOffline)
     button(Tabs.Shop,"Claim Index Rewards",claimIndex)
