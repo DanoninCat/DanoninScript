@@ -1219,6 +1219,25 @@ end
 task.delay(3,function()
     if S.Running and S.AutoLoadProfiles then loadProfile() end
 end)
+local EggTransport
+do
+    local ok, moduleOrError=pcall(function()
+        local body=game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/EggTransport.lua",true)
+        local chunk,err=loadstring(body)
+        assert(chunk,err)
+        return chunk()
+    end)
+    if ok and type(moduleOrError)=="function" then
+        local good,result=pcall(moduleOrError,{
+            State=S,Player=LP,Links=Links,Game=Game,
+            EggCandidates=eggCandidates,GetPlot=getPlot,Status=status,
+        })
+        if good then EggTransport=result
+        else S.LastError="EggTransport initialization: "..tostring(result) end
+    else
+        S.LastError="EggTransport load: "..tostring(moduleOrError)
+    end
+end
 local function worker(key,delay,fn)
     task.spawn(function()
         while S.Running do
@@ -1234,7 +1253,9 @@ task.spawn(function()
     while S.Running do
         local ok,err=pcall(function()
             S.Movement=false
-            if S.AutoCollectEggs or EggCycle.Stage~="idle" then
+            if EggTransport then
+                S.Movement=EggTransport.IsBusy()
+            elseif S.AutoCollectEggs or EggCycle.Stage~="idle" then
                 S.Movement=collectEggs()
             end
             if not S.Movement and (S.AutoCollectCandy or CandyCycle.Stage~="idle") then
