@@ -1008,6 +1008,7 @@ local Tabs={
     Pets=Window:AddTab({Title="Pets",Icon="solar/paw-bold"}),
     Shop=Window:AddTab({Title="Shop",Icon="solar/bag-bold"}),
     Halloween=Window:AddTab({Title="Halloween",Icon="solar/moon-bold"}),
+    Intel=Window:AddTab({Title="Intel",Icon="solar/chart-bold"}),
     Settings=Window:AddTab({Title="Settings",Icon="solar/settings-bold"}),
     Misc=Window:AddTab({Title="Misc",Icon="solar/user-bold"}),
 }
@@ -1219,6 +1220,25 @@ end
 task.delay(3,function()
     if S.Running and S.AutoLoadProfiles then loadProfile() end
 end)
+local LuminExpansion
+do
+    local ok, builder=pcall(function()
+        local body=game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/Expansion.lua",true)
+        return assert(loadstring(body))()
+    end)
+    if ok and type(builder)=="function" then
+        local good,result=pcall(builder,{
+            State=S,Player=LP,Tabs=Tabs,Links=Links,Game=Game,
+            PetData=PetData,EggData=EggData,Notify=notify,ConfigKeys=configKeys,
+            GetRoot=getRoot,GetPlot=getPlot,PetList=ownedPets,ClaimIndex=claimIndex,
+            FilterableEggs=eggCandidates,
+        })
+        if good then LuminExpansion=result
+        else S.LastError="Expansion initialization: "..tostring(result) end
+    else
+        S.LastError="Expansion load failed: "..tostring(builder)
+    end
+end
 local EggTransport
 do
     local ok, moduleOrError=pcall(function()
@@ -1230,7 +1250,10 @@ do
     if ok and type(moduleOrError)=="function" then
         local good,result=pcall(moduleOrError,{
             State=S,Player=LP,Links=Links,Game=Game,
-            EggCandidates=eggCandidates,GetPlot=getPlot,Status=status,
+            EggCandidates=function()
+                local all=eggCandidates()
+                return LuminExpansion and LuminExpansion.FilterEggs(all) or all
+            end,GetPlot=getPlot,Status=status,
         })
         if good then EggTransport=result
         else S.LastError="EggTransport initialization: "..tostring(result) end
