@@ -217,13 +217,33 @@ return function(ctx)
         end
         return fallback
     end
-    local avatarURL = "https://www.roblox.com/headshot-thumbnail/image?userId="
-        ..tostring(LP.UserId).."&width=420&height=420&format=png"
     local accountSection=Tabs.Misc:AddSection("Account", "solar/user-bold")
-    accountSection:AddSocial({
-        Username=LP.Name,DisplayName=LP.DisplayName,Platform="Roblox",Avatar=avatarURL,
-    })
     local userCard=accountSection:AddParagraph({Title="Player",Content="Loading account"})
+    task.spawn(function()
+        local content,ready
+        for attempt=1,12 do
+            if stopped or not S.Running then return end
+            local ok,img,isReady=pcall(function()
+                return Players:GetUserThumbnailAsync(LP.UserId,
+                    Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size420x420)
+            end)
+            if ok and isReady and type(img)=="string" and img~="" then
+                content,ready=img,true
+                break
+            end
+            task.wait(1)
+        end
+        if stopped or not S.Running then return end
+        if not ready then
+            pcall(function() userCard:SetDesc("Avatar still unavailable; player data shown below") end)
+            return
+        end
+        pcall(function()
+            accountSection:AddSocial({
+                Username=LP.Name,DisplayName=LP.DisplayName,Platform="Roblox",Avatar=content,
+            })
+        end)
+    end)
     local gameSection=Tabs.Misc:AddSection("Game", "solar/gamepad-bold")
     gameSection:AddImage({Image=gameIcon(),AspectRatio="4:1",Radius=10})
     local gameCard=gameSection:AddParagraph({Title="Game",Content="Loading game"})
