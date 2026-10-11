@@ -744,14 +744,15 @@ local function scanHalloweenEntrance()
             end
         end
     end
-    for _,tag in ipairs({"HalloweenEntrance","HalloweenPortal","HalloweenDoor",
-        "HalloweenGate","HalloweenEnterPrompt"}) do
+    for _,tag in ipairs({"HalloweenPortal","HalloweenEntrance","HalloweenEnterPrompt"}) do
         for _,object in ipairs(CollectionService:GetTagged(tag)) do
             consider(object,true)
-            for _,child in ipairs(object:GetDescendants()) do consider(child,true) end
+            for _,child in ipairs(object:GetDescendants()) do
+                if child:IsA("ProximityPrompt") then consider(child,true) end
+            end
         end
     end
-    if not bestPrompt or not bestPart then
+    if not bestPart then
         for _,obj in ipairs(workspace:GetDescendants()) do
             if obj:IsA("ProximityPrompt") or obj:IsA("BasePart") or obj:IsA("Model") then
                 if portalCandidate(obj) then consider(obj,false) end
@@ -893,6 +894,7 @@ local function collectCandy()
                     Stamp=cycle.TargetInstance:GetAttribute("SpawnAt")
                         or cycle.TargetInstance:GetAttribute("SpawnCycle"),
                     Until=now+35,
+                    ClaimedAt=workspace:GetServerTimeNow(),
                 }
                 if cycle.Position then
                     CandyLocations[candyLocationKey(cycle.Position)]={
@@ -932,6 +934,9 @@ local function collectCandy()
         end
         if currentStamp then CandyLastSpawn[id]=currentStamp end
         if suppressed and ((currentStamp and currentStamp~=suppressed.Stamp)
+            or (type(respawnAt)=="number" and suppressed.ClaimedAt
+                and respawnAt>suppressed.ClaimedAt
+                and workspace:GetServerTimeNow()>=respawnAt)
             or (not respawnPending and suppressed.Until and now>=suppressed.Until)) then
             CandySuppressed[inst]=nil
             suppressed=nil
