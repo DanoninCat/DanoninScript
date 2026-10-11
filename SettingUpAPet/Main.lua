@@ -1339,6 +1339,7 @@ saveProfile=function()
         FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods,
         EggFilterMode=S.EggFilterMode,SelectedEggs=S.SelectedEggs,
         EggFlightSpeed=S.EggFlightSpeed,EggHoldSeconds=S.EggHoldSeconds,
+        CandyFarmSpeed=S.CandyFarmSpeed,
         WalkSpeed=S.WalkSpeed,JumpPower=S.JumpPower,FlySpeed=S.FlySpeed,MaxFPS=S.MaxFPS}
     for _,key in ipairs(configKeys) do payload[key]=S[key] end
     for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS"}) do payload[key]=S[key] end
@@ -1360,6 +1361,10 @@ local function loadProfile()
     if type(data.EggPriority)=="string" then S.EggPriority=data.EggPriority end
     if type(data.EggMinRarity)=="string" then S.EggMinRarity=data.EggMinRarity end
     if type(data.FoodChoice)=="string" then S.FoodChoice=data.FoodChoice end
+    if type(data.CandyFarmSpeed)=="number" then
+        S.CandyFarmSpeed=math.clamp(data.CandyFarmSpeed,1,10)
+        pcall(function() CandySpeedSlider:SetValue(S.CandyFarmSpeed) end)
+    end
     if type(data.EggFilterMode)=="string" then S.EggFilterMode=data.EggFilterMode end
     if type(data.SelectedEggs)=="table" then S.SelectedEggs=data.SelectedEggs end
     for _,key in ipairs({"EggFlightSpeed","EggHoldSeconds","WalkSpeed","JumpPower","FlySpeed","MaxFPS"}) do
