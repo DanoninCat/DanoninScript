@@ -996,7 +996,6 @@ Tabs.Settings:AddInput("SUP_ProfileName",{
         ProfileNameInput=tostring(v or ""):gsub("[^%w_%-]","_"):sub(1,32)
     end,
 })
-local saveProfile
 button(Tabs.Settings,"Create Profiles",function()
     if ProfileNameInput=="" then return end
     for _,v in ipairs(ProfileNames) do
@@ -1008,9 +1007,13 @@ button(Tabs.Settings,"Create Profiles",function()
     ProfilesMenu:SetValue(ProfileNameInput)
     if saveProfile then saveProfile() end
 end)
+local saveProfile
 Toggles.AutoLoadProfiles=Tabs.Settings:AddToggle("SUP_AutoLoadProfiles",{
     Title="Auto Load Profiles",Default=S.AutoLoadProfiles==true,
-    Callback=function(v) S.AutoLoadProfiles=v==true end,
+    Callback=function(v)
+        S.AutoLoadProfiles=v==true
+        if saveProfile then saveProfile() end
+    end,
 })
 saveProfile=function()
     if type(writefile)~="function" then notify("Executor has no writefile");return end
