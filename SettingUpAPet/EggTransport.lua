@@ -85,17 +85,18 @@ return function(ctx)
     end
     local function pilot(dt)
         if not S.Running then return end
-        if not S.AutoCollectEggs then
-            if state.stage~="idle" then reset("Auto Collect Eggs stopped") end
+        if not S.AutoCollectEggs and not S.AutoDeliverEggs then
+            if state.stage~="idle" then reset("Egg automation stopped") end
             return
         end
         local t=now()
         if state.stage=="idle" then
             if t<state.cooldown then return end
-            if count()>0 and S.AutoDeliverEggs~=false then
+            if count()>0 then
                 transition("return","Returning carried eggs to plot")
                 return
             end
+            if not S.AutoCollectEggs then return end
             local candidates=ctx.EggCandidates()
             local first
             for _,egg in ipairs(candidates) do
@@ -142,7 +143,9 @@ return function(ctx)
                 reset("Waiting for egg replication timed out")
             end
         elseif state.stage=="return" then
-            if S.AutoDeliverEggs==false then reset("Egg delivery paused");return end
+            if not S.AutoCollectEggs and not S.AutoDeliverEggs then
+                reset("Egg delivery paused");return
+            end
             if count()==0 then reset("Egg delivered");return end
             local part=root()
             local target,plate=destination()
@@ -212,7 +215,7 @@ return function(ctx)
     end)
     return {
         IsBusy=function()
-            return S.AutoCollectEggs and state.stage~="idle"
+            return (S.AutoCollectEggs or S.AutoDeliverEggs) and state.stage~="idle"
         end,
         State=function() return state.stage end,
         SetSpeed=function(v) speed=math.clamp(tonumber(v) or 230,60,500) end,
