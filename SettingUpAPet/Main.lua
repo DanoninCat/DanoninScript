@@ -973,7 +973,7 @@ local configKeys={
     "AutoPlaceBest","AutoRebirth","AutoCollectCandy","AutoBuyHalloweenEggs",
     "AutoSearchPumpkins","RitualAssistant","AutoClaimIndex","AutoBuyItems","AutoBuyFood",
 }
-button(Tabs.Settings,"Save Profile",function()
+button(Tabs.Settings,"Save Profiles",function()
     if type(writefile)~="function" then notify("Executor has no writefile");return end
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
         FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods}
