@@ -47,7 +47,7 @@ local S = {
     Running = true, AutoCollectEggs = false, EggsESP = false, AutoHatch = false,
     AutoLuckUpgrade = false, AutoFeed = false, AutoPlaceBest = false,
     AutoRebirth = false, AutoBuyItems = false, AutoBuyFood = false,
-    AutoCollectCandy = false, AutoBuyHalloweenEggs = false,
+    AutoCollectCandy = false, CandyFarmSpeed = 7, AutoBuyHalloweenEggs = false,
     AutoSearchPumpkins = false, RitualAssistant = false, AutoClaimIndex = false,
     EggPriority = "Rarest", EggMinRarity = "Common", FoodChoice = "Any Available",
     SelectedItems = {}, SelectedFoods = {}, LastError = "", LastAction = "Ready",
@@ -1273,6 +1273,10 @@ addToggle(Tabs.Shop,"Auto Buy Food","AutoBuyFood",function()
 end)
 
 addToggle(Tabs.Halloween,"Auto Buy Halloween Eggs","AutoBuyHalloweenEggs")
+local CandySpeedSlider=Tabs.Halloween:AddSlider("SUP_CandyFarmSpeed",{
+    Title="Candy Farm Speed",Min=1,Max=10,Default=7,Rounding=0,
+    Callback=function(v) S.CandyFarmSpeed=math.clamp(tonumber(v) or 7,1,10) end,
+})
 
 addToggle(Tabs.Eggs,"Auto Claim Index","AutoClaimIndex")
 local configKeys={
