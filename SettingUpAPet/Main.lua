@@ -157,11 +157,54 @@ local CandyCycle = {Stage="idle", Started=0, Target=nil, LastCarry=0}
 local CandyBlocked = {}
 local CandyDepositAckAt = 0
 local function teleportNear(pos, offset)
-    local root = getRoot()
-    if not root or typeof(pos) ~= "Vector3" then return false end
-    local destination = pos + (offset or Vector3.new(0, 3, 2))
-    root.CFrame = CFrame.new(destination, pos)
+    local root,hum=getRoot()
+    if not root or typeof(pos)~="Vector3" then return false end
+    if hum.Sit then hum.Sit=false end
+    local destination=pos+(offset or Vector3.new(0,3,2))
+    local forward=root.CFrame.LookVector
+    forward=Vector3.new(forward.X,0,forward.Z)
+    if forward.Magnitude<0.01 then forward=Vector3.new(0,0,-1) end
+    pcall(function()
+        root.AssemblyLinearVelocity=Vector3.zero
+        root.AssemblyAngularVelocity=Vector3.zero
+    end)
+    root.CFrame=CFrame.lookAt(destination,destination+forward.Unit,Vector3.yAxis)
     return true
+end
+local function interactAt(pos,source)
+    local root=getRoot()
+    if not root or typeof(pos)~="Vector3" then return false end
+    local chosen,best=nil,math.huge
+    local function inspect(prompt)
+        if not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return end
+        local p=positionOf(prompt)
+        if not p then return end
+        local d=(p-pos).Magnitude
+        if d<best and d<=15 and (root.Position-p).Magnitude<=prompt.MaxActivationDistance+2 then
+            chosen,best=prompt,d
+        end
+    end
+    if source then
+        if source:IsA("ProximityPrompt") then inspect(source) end
+        for _,obj in ipairs(source:GetDescendants()) do inspect(obj) end
+    end
+    if not chosen then
+        for _,part in ipairs(workspace:GetPartBoundsInRadius(pos,14)) do
+            for _,obj in ipairs(part:GetDescendants()) do inspect(obj) end
+        end
+    end
+    if not chosen then return false end
+    local native=(type(Env)=="table" and Env.fireproximityprompt) or fireproximityprompt
+    if type(native)=="function" and pcall(native,chosen) then return true end
+    local ok,service=pcall(function() return game:GetService("VirtualInputManager") end)
+    if ok and service then
+        return pcall(function()
+            service:SendKeyEvent(true,Enum.KeyCode.E,false,game)
+            task.wait(math.max(.1,chosen.HoldDuration+.05))
+            service:SendKeyEvent(false,Enum.KeyCode.E,false,game)
+        end)
+    end
+    return false
 end
 local function localCandy()
     local runtime = LP:FindFirstChild("NoSaveData")
@@ -244,7 +287,7 @@ local function collectEggs()
         status("Collect Egg: " .. egg.Name)
     end
     local cycle = EggCycle
-    if cycle.Stage == "pickup" then
+    if cycle.Stage=="pickup" then
         if not S.AutoCollectEggs or now-cycle.Started>6 then
             cycle.Stage="return"
         elseif not teleportNear(cycle.Position) then
@@ -252,32 +295,50 @@ local function collectEggs()
         else
             cycle.Stage="await"
             cycle.Started=now
-            local ok = remote("EggPickup", cycle.Id)
+            local prompted=interactAt(cycle.Position,workspace:FindFirstChild("RenderedEggs"))
+            local ok=prompted or remote("EggPickup",cycle.Id)
             if not ok then cycle.Stage="return" end
         end
     elseif cycle.Stage == "await" then
         if now-cycle.Started>4 or not S.AutoCollectEggs then cycle.Stage="return" end
     end
-    if cycle.Stage == "return" then
+    if cycle.Stage=="return" then
         if not cycle.ReturnAt then
             cycle.ReturnAt=now
-            local ok=remote("TeleportToPlot")
-            if not ok then
-                local root=getRoot()
-                if root and cycle.Origin then root.CFrame=cycle.Origin end
-            end
+            cycle.LastReturnAttempt=0
             status("Returning to plot")
         end
         local root=getRoot()
         local plot=getPlot()
         local base=plot and plot:FindFirstChild("Baseplate")
-        local nearPlot=base and root and (root.Position-base.Position).Magnitude<
-            math.max(base.Size.X,base.Size.Z)+12
-        local nearOrigin=root and cycle.Origin
-            and (root.Position-cycle.Origin.Position).Magnitude<25
-        if nearPlot or nearOrigin or now-cycle.ReturnAt>5 then
+        local nearPlot=base and root
+            and math.abs(root.Position.X-base.Position.X)<=base.Size.X/2+8
+            and math.abs(root.Position.Z-base.Position.Z)<=base.Size.Z/2+8
+            and math.abs(root.Position.Y-base.Position.Y)<=base.Size.Y/2+14
+        if nearPlot then
+            cycle.FirstAtPlot=cycle.FirstAtPlot or now
+            if now-cycle.FirstAtPlot>=1.1 then
+                EggCycle={Stage="idle",Started=0}
+                status("Returned to plot")
+                return false
+            end
+        else
+            cycle.FirstAtPlot=nil
+            if now-cycle.LastReturnAttempt>1.8 then
+                cycle.LastReturnAttempt=now
+                if base and base:IsA("BasePart") then
+                    -- Retorno local enquanto transporta um ovo: teleporte nativo bloqueado.
+                    teleportNear(base.Position,Vector3.new(0,base.Size.Y/2+3,0))
+                elseif cycle.Origin and root then
+                    teleportNear(cycle.Origin.Position,Vector3.zero)
+                else
+                    remote("TeleportToPlot")
+                end
+            end
+        end
+        if now-cycle.ReturnAt>10 then
             EggCycle={Stage="idle",Started=0}
-            status("Egg collection cycle finished")
+            status("Plot return not confirmed: possible server restriction")
             return false
         end
     end
@@ -292,6 +353,7 @@ if eggResponse and eggResponse:IsA("RemoteEvent") then
             and tostring(eggName)~=tostring(EggCycle.Name) then return end
         if result=="PickedUp" then
             status("Egg collected: "..tostring(eggName))
+            EggCycle.HasEgg=true
             EggCycle.Stage="return"
         elseif result=="Refused" or result=="BasketFull" then
             EggBlocked[EggCycle.Id]=os.clock()+(result=="BasketFull" and 18 or 10)
@@ -646,7 +708,8 @@ local function collectCandy()
     if teleportNear(nearest.Instance.Position) then
         local id=nearest.Id
         CandyCycle={Stage="await",Target=id,Started=now,LastCarry=0}
-        local ok=remote("CollectCandy",id)
+        local prompted=interactAt(nearest.Instance.Position,nearest.Instance)
+        local ok=prompted or remote("CollectCandy",id)
         if not ok then CandyBlocked[id]=now+8;CandyCycle.Stage="idle" end
         status("Collecting Halloween candy")
     end
@@ -1020,7 +1083,7 @@ saveProfile=function()
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
         FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods}
     for _,key in ipairs(configKeys) do payload[key]=S[key] end
-    for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS","RemoveTextures"}) do payload[key]=S[key] end
+    for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS"}) do payload[key]=S[key] end
     ProfileDatabase[SelectedProfile]=payload
     local catalog={Names=ProfileNames,Selected=SelectedProfile,AutoLoad=S.AutoLoadProfiles,
         Profiles=ProfileDatabase}
@@ -1052,7 +1115,7 @@ local function loadProfile()
             pcall(function() Toggles[key]:SetValue(data[key]) end)
         end
     end
-    for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS","RemoveTextures"}) do
+    for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS"}) do
         if type(data[key])=="boolean" and Toggles[key] then
             pcall(function() Toggles[key]:SetValue(data[key]) end)
         end
