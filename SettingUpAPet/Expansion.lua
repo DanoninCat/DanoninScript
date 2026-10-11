@@ -62,7 +62,7 @@ return function(ctx)
     end
     local function toggle(tab,id,label,default)
         S[id]=default==true
-        tab:AddToggle("SUP_EXTRA_"..id,{
+        ctx.Toggles[id]=tab:AddToggle("SUP_EXTRA_"..id,{
             Title=label,Default=default==true,
             Callback=function(v) S[id]=v==true end,
         })
