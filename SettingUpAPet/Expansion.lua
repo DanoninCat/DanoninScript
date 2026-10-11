@@ -11,6 +11,7 @@ return function(ctx)
     S.EggFilterMode="All"
     S.SelectedEggs={}
     S.EggHoldSeconds=0
+    S.EggFlightSpeed=230
     S.AutoDeliverEggs=true
     S.AutoCollectCash=false
     S.AutoRideFastest=false
@@ -229,6 +230,10 @@ return function(ctx)
         Title="Hold at egg (seconds)",Min=0,Max=5,Default=0,Rounding=1,
         Callback=function(v) S.EggHoldSeconds=tonumber(v) or 0 end,
     })
+    Tabs.Eggs:AddSlider("SUP_EXTRA_EggFlightSpeed",{
+        Title="Air Return Speed",Min=60,Max=500,Default=230,Rounding=0,
+        Callback=function(v) S.EggFlightSpeed=tonumber(v) or 230 end,
+    })
     toggle(Tabs.Eggs,"AutoDeliverEggs","Auto Deliver Carried Eggs",true)
     toggle(Tabs.Eggs,"ShowEggDistance","World Egg ESP: Show Distance",false)
 
@@ -252,6 +257,15 @@ return function(ctx)
     toggle(Tabs.Shop,"AutoClaimOfflineIndex","Auto Claim Offline + Index",false)
     button(Tabs.Shop,"Claim Group Reward",claimGroup)
     button(Tabs.Shop,"Claim Event Boost",claimBoost)
+    button(Tabs.Shop,"Teleport to Event Boost",function()
+        local fn=workspace:FindFirstChild("Functionals")
+        local boost=fn and fn:FindFirstChild("EventBoost")
+        local handle=boost and boost:FindFirstChild("Handle")
+        local root=ctx.GetRoot()
+        if root and handle and handle:IsA("BasePart") then
+            root.CFrame=CFrame.new(handle.Position+Vector3.new(0,4,0))
+        end
+    end)
     button(Tabs.Shop,"Activate Radar",activateRadar)
     button(Tabs.Shop,"Teleport To Best Egg",function()
         local candidates=ctx.FilterableEggs()
@@ -300,10 +314,18 @@ return function(ctx)
         claimIndex()
     end)
     task.spawn(function()
+        local previousCandy,previousPumpkins
         while S.Running do
             if S.AutoFarmHalloweenEvent then
+                if previousCandy==nil then
+                    previousCandy,previousPumpkins=S.AutoCollectCandy,S.AutoSearchPumpkins
+                end
                 S.AutoCollectCandy=true
                 S.AutoSearchPumpkins=true
+            elseif previousCandy~=nil then
+                S.AutoCollectCandy=previousCandy
+                S.AutoSearchPumpkins=previousPumpkins
+                previousCandy,previousPumpkins=nil,nil
             end
             local placed=ctx.PetList()
             local total=0
