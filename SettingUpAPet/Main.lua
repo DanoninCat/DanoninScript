@@ -246,7 +246,9 @@ local function eggCandidates()
             and (EggBlocked[record.Name] or 0) <= os.clock() then
             candidates[#candidates + 1] = {
                 Id = record.Name, Name = name, Pos = pos,
-                Rank = eggRank(name),
+                Rarity = eggRarity(name), Rank = eggRank(name),
+                BreakSeconds = tonumber(record:GetAttribute("BreakSeconds"))
+                    or (type(EggData[name])=="table" and tonumber(EggData[name].BreakSeconds)),
                 Weight = tonumber(record:GetAttribute("Weight")) or 0,
                 Distance = (root.Position - pos).Magnitude,
             }
