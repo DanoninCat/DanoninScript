@@ -1229,7 +1229,7 @@ do
     end)
     if ok and type(builder)=="function" then
         local good,result=pcall(builder,{
-            State=S,Player=LP,Tabs=Tabs,Links=Links,Game=Game,
+            State=S,Player=LP,Tabs=Tabs,Links=Links,Game=Game,Toggles=Toggles,
             PetData=PetData,EggData=EggData,Notify=notify,ConfigKeys=configKeys,
             GetRoot=getRoot,GetPlot=getPlot,PetList=ownedPets,ClaimIndex=claimIndex,
             FilterableEggs=eggCandidates,
