@@ -5,7 +5,7 @@ return function(ctx)
     local PetData, EggData = ctx.PetData, ctx.EggData
     local Saved=LP:FindFirstChild("SavedData")
     local Fusion=LP:FindFirstChild("FusionSlots")
-    local UI={}, {}
+    local UI={}
     local visuals={}
     local lastCall={}
     S.EggFilterMode="All"
@@ -172,10 +172,7 @@ return function(ctx)
         if throttle("offline",25) then fire("OfflineEarnings") end
     end
     local function claimIndex()
-        if not S.AutoClaimIndex then
-            S.AutoClaimIndex=true
-            task.delay(.2,function() if S.Running then S.AutoClaimIndex=false end end)
-        end
+        if type(ctx.ClaimIndex)=="function" then ctx.ClaimIndex() end
     end
     local function activateRadar()
         local char=LP.Character
@@ -275,9 +272,32 @@ return function(ctx)
     loop("AutoUnlockNests",8,unlockNest)
     loop("AutoFusePets",3,fusionTick)
     loop("AutoClaimFusion",4,fusionTick)
+    loop("AutoHeadlessRitual",3,function()
+        if S.AutoCollectEggs or S.AutoCollectCandy then return end
+        local root=ctx.GetRoot()
+        if not root then return end
+        for _,prompt in ipairs(CollectionService:GetTagged("HalloweenRitualPrompt")) do
+            if prompt:IsA("ProximityPrompt") and prompt.Enabled
+                and prompt:GetAttribute("RitualAvailable")==true
+                and prompt:IsDescendantOf(workspace) then
+                local host=prompt.Parent
+                local part=host:IsA("BasePart") and host or
+                    (host:IsA("Attachment") and host.Parent or nil)
+                if part and part:IsA("BasePart") then
+                    if (root.Position-part.Position).Magnitude>prompt.MaxActivationDistance then
+                        root.CFrame=CFrame.new(part.Position+Vector3.new(0,3,0))
+                    end
+                    if type(fireproximityprompt)=="function" and throttle("ritual:"..prompt:GetFullName(),5) then
+                        fireproximityprompt(prompt)
+                    end
+                    return
+                end
+            end
+        end
+    end)
     loop("AutoClaimOfflineIndex",30,function()
         claimOffline()
-        S.AutoClaimIndex=true
+        claimIndex()
     end)
     task.spawn(function()
         while S.Running do
