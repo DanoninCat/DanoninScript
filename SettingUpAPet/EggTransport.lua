@@ -74,6 +74,7 @@ return function(ctx)
         if distance<4 then return true end
         local deadline=soonestExpiry()
         local remaining=deadline and math.max(0.5,deadline-now()-reserve) or 8
+        speed=math.clamp(tonumber(S.EggFlightSpeed) or 230,60,500)
         local targetSpeed=math.clamp(distance/remaining*1.4,70,450)
         local actualSpeed=math.max(speed,targetSpeed)
         local step=math.min(distance,actualSpeed*math.clamp(dt,0,0.09))
@@ -91,7 +92,7 @@ return function(ctx)
         local t=now()
         if state.stage=="idle" then
             if t<state.cooldown then return end
-            if count()>0 then
+            if count()>0 and S.AutoDeliverEggs~=false then
                 transition("return","Returning carried eggs to plot")
                 return
             end
@@ -115,6 +116,7 @@ return function(ctx)
             if (part.Position-pickupPos).Magnitude>10 then
                 part.CFrame=CFrame.new(pickupPos)
             end
+            if t-state.started < (tonumber(S.EggHoldSeconds) or 0) then return end
             if pickup and pickup:IsA("RemoteEvent") then
                 pickup:FireServer(target.Id)
                 transition("await","Waiting for egg pickup confirmation")
@@ -137,6 +139,7 @@ return function(ctx)
                 reset("Waiting for egg replication timed out")
             end
         elseif state.stage=="return" then
+            if S.AutoDeliverEggs==false then reset("Egg delivery paused");return end
             if count()==0 then reset("Egg delivered");return end
             local part=root()
             local target,plate=destination()
