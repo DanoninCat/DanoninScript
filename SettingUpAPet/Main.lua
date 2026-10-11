@@ -1279,6 +1279,8 @@ do
                 local all=eggCandidates()
                 return LuminExpansion and LuminExpansion.FilterEggs(all) or all
             end,GetPlot=getPlot,Status=status,
+            IsMounted=LuminExpansion and LuminExpansion.IsMounted,
+            EnsureMount=LuminExpansion and LuminExpansion.EnsureMount,
         })
         if good then EggTransport=result
         else S.LastError="EggTransport initialization: "..tostring(result) end
@@ -1302,7 +1304,7 @@ task.spawn(function()
         local ok,err=pcall(function()
             S.Movement=false
             if EggTransport then
-                S.Movement=EggTransport.IsBusy()
+                S.Movement=EggTransport.WantsPriority()
             elseif S.AutoCollectEggs or EggCycle.Stage~="idle" then
                 S.Movement=collectEggs()
             end
