@@ -984,6 +984,15 @@ Tabs.Settings:AddInput("SUP_ProfileName",{
         ProfileNameInput=tostring(v or ""):gsub("[^%w_%-]","_"):sub(1,32)
     end,
 })
+button(Tabs.Settings,"Create Profiles",function()
+    if ProfileNameInput=="" then return end
+    for _,v in ipairs(ProfileNames) do
+        if v==ProfileNameInput then ProfilesMenu:SetValue(v);return end
+    end
+    ProfileNames[#ProfileNames+1]=ProfileNameInput
+    ProfilesMenu:SetValues(ProfileNames)
+    ProfilesMenu:SetValue(ProfileNameInput)
+end)
 button(Tabs.Settings,"Save Profiles",function()
     if type(writefile)~="function" then notify("Executor has no writefile");return end
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
