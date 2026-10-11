@@ -56,6 +56,12 @@ local function loadModule(path, stage)
 end
 
 local ok, result = pcall(function()
+    if game.PlaceId == 124216119978534 or game.GameId == 124216119978534 then
+        local ui = loadModule("Loader/FluentPayload.lua", "Loading UI")
+        assert(type(ui) == "string" and #ui > 0, "UI module unavailable")
+        env.__CE_F_91A7 = ui
+        return loadModule("SettingUpAPet/Main.lua", "Loading Setting up a Pet")
+    end
     local isTarget, reason = matchesREAdventures105()
     env.__CE_RE105_ROUTE = reason
     if not isTarget then
