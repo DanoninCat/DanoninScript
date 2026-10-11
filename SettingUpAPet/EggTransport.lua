@@ -225,9 +225,10 @@ return function(ctx)
                 if t-state.started>5 then reset("Plot not available") end
                 return
             end
-            if soonestExpiry() and t>=soonestExpiry()-0.2 then
-                transition("verify","Egg deadline reached")
-                return
+            local expires=soonestExpiry()
+            if expires and t>=expires-0.2 and not state.warnedLate then
+                state.warnedLate=true
+                ctx.Status("Egg deadline nearly exhausted; maintaining controlled return")
             end
             if inside(plate,part.Position) then
                 state.arrived=true
@@ -251,14 +252,11 @@ return function(ctx)
             elseif part and goal then
                 transition("return","Re-aligning plot position")
             end
-            if t-state.started>5 then
-                if count()>0 and part and goal then
-                    local p=goal+Vector3.new(0,1,0)
-                    part.CFrame=CFrame.new(p)
-                    transition("confirm","Final delivery check")
-                else
-                    reset("Egg cycle finished")
-                end
+            if state.initialDeadline and t>state.initialDeadline+1.5 then
+                reset("Egg delivery deadline expired without server confirmation")
+            elseif t-state.started>5 and not state.waitingNotified then
+                state.waitingNotified=true
+                ctx.Status("Inside plot; waiting for server to confirm delivery")
             end
         elseif state.stage=="confirm" then
             if count()==0 then finishOrFail();return end
