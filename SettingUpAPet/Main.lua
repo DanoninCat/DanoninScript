@@ -1002,6 +1002,7 @@ button(Tabs.Settings,"Save Profiles",function()
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
         FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods}
     for _,key in ipairs(configKeys) do payload[key]=S[key] end
+    for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS","RemoveTextures"}) do payload[key]=S[key] end
     local ok,err=pcall(writefile,S.ConfigFile,HttpService:JSONEncode(payload))
     notify(ok and "Profile saved" or tostring(err))
 end)
