@@ -63,6 +63,8 @@ return function(ctx)
         state.target=nil
         state.initialDeadline=nil
         state.arrived=false
+        state.warnedLate=false
+        state.waitingNotified=false
         state.cooldown=now()+0.7
         transition("idle",message)
     end
