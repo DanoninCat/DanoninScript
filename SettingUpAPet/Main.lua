@@ -654,6 +654,51 @@ local function refreshNativeAutobuy(category)
     else applyNativeAutobuy(category,S.SelectedItems,S.AutoBuyItems) end
 end
 
+local HalloweenEntrance = {LastTry=0, Pending=false}
+local function enterHalloween()
+    if not S.AutoFarmHalloweenEvent or not eventLive()
+        or LP:GetAttribute("InHalloweenZone")==true then
+        HalloweenEntrance.Pending=false
+        return false
+    end
+    local current=os.clock()
+    if current-HalloweenEntrance.LastTry<2.5 then return true end
+    HalloweenEntrance.LastTry=current
+    local best,bestPos,score
+    local function consider(prompt)
+        if not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return end
+        if prompt.ActionText~="Enter" and prompt.ActionText~="Entrar" then return end
+        local host=prompt.Parent
+        local text=tostring(host and host:GetFullName() or ""):lower()
+        if not text:find("halloween",1,true)
+            and not text:find("portal",1,true) then return end
+        local pos=positionOf(prompt)
+        local root=getRoot()
+        if not pos or not root then return end
+        local d=(root.Position-pos).Magnitude
+        if not score or d<score then best,bestPos,score=prompt,pos,d end
+    end
+    for _,tag in ipairs({"HalloweenEntrance","HalloweenPortal","HalloweenEnterPrompt"}) do
+        for _,obj in ipairs(CollectionService:GetTagged(tag)) do
+            if obj:IsA("ProximityPrompt") then consider(obj) end
+            for _,desc in ipairs(obj:GetDescendants()) do consider(desc) end
+        end
+    end
+    if not best then
+        for _,obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ProximityPrompt") then consider(obj) end
+        end
+    end
+    if not best then
+        status("Halloween entrance not found")
+        return true
+    end
+    teleportNear(bestPos,Vector3.new(0,2,0))
+    local acted=interactAt(bestPos,best)
+    HalloweenEntrance.Pending=acted
+    status(acted and "Entering Halloween; awaiting zone confirmation" or "Halloween entrance interaction unavailable")
+    return true
+end
 local function collectCandy()
     if not eventLive() then return false end
     local now=os.clock()
@@ -1326,11 +1371,11 @@ task.spawn(function()
             elseif S.AutoCollectEggs or EggCycle.Stage~="idle" then
                 S.Movement=collectEggs()
             end
-            if not S.Movement and (S.AutoCollectCandy or CandyCycle.Stage~="idle") then
-                S.Movement=collectCandy()
-            end
-            if not S.Movement and S.AutoSearchPumpkins then
-                S.Movement=candyOrPumpkin("HalloweenPumpkinSpawn","SearchPumpkin",10,5,true)
+            if not S.Movement and S.AutoFarmHalloweenEvent then
+                S.Movement=enterHalloween()
+                if not S.Movement and LP:GetAttribute("InHalloweenZone")==true then
+                    S.Movement=collectCandy()
+                end
             end
         end)
         if not ok then S.LastError="movement: "..tostring(err) end
