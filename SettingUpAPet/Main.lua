@@ -151,6 +151,37 @@ local function collectedCycles()
     local ok, result = pcall(HttpService.JSONDecode, HttpService, raw)
     return ok and type(result) == "table" and result or {}
 end
+local EggCycle = {Stage="idle", Started=0, Id=nil, Name=nil, Origin=nil}
+local EggBlocked = {}
+local CandyCycle = {Stage="idle", Started=0, Target=nil, LastCarry=0}
+local CandyBlocked = {}
+local CandyDepositAckAt = 0
+local function teleportNear(pos, offset)
+    local root = getRoot()
+    if not root or typeof(pos) ~= "Vector3" then return false end
+    local destination = pos + (offset or Vector3.new(0, 3, 2))
+    root.CFrame = CFrame.new(destination, pos)
+    return true
+end
+local function localCandy()
+    local runtime = LP:FindFirstChild("NoSaveData")
+    return tonumber(value(runtime, "CarriedCandy", 0)) or 0
+end
+local function depositPosition()
+    for _, marker in ipairs(CollectionService:GetTagged("HalloweenCandyDeposit")) do
+        if marker:IsDescendantOf(workspace) then
+            if marker:IsA("BasePart") then
+                local top = marker.Size.Y * .5
+                return marker.Position + Vector3.new(0, math.max(2, top + 2), 0)
+            elseif marker:IsA("Model") then
+                local ok, cf, size = pcall(function() return marker:GetBoundingBox() end)
+                if ok then return cf.Position + Vector3.new(0, size.Y * .5 + 2, 0) end
+            end
+        end
+    end
+    local fallback = workspace:FindFirstChild("HalloweenHomeAnchor")
+    return fallback and positionOf(fallback) or nil
+end
 local function eggCandidates()
     local data = RS:FindFirstChild("ServerData")
     local active = (data and data:FindFirstChild("ActiveEggs")) or RS:FindFirstChild("ActiveEggs")
@@ -166,7 +197,8 @@ local function eggCandidates()
             and (owner == nil or owner == LP.UserId)
             and drop <= workspace:GetServerTimeNow()
             and eggRank(name) >= (RarityOrder[S.EggMinRarity] or 1)
-            and not claimed(name, record, cycles) then
+            and not claimed(name, record, cycles)
+            and (EggBlocked[record.Name] or 0) <= os.clock() then
             candidates[#candidates + 1] = {
                 Id = record.Name, Name = name, Pos = pos,
                 Rank = eggRank(name),
@@ -198,14 +230,75 @@ local function walkTo(pos, range)
     return false
 end
 local function collectEggs()
-    local candidates = eggCandidates()
-    local egg = candidates[1]
-    if not egg then return false end
-    if walkTo(egg.Pos, 11) and due("egg:" .. egg.Id, 4.5) then
-        remote("EggPickup", egg.Id)
-        status("Egg pickup: " .. egg.Name)
+    local now = os.clock()
+    if EggCycle.Stage == "idle" then
+        if not S.AutoCollectEggs then return false end
+        local egg = eggCandidates()[1]
+        if not egg then return false end
+        local root = getRoot()
+        if not root then return false end
+        EggCycle = {
+            Stage="pickup", Started=now, Id=egg.Id, Name=egg.Name,
+            Position=egg.Pos, Origin=root.CFrame,
+        }
+        status("Collect Egg: " .. egg.Name)
+    end
+    local cycle = EggCycle
+    if cycle.Stage == "pickup" then
+        if not S.AutoCollectEggs or now-cycle.Started>6 then
+            cycle.Stage="return"
+        elseif not teleportNear(cycle.Position) then
+            cycle.Stage="return"
+        else
+            cycle.Stage="await"
+            cycle.Started=now
+            local ok = remote("EggPickup", cycle.Id)
+            if not ok then cycle.Stage="return" end
+        end
+    elseif cycle.Stage == "await" then
+        if now-cycle.Started>4 or not S.AutoCollectEggs then cycle.Stage="return" end
+    end
+    if cycle.Stage == "return" then
+        if not cycle.ReturnAt then
+            cycle.ReturnAt=now
+            local ok=remote("TeleportToPlot")
+            if not ok then
+                local root=getRoot()
+                if root and cycle.Origin then root.CFrame=cycle.Origin end
+            end
+            status("Returning to plot")
+        end
+        local root=getRoot()
+        local plot=getPlot()
+        local base=plot and plot:FindFirstChild("Baseplate")
+        local nearPlot=base and root and (root.Position-base.Position).Magnitude<
+            math.max(base.Size.X,base.Size.Z)+12
+        local nearOrigin=root and cycle.Origin
+            and (root.Position-cycle.Origin.Position).Magnitude<25
+        if nearPlot or nearOrigin or now-cycle.ReturnAt>5 then
+            EggCycle={Stage="idle",Started=0}
+            status("Egg collection cycle finished")
+            return false
+        end
     end
     return true
+end
+
+local eggResponse = Game:FindFirstChild("EggPickup")
+if eggResponse and eggResponse:IsA("RemoteEvent") then
+    Links[#Links+1]=eggResponse.OnClientEvent:Connect(function(result, eggName, eggId)
+        if EggCycle.Stage~="await" then return end
+        if eggId ~= nil and tostring(eggId)~=tostring(EggCycle.Id)
+            and tostring(eggName)~=tostring(EggCycle.Name) then return end
+        if result=="PickedUp" then
+            status("Egg collected: "..tostring(eggName))
+            EggCycle.Stage="return"
+        elseif result=="Refused" or result=="BasketFull" then
+            EggBlocked[EggCycle.Id]=os.clock()+(result=="BasketFull" and 18 or 10)
+            status("Egg pickup refused: "..tostring(eggName))
+            EggCycle.Stage="return"
+        end
+    end)
 end
 
 local function readyEgg(egg)
@@ -493,6 +586,79 @@ local function refreshNativeAutobuy(category)
     else applyNativeAutobuy(category,S.SelectedItems,S.AutoBuyItems) end
 end
 
+local function collectCandy()
+    if not eventLive() then return false end
+    local now=os.clock()
+    local carried=localCandy()
+    local cycle=CandyCycle
+    if not S.AutoCollectCandy and carried<=0 then
+        CandyCycle={Stage="idle",Started=0,LastCarry=0}
+        return false
+    end
+    if carried>0 or cycle.Stage=="deposit" then
+        local target=depositPosition()
+        if not target then
+            status("Halloween deposit unavailable")
+            return true
+        end
+        if carried<=0 and (CandyDepositAckAt>=cycle.Started
+            or (cycle.LastCarry>0 and now-cycle.Started>0.4)) then
+            CandyCycle={Stage="idle",Started=now,LastCarry=0}
+            status("Halloween candy deposited")
+            return false
+        end
+        if cycle.Stage~="deposit" then
+            cycle.Stage="deposit"
+            cycle.Started=now
+            cycle.LastCarry=carried
+        end
+        local root=getRoot()
+        if root and (root.Position-target).Magnitude>7 and due("candyDepositMove",1.1) then
+            teleportNear(target,Vector3.new(0,0,0))
+            status("Returning to Halloween candy deposit")
+        end
+        if now-cycle.Started>12 then
+            cycle.Started=now
+            status("Awaiting Halloween candy deposit")
+        end
+        return true
+    end
+    if cycle.Stage=="await" then
+        if now-cycle.Started<=4 then return true end
+        if cycle.Target then CandyBlocked[cycle.Target]=now+8 end
+        CandyCycle={Stage="idle",Started=now,LastCarry=0}
+        return false
+    end
+    if LP:GetAttribute("InHalloweenZone")~=true then return false end
+    local nearest,dist
+    local root=getRoot()
+    if not root then return false end
+    for _,inst in ipairs(CollectionService:GetTagged("HalloweenCandySpawn")) do
+        local id=inst:GetAttribute("Id")
+        if type(id)~="string" or id=="" then id=inst:GetFullName() end
+        if inst:IsA("BasePart") and inst:IsDescendantOf(workspace)
+            and (CandyBlocked[id] or 0)<=now then
+            local distance=(inst.Position-root.Position).Magnitude
+            if not dist or distance<dist then nearest={Instance=inst,Id=id};dist=distance end
+        end
+    end
+    if not nearest then return false end
+    if teleportNear(nearest.Instance.Position) then
+        local id=nearest.Id
+        CandyCycle={Stage="await",Target=id,Started=now,LastCarry=0}
+        local ok=remote("CollectCandy",id)
+        if not ok then CandyBlocked[id]=now+8;CandyCycle.Stage="idle" end
+        status("Collecting Halloween candy")
+    end
+    return true
+end
+local depositRemote=Game:FindFirstChild("HalloweenCandyDeposited")
+if depositRemote and depositRemote:IsA("RemoteEvent") then
+    Links[#Links+1]=depositRemote.OnClientEvent:Connect(function()
+        CandyDepositAckAt=os.clock()
+    end)
+end
+
 local function candyOrPumpkin(tag, remoteName, reach, cooldown, ready)
     if not eventLive() or LP:GetAttribute("InHalloweenZone")~=true then return false end
     local root = getRoot()
@@ -681,7 +847,9 @@ end
 local function cleanup()
     S.Running=false
     S.AutoCollectEggs=false
+    EggCycle.Stage="idle"
     S.AutoCollectCandy=false
+    CandyCycle.Stage="idle"
     S.AutoSearchPumpkins=false
     S.AutoFeed=false
     S.AutoPlaceBest=false
@@ -797,10 +965,6 @@ addToggle(Tabs.Halloween,"Ritual Assistant","RitualAssistant")
 button(Tabs.Halloween,"Go to Ritual",goToRitual)
 
 addToggle(Tabs.Misc,"Auto Claim Index","AutoClaimIndex")
-button(Tabs.Misc,"Teleport to Plot",teleportPlot)
-button(Tabs.Misc,"Show Diagnostics",function()
-    notify(S.LastAction.." | "..(S.LastError~="" and S.LastError or "No remote errors"))
-end)
 Tabs.Misc:AddDropdown("SUP_Theme",{
     Title="Theme",Values=Fluent.Themes,Default="Dark",
     Callback=function(v) pcall(function() Fluent:SetTheme(v) end) end,
@@ -857,9 +1021,11 @@ task.spawn(function()
     while S.Running do
         local ok,err=pcall(function()
             S.Movement=false
-            if S.AutoCollectEggs then S.Movement=collectEggs() end
-            if not S.Movement and S.AutoCollectCandy then
-                S.Movement=candyOrPumpkin("HalloweenCandySpawn","CollectCandy",10,3,false)
+            if S.AutoCollectEggs or EggCycle.Stage~="idle" then
+                S.Movement=collectEggs()
+            end
+            if not S.Movement and (S.AutoCollectCandy or CandyCycle.Stage~="idle") then
+                S.Movement=collectCandy()
             end
             if not S.Movement and S.AutoSearchPumpkins then
                 S.Movement=candyOrPumpkin("HalloweenPumpkinSpawn","SearchPumpkin",10,5,true)
