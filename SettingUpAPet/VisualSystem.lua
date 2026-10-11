@@ -100,12 +100,19 @@ return function(ctx)
             if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
         end
     end)
-    local previous3D,previousFPS
+    local previous3D,previousFPS,previousFly
     local accumulator=0
     Links[#Links+1]=RunService.Heartbeat:Connect(function(dt)
         if not S.Running or stopped then return end
         accumulator=accumulator+dt
-        if S.Fly and not S.AutoCollectEggs and not S.AutoCollectCandy then
+        local flying=S.Fly and not S.AutoCollectEggs and not S.AutoCollectCandy
+        if previousFly and not flying then
+            local root,hum=ctx.GetRoot()
+            if root then root.AssemblyLinearVelocity=Vector3.zero end
+            if hum then hum:ChangeState(Enum.HumanoidStateType.GettingUp) end
+        end
+        previousFly=flying
+        if flying then
             local root,hum=ctx.GetRoot()
             local camera=workspace.CurrentCamera
             if root and hum and camera then
