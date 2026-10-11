@@ -1233,7 +1233,7 @@ end
 task.delay(3,function()
     if S.Running and S.AutoLoadProfiles then loadProfile() end
 end)
-local LuminExpansion
+local LuminExpansion, EggTransport
 do
     local ok, builder=pcall(function()
         local body=game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/Expansion.lua",true)
@@ -1245,6 +1245,9 @@ do
             PetData=PetData,EggData=EggData,Notify=notify,ConfigKeys=configKeys,
             GetRoot=getRoot,GetPlot=getPlot,PetList=ownedPets,ClaimIndex=claimIndex,
             FilterableEggs=eggCandidates,
+            EggWantsPriority=function()
+                return EggTransport and EggTransport.WantsPriority() or false
+            end,
         })
         if good then LuminExpansion=result
         else S.LastError="Expansion initialization: "..tostring(result) end
@@ -1268,7 +1271,6 @@ do
         S.LastError="VisualSystem load failed: "..tostring(builder)
     end
 end
-local EggTransport
 do
     local ok, moduleOrError=pcall(function()
         local body=game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/EggTransport.lua",true)
