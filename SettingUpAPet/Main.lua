@@ -100,6 +100,7 @@ local function getRoot()
 end
 local function positionOf(instance)
     if not instance or not instance.Parent then return nil end
+    if instance:IsA("ProximityPrompt") then return positionOf(instance.Parent) end
     if instance:IsA("Attachment") then return instance.WorldPosition end
     if instance:IsA("BasePart") then return instance.Position end
     if instance:IsA("Model") then
@@ -125,7 +126,7 @@ end
 
 local function eggRank(name)
     local config = EggData[name]
-    return RarityOrder[type(config) == "table" and config.Rarity or nil] or 0
+    return RarityOrder[type(config) == "table" and config.Rarity or nil] or 1
 end
 local function claimed(name, record, cycles)
     if record:GetAttribute("AdminSpawn") == true then
@@ -472,7 +473,7 @@ local function claimIndex()
     if owned==nil then return end
     local ok, count = pcall(IndexData.DiscoveredCount,owned)
     local ok2, nextStage = pcall(IndexData.StageAt,stage)
-    if ok and ok2 and type(nextStage)=="table" and tonumber(nextStage.Goal)
+    if ok and ok2 and type(count)=="number" and type(nextStage)=="table" and tonumber(nextStage.Goal)
         and count>=nextStage.Goal and due("index:"..stage,10) then
         remote("ClaimIndexReward","Normal")
         status("Index reward claimed")
@@ -488,7 +489,8 @@ end
 local function highlight(map, obj, label, color)
     if map[obj] or not obj.Parent then return end
     local host = obj
-    if obj:IsA("Attachment") then host = obj.Parent end
+    if obj:IsA("ProximityPrompt") then host = obj.Parent end
+    if host:IsA("Attachment") then host = host.Parent end
     local h = Instance.new("Highlight")
     h.Name = "CAT_EMPIRE_ESP"
     h.Adornee = obj:IsA("PVInstance") and obj or host
