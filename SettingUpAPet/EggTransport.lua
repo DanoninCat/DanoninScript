@@ -9,7 +9,8 @@ return function(ctx)
     local lastMountRequest = 0
     local waitingForMountSince = nil
     local flyHeight = 38
-    local reserve = 2.5
+    local reserve = 4.5
+    local conservativeLifetimes = {Common=20,Rare=25,Epic=35,Legendary=30,Mythic=30,Divine=27,Ethereal=21,Secret=20}
     local blocked = {}
 
     local function now()
@@ -60,13 +61,43 @@ return function(ctx)
     end
     local function reset(message)
         state.target=nil
-        state.cooldown=now()+0.6
+        state.initialDeadline=nil
+        state.arrived=false
+        state.cooldown=now()+0.7
         transition("idle",message)
     end
-    local function destination()
+    local function destination(current)
         local plate=plotBase()
         if not plate then return nil end
-        return plate.Position+Vector3.new(0,math.max(5,plate.Size.Y/2+5),0),plate
+        local localPos=plate.CFrame:PointToObjectSpace(current or plate.Position)
+        local margin=math.min(5,plate.Size.X*.15,plate.Size.Z*.15)
+        local x=math.clamp(localPos.X,-plate.Size.X/2+margin,plate.Size.X/2-margin)
+        local z=math.clamp(localPos.Z,-plate.Size.Z/2+margin,plate.Size.Z/2-margin)
+        local point=plate.CFrame:PointToWorldSpace(Vector3.new(x,plate.Size.Y/2+4,z))
+        return point,plate
+    end
+    local function estimateReturn(egg)
+        local plotPoint=destination(egg.Pos)
+        if not plotPoint then return math.huge,0 end
+        local distance=(Vector2.new(egg.Pos.X,egg.Pos.Z)-Vector2.new(plotPoint.X,plotPoint.Z)).Magnitude
+        local speed=math.clamp(tonumber(S.EggFlightSpeed) or 175,60,MAX_STABLE_SPEED)
+        local duration=tonumber(egg.BreakSeconds) or conservativeLifetimes[egg.Rarity] or 20
+        return distance/speed+reserve, duration
+    end
+    local function feasible(egg)
+        local eta,available=estimateReturn(egg)
+        return eta<available,eta,available
+    end
+    local function finishOrFail()
+        local part=root()
+        local plate=plotBase()
+        local insidePlot=part and plate and inside(plate,part.Position)
+        local withinTime=not state.initialDeadline or now()<state.initialDeadline
+        if (insidePlot or state.arrived) and withinTime then
+            reset("Egg delivery confirmed at plot")
+        else
+            reset("Egg removed from basket without confirmed on-time delivery")
+        end
     end
     local function moveFlight(dt,target)
         local part=root()
@@ -95,6 +126,7 @@ return function(ctx)
         if state.stage=="idle" then
             if t<state.cooldown then return end
             if count()>0 then
+                state.initialDeadline=soonestExpiry()
                 transition("return","Returning carried eggs to plot")
                 return
             end
@@ -102,7 +134,13 @@ return function(ctx)
             local candidates=ctx.EggCandidates()
             local first
             for _,egg in ipairs(candidates) do
-                if (blocked[egg.Id] or 0)<=t then first=egg;break end
+                if (blocked[egg.Id] or 0)<=t then
+                    local ok,eta,limit=feasible(egg)
+                    if ok then first=egg;break end
+                    blocked[egg.Id]=t+5
+                    ctx.Status(string.format("Skipping %s: return %.1fs vs %.1fs lifetime",
+                        tostring(egg.Name),eta,limit))
+                end
             end
             if not first then return end
             if type(ctx.IsMounted)=="function" and not ctx.IsMounted() then
@@ -161,6 +199,7 @@ return function(ctx)
             end
         elseif state.stage=="await" then
             if count()>0 then
+                state.initialDeadline=soonestExpiry()
                 transition("return","Egg acquired; airborne return started")
                 return
             end
@@ -170,6 +209,7 @@ return function(ctx)
             end
         elseif state.stage=="awaitBasket" then
             if count()>0 then
+                state.initialDeadline=soonestExpiry()
                 transition("return","Returning acquired egg")
             elseif t-state.started>1.8 then
                 reset("Waiting for egg replication timed out")
@@ -178,9 +218,9 @@ return function(ctx)
             if not S.AutoCollectEggs and not S.AutoDeliverEggs then
                 reset("Egg delivery paused");return
             end
-            if count()==0 then reset("Egg delivered");return end
+            if count()==0 then finishOrFail();return end
             local part=root()
-            local target,plate=destination()
+            local target,plate=destination(part and part.Position)
             if not part or not target then
                 if t-state.started>5 then reset("Plot not available") end
                 return
@@ -190,18 +230,20 @@ return function(ctx)
                 return
             end
             if inside(plate,part.Position) then
+                state.arrived=true
                 transition("verify","Plot reached; awaiting server delivery")
                 return
             end
-            local high=Vector3.new(target.X,math.max(part.Position.Y,target.Y+flyHeight),target.Z)
-            moveFlight(dt,high)
+            local direct=Vector3.new(target.X,math.max(part.Position.Y,target.Y+18),target.Z)
+            moveFlight(dt,direct)
             if inside(plate,part.Position) then
+                state.arrived=true
                 transition("verify","Plot arrival detected")
             end
         elseif state.stage=="verify" then
-            if count()==0 then reset("Egg delivery confirmed");return end
+            if count()==0 then finishOrFail();return end
             local part=root()
-            local goal,plate=destination()
+            local goal,plate=destination(part and part.Position)
             if part and goal and inside(plate,part.Position) then
                 if part.Position.Y>goal.Y+8 then
                     moveFlight(dt,goal)
@@ -219,7 +261,7 @@ return function(ctx)
                 end
             end
         elseif state.stage=="confirm" then
-            if count()==0 then reset("Egg delivery confirmed");return end
+            if count()==0 then finishOrFail();return end
             if t-state.started>2 then reset("Delivery not confirmed by server") end
         end
     end
@@ -257,7 +299,7 @@ return function(ctx)
             if not S.AutoCollectEggs then return false end
             local t=now()
             for _,egg in ipairs(ctx.EggCandidates()) do
-                if (blocked[egg.Id] or 0)<=t then return true end
+                if (blocked[egg.Id] or 0)<=t and feasible(egg) then return true end
             end
             return false
         end,
