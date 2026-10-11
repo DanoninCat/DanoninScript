@@ -96,6 +96,7 @@ return function(ctx)
         })
     end
     local boostConnection, boostGeneration = nil, 0
+    local parkedAppearances = {}
     local function saveProperty(inst, prop, newValue)
         local ok, previous = pcall(function() return inst[prop] end)
         if not ok or previous == newValue then return end
@@ -107,6 +108,12 @@ return function(ctx)
     local function restore()
         boostGeneration = boostGeneration + 1
         if boostConnection then boostConnection:Disconnect(); boostConnection = nil end
+        for appearance, originalParent in pairs(parkedAppearances) do
+            if originalParent and originalParent.Parent then
+                pcall(function() appearance.Parent = originalParent end)
+            end
+            parkedAppearances[appearance] = nil
+        end
         for inst, entry in pairs(snapshots) do
             if inst and inst.Parent then
                 for prop, previous in pairs(entry) do
@@ -124,10 +131,10 @@ return function(ctx)
         elseif inst:IsA("SpecialMesh") then
             saveProperty(inst, "TextureId", "")
         elseif inst:IsA("SurfaceAppearance") then
-            for _, property in ipairs({"ColorMap", "NormalMap", "MetalnessMap", "RoughnessMap"}) do
-                saveProperty(inst, property, "")
+            if inst.Parent and not parkedAppearances[inst] then
+                parkedAppearances[inst] = inst.Parent
+                pcall(function() inst.Parent = nil end)
             end
-            saveProperty(inst, "AlphaMode", Enum.AlphaMode.Overlay)
         end
         if inst:IsA("BasePart") then
             saveProperty(inst, "Material", Enum.Material.SmoothPlastic)
