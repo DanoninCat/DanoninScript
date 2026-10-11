@@ -839,11 +839,6 @@ local function goToRitual()
         notify("Moving to nearest available ritual")
     else notify("No available ritual found") end
 end
-local function teleportPlot()
-    remote("TeleportToPlot")
-    status("Teleport to plot requested")
-end
-
 local cleanupSettings
 local function cleanup()
     S.Running=false
