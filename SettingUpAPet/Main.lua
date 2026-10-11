@@ -973,6 +973,19 @@ local configKeys={
     "AutoPlaceBest","AutoRebirth","AutoCollectCandy","AutoBuyHalloweenEggs",
     "AutoSearchPumpkins","RitualAssistant","AutoClaimIndex","AutoBuyItems","AutoBuyFood",
 }
+local ProfileNames={"Default"}
+local SelectedProfile="Default"
+local ProfileNameInput=""
+local ProfilesMenu=Tabs.Settings:AddDropdown("SUP_Profiles",{
+    Title="Profiles",Values=ProfileNames,Default="Default",
+    Callback=function(v) SelectedProfile=tostring(v or "Default") end,
+})
+Tabs.Settings:AddInput("SUP_ProfileName",{
+    Title="Create Profiles",Default="",Placeholder="New profile name",
+    Callback=function(v)
+        ProfileNameInput=tostring(v or ""):gsub("[^%w_%-]","_"):sub(1,32)
+    end,
+})
 button(Tabs.Settings,"Save Profiles",function()
     if type(writefile)~="function" then notify("Executor has no writefile");return end
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
