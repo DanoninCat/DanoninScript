@@ -159,6 +159,37 @@ local CandyBlocked = {}
 local CandySuppressed = setmetatable({}, {__mode="k"})
 local CandyLocations = {}
 local CandyLastSpawn = {}
+local CandyServer={RespawnAt={},Amounts={},Types={}}
+local CandyStateRemote=Game:FindFirstChild("CandyState")
+if CandyStateRemote and CandyStateRemote:IsA("RemoteEvent") then
+    Links[#Links+1]=CandyStateRemote.OnClientEvent:Connect(function(id,respawnAt,amount,kind)
+        if type(id)~="string" then return end
+        CandyServer.RespawnAt[id]=tonumber(respawnAt)
+        if type(amount)=="number" then CandyServer.Amounts[id]=amount end
+        if type(kind)=="number" then CandyServer.Types[id]=kind end
+    end)
+end
+local GetCandyStateRemote=Game:FindFirstChild("GetCandyState")
+task.spawn(function()
+    while S.Running do
+        if S.AutoFarmHalloweenEvent and GetCandyStateRemote
+            and GetCandyStateRemote:IsA("RemoteFunction") then
+            local ok,data=pcall(function() return GetCandyStateRemote:InvokeServer() end)
+            if ok and type(data)=="table" then
+                for id,t in pairs(data.RespawnAt or {}) do
+                    if type(id)=="string" and type(t)=="number" then CandyServer.RespawnAt[id]=t end
+                end
+                for id,n in pairs(data.Amounts or {}) do
+                    if type(id)=="string" and type(n)=="number" then CandyServer.Amounts[id]=n end
+                end
+                for id,n in pairs(data.Types or {}) do
+                    if type(id)=="string" and type(n)=="number" then CandyServer.Types[id]=n end
+                end
+            end
+        end
+        task.wait(12)
+    end
+end)
 local function candyLocationKey(pos)
     return string.format("%d:%d:%d",math.floor(pos.X/3),math.floor(pos.Y/3),math.floor(pos.Z/3))
 end
@@ -887,6 +918,12 @@ local function collectCandy()
         if type(id)~="string" or id=="" then id=inst:GetFullName() end
         local suppressed=CandySuppressed[inst]
         local currentStamp=inst:GetAttribute("SpawnAt") or inst:GetAttribute("SpawnCycle")
+        local respawnAt=CandyServer.RespawnAt[id]
+        local respawnPending=type(respawnAt)=="number"
+            and workspace:GetServerTimeNow()<respawnAt
+        local groundUnavailable=inst:GetAttribute("PumpkinDrop")==true
+            and type(CandyServer.Amounts[id])=="number"
+            and CandyServer.Amounts[id]<=0
         local previousStamp=CandyLastSpawn[id]
         if currentStamp and previousStamp and currentStamp~=previousStamp then
             CandyBlocked[id]=nil
@@ -895,7 +932,7 @@ local function collectCandy()
         end
         if currentStamp then CandyLastSpawn[id]=currentStamp end
         if suppressed and ((currentStamp and currentStamp~=suppressed.Stamp)
-            or (suppressed.Until and now>=suppressed.Until)) then
+            or (not respawnPending and suppressed.Until and now>=suppressed.Until)) then
             CandySuppressed[inst]=nil
             suppressed=nil
         end
@@ -903,6 +940,7 @@ local function collectCandy()
         local visited=location and location.Instance==inst and location.Until>now
         if inst:IsA("BasePart") and inst:IsDescendantOf(workspace)
             and not suppressed and not visited
+            and not respawnPending and not groundUnavailable
             and inst:GetAttribute("SpawnReady")~=false
             and inst:GetAttribute("Collected")~=true
             and inst:GetAttribute("Taken")~=true
