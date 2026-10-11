@@ -1016,25 +1016,6 @@ local function refreshESP()
         end
     end
 end
-local function goToRitual()
-    local root = getRoot()
-    if not root then return end
-    local best, dist
-    for _,prompt in ipairs(CollectionService:GetTagged("HalloweenRitualPrompt")) do
-        if prompt:GetAttribute("RitualAvailable")==true then
-            local pos=positionOf(prompt)
-            if pos then
-                local d=(root.Position-pos).Magnitude
-                if not dist or d<dist then best=pos;dist=d end
-            end
-        end
-    end
-    if best then
-        S.Movement=false
-        walkTo(best,8)
-        notify("Moving to nearest available ritual")
-    else notify("No available ritual found") end
-end
 local cleanupSettings, cleanupVisual
 local function cleanup()
     S.Running=false
@@ -1102,7 +1083,7 @@ Tabs.Eggs:AddDropdown("SUP_MinRarity",{
     Title="Minimum Egg Rarity",Values={"Common","Rare","Epic","Legendary","Mythic","Divine","Secret","Ethereal"},
     Default="Common",Callback=function(v) S.EggMinRarity=v end,
 })
-addToggle(Tabs.Eggs,"Eggs ESP","EggsESP")
+addToggle(Tabs.Intel,"Eggs ESP","EggsESP")
 addToggle(Tabs.Eggs,"Auto Hatch","AutoHatch")
 addToggle(Tabs.Eggs,"Auto Luck Upgrade","AutoLuckUpgrade")
 
@@ -1158,17 +1139,13 @@ addToggle(Tabs.Shop,"Auto Buy Food","AutoBuyFood",function()
     refreshNativeAutobuy("food")
 end)
 
-addToggle(Tabs.Halloween,"Auto Collect Candy","AutoCollectCandy")
 addToggle(Tabs.Halloween,"Auto Buy Halloween Eggs","AutoBuyHalloweenEggs")
-addToggle(Tabs.Halloween,"Auto Search Pumpkins","AutoSearchPumpkins")
-addToggle(Tabs.Halloween,"Ritual Assistant","RitualAssistant")
-button(Tabs.Halloween,"Go to Ritual",goToRitual)
 
 addToggle(Tabs.Eggs,"Auto Claim Index","AutoClaimIndex")
 local configKeys={
     "AutoCollectEggs","EggsESP","AutoHatch","AutoLuckUpgrade","AutoFeed",
-    "AutoPlaceBest","AutoRebirth","AutoCollectCandy","AutoBuyHalloweenEggs",
-    "AutoSearchPumpkins","RitualAssistant","AutoClaimIndex","AutoBuyItems","AutoBuyFood",
+    "AutoPlaceBest","AutoRebirth","AutoBuyHalloweenEggs",
+    "AutoClaimIndex","AutoBuyItems","AutoBuyFood",
 }
 local ProfileNames={"Default"}
 local SelectedProfile="Default"
