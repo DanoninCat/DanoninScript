@@ -1015,7 +1015,10 @@ button(Tabs.Settings,"Save Profiles",function()
         FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods}
     for _,key in ipairs(configKeys) do payload[key]=S[key] end
     for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS","RemoveTextures"}) do payload[key]=S[key] end
-    local ok,err=pcall(writefile,S.ConfigFile,HttpService:JSONEncode(payload))
+    ProfileDatabase[SelectedProfile]=payload
+    local catalog={Names=ProfileNames,Selected=SelectedProfile,AutoLoad=S.AutoLoadProfiles,
+        Profiles=ProfileDatabase}
+    local ok,err=pcall(writefile,S.ConfigFile,HttpService:JSONEncode(catalog))
     notify(ok and "Profile saved" or tostring(err))
 end)
 button(Tabs.Settings,"Load Profile",function()
