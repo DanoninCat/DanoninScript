@@ -37,6 +37,7 @@ local RebirthData = module(Data, "Rebirths")
 local IndexData = module(Data, "IndexRewards")
 local HalloweenData = module(Data, "Halloween")
 local HalloweenEvent = module(Services, "HalloweenEvent")
+local HatchLuck = module(Data, "HatchLuck")
 local petFolder = LP:FindFirstChild("PlayerScripts")
 petFolder = petFolder and petFolder:FindFirstChild("Game")
 petFolder = petFolder and petFolder:FindFirstChild("Pets")
@@ -55,7 +56,7 @@ local S = {
 local Toggles, Links, EggVisuals, RitualVisuals, Requests = {}, {}, {}, {}, {}
 local RarityOrder = {
     Common = 1, Uncommon = 2, Rare = 3, Epic = 4, Legendary = 5,
-    Mythic = 6, Mythical = 6, Divine = 7, Ethereal = 8,
+    Mythic = 6, Mythical = 6, Divine = 7, Secret = 8, Ethereal = 9,
 }
 local Window, Status, ShopItemDropdown, FoodDropdown
 
@@ -124,9 +125,13 @@ local function eventLive()
     return false
 end
 
-local function eggRank(name)
+local function eggRarity(name)
     local config = EggData[name]
-    return RarityOrder[type(config) == "table" and config.Rarity or nil] or 1
+    local rarity = type(config) == "table" and config.Rarity or nil
+    return RarityOrder[rarity] and rarity or "Common"
+end
+local function eggRank(name)
+    return RarityOrder[eggRarity(name)] or 1
 end
 local function claimed(name, record, cycles)
     if record:GetAttribute("AdminSpawn") == true then
@@ -239,13 +244,74 @@ local function hatchReady()
         end
     end
 end
+local LuckState = {Pending = nil, Until = 0, RetryAt = 0}
 local function luckUpgrade()
-    local buys = tonumber(value(Saved, "LuckUpgradeBuys", 0)) or 0
+    local now = os.clock()
+    if LP:GetAttribute("Setting_LuckMultiplier") == false then
+        status("Enable Luck Multiplier in game settings")
+        return
+    end
+    local current = tonumber(value(Saved, "HatchUpgrades", nil))
+    local free = tonumber(value(Saved, "FreeHatchUpgrades", 0)) or 0
+    local used = tonumber(value(Saved, "UsedFreeHatchUpgrades", 0)) or 0
     local cash = tonumber(value(Saved, "Cash", 0)) or 0
-    if cash <= 0 then return end
-    if due("luck:" .. buys, 25) then
-        remote("Upgrades")
-        status("Luck upgrade requested")
+    if not current or not Game:FindFirstChild("Plot") then return end
+    local upgrades = Game.Plot:FindFirstChild("Upgrades")
+    if not upgrades or not upgrades:IsA("RemoteEvent") then
+        S.LastError = "Game.Plot.Upgrades is unavailable"
+        return
+    end
+    if LuckState.Pending ~= nil then
+        if current > LuckState.Pending then
+            LuckState.Pending = nil
+            LuckState.RetryAt = now + 1.5
+            status("Luck upgraded to " .. tostring(current))
+        elseif now < LuckState.Until then
+            return
+        else
+            LuckState.Pending = nil
+            LuckState.RetryAt = now + 12
+            status("Luck: server did not confirm upgrade")
+            return
+        end
+    end
+    if now < LuckState.RetryAt then return end
+    local argument
+    if free > 0 then
+        argument = "MaxFree"
+    else
+        if type(HatchLuck.GetPrice) ~= "function"
+            or type(HatchLuck.GetPaidUpgrades) ~= "function" then
+            S.LastError = "HatchLuck price methods unavailable"
+            return
+        end
+        local ok, price = pcall(function()
+            return HatchLuck.GetPrice(HatchLuck.GetPaidUpgrades(current, used))
+        end)
+        if not ok or type(price) ~= "number" or price < 0 then return end
+        if cash < price then
+            LuckState.RetryAt = now + 6
+            return
+        end
+        if type(HatchLuck.GetMaxAffordable) == "function" then
+            local affordableOk, count = pcall(HatchLuck.GetMaxAffordable,
+                HatchLuck.GetPaidUpgrades(current, used), cash)
+            if affordableOk and type(count) == "number" and count >= 2 then
+                argument = "Max"
+            end
+        end
+    end
+    LuckState.Pending = current
+    LuckState.Until = now + 6
+    local ok, err = pcall(function()
+        if argument then upgrades:FireServer(argument) else upgrades:FireServer() end
+    end)
+    if not ok then
+        S.LastError = tostring(err)
+        LuckState.Pending = nil
+        LuckState.RetryAt = now + 12
+    else
+        status("Luck upgrade sent: " .. tostring(argument or "Single"))
     end
 end
 
@@ -532,12 +598,35 @@ local function refreshESP()
             for _, egg in ipairs(folder:GetChildren()) do
                 if egg:IsA("Model") or egg:IsA("BasePart") then
                     marked[egg]=true
-                    local rank=eggRank(egg.Name)
-                    local color=rank>=6 and Color3.fromRGB(230,95,255)
-                        or rank>=5 and Color3.fromRGB(255,215,70)
-                        or rank>=4 and Color3.fromRGB(170,105,255)
-                        or Color3.fromRGB(105,225,255)
-                    highlight(EggVisuals,egg,egg.Name,color)
+                    local eggName = egg:GetAttribute("Egg") or egg.Name
+                    local rarity = eggRarity(eggName)
+                    local rank = RarityOrder[rarity] or 1
+                    local colors = {
+                        Common = Color3.fromRGB(210, 215, 225),
+                        Rare = Color3.fromRGB(75, 175, 255),
+                        Epic = Color3.fromRGB(175, 95, 255),
+                        Legendary = Color3.fromRGB(255, 194, 70),
+                        Mythic = Color3.fromRGB(255, 90, 180),
+                        Divine = Color3.fromRGB(255, 236, 115),
+                        Secret = Color3.fromRGB(240, 85, 85),
+                        Ethereal = Color3.fromRGB(95, 245, 225),
+                    }
+                    local color = colors[rarity] or Color3.fromRGB(220, 225, 235)
+                    highlight(EggVisuals, egg, rarity, color)
+                    local visuals = EggVisuals[egg]
+                    if visuals then
+                        local outline = visuals[1]
+                        if outline and outline.Parent then
+                            outline.FillColor = color
+                            outline.OutlineColor = color
+                        end
+                        local board = visuals[2]
+                        local label = board and board:FindFirstChildWhichIsA("TextLabel")
+                        if label then
+                            label.Text = rarity
+                            label.TextColor3 = color
+                        end
+                    end
                 end
             end
         end
@@ -642,7 +731,7 @@ Tabs.Eggs:AddDropdown("SUP_PriorityEggs",{
     Callback=function(v) S.EggPriority=v end,
 })
 Tabs.Eggs:AddDropdown("SUP_MinRarity",{
-    Title="Minimum Egg Rarity",Values={"Common","Uncommon","Rare","Epic","Legendary","Mythic","Divine","Ethereal"},
+    Title="Minimum Egg Rarity",Values={"Common","Rare","Epic","Legendary","Mythic","Divine","Secret","Ethereal"},
     Default="Common",Callback=function(v) S.EggMinRarity=v end,
 })
 addToggle(Tabs.Eggs,"Eggs ESP","EggsESP")
