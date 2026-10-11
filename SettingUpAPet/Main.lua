@@ -972,10 +972,11 @@ local function goToRitual()
         notify("Moving to nearest available ritual")
     else notify("No available ritual found") end
 end
-local cleanupSettings
+local cleanupSettings, cleanupVisual
 local function cleanup()
     S.Running=false
     if type(cleanupSettings)=="function" then pcall(cleanupSettings) end
+    if type(cleanupVisual)=="function" then pcall(cleanupVisual) end
     S.AutoCollectEggs=false
     EggCycle.Stage="idle"
     S.AutoCollectCandy=false
@@ -1237,6 +1238,22 @@ do
         else S.LastError="Expansion initialization: "..tostring(result) end
     else
         S.LastError="Expansion load failed: "..tostring(builder)
+    end
+end
+do
+    local ok,builder=pcall(function()
+        local body=game:HttpGet("https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/VisualSystem.lua",true)
+        return assert(loadstring(body))()
+    end)
+    if ok and type(builder)=="function" then
+        local good,result=pcall(builder,{
+            State=S,Player=LP,Tabs=Tabs,Links=Links,ConfigKeys=configKeys,
+            GetRoot=getRoot,Notify=notify,
+        })
+        if good then cleanupVisual=result
+        else S.LastError="VisualSystem initialization: "..tostring(result) end
+    else
+        S.LastError="VisualSystem load failed: "..tostring(builder)
     end
 end
 local EggTransport
