@@ -996,6 +996,7 @@ Tabs.Settings:AddInput("SUP_ProfileName",{
         ProfileNameInput=tostring(v or ""):gsub("[^%w_%-]","_"):sub(1,32)
     end,
 })
+local saveProfile
 button(Tabs.Settings,"Create Profiles",function()
     if ProfileNameInput=="" then return end
     for _,v in ipairs(ProfileNames) do
@@ -1004,12 +1005,13 @@ button(Tabs.Settings,"Create Profiles",function()
     ProfileNames[#ProfileNames+1]=ProfileNameInput
     ProfilesMenu:SetValues(ProfileNames)
     ProfilesMenu:SetValue(ProfileNameInput)
+    if saveProfile then saveProfile() end
 end)
 Toggles.AutoLoadProfiles=Tabs.Settings:AddToggle("SUP_AutoLoadProfiles",{
     Title="Auto Load Profiles",Default=S.AutoLoadProfiles==true,
     Callback=function(v) S.AutoLoadProfiles=v==true end,
 })
-button(Tabs.Settings,"Save Profiles",function()
+saveProfile=function()
     if type(writefile)~="function" then notify("Executor has no writefile");return end
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
         FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods}
@@ -1020,7 +1022,8 @@ button(Tabs.Settings,"Save Profiles",function()
         Profiles=ProfileDatabase}
     local ok,err=pcall(writefile,S.ConfigFile,HttpService:JSONEncode(catalog))
     notify(ok and "Profile saved" or tostring(err))
-end)
+end
+button(Tabs.Settings,"Save Profiles",saveProfile)
 local function loadProfile()
     if type(readfile)~="function" then notify("Executor has no readfile");return end
     local ok,data=pcall(function() return HttpService:JSONDecode(readfile(S.ConfigFile)) end)
