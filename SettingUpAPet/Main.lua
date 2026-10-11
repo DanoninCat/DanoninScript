@@ -1025,6 +1025,10 @@ button(Tabs.Settings,"Load Profile",function()
     if type(readfile)~="function" then notify("Executor has no readfile");return end
     local ok,data=pcall(function() return HttpService:JSONDecode(readfile(S.ConfigFile)) end)
     if not ok or type(data)~="table" then notify("No valid profile");return end
+    if type(data.Profiles)=="table" then
+        data=data.Profiles[SelectedProfile]
+        if type(data)~="table" then notify("Profile does not exist");return end
+    end
     if type(data.EggPriority)=="string" then S.EggPriority=data.EggPriority end
     if type(data.EggMinRarity)=="string" then S.EggMinRarity=data.EggMinRarity end
     if type(data.FoodChoice)=="string" then S.FoodChoice=data.FoodChoice end
