@@ -4,7 +4,9 @@ return function(ctx)
     local Game = ctx.Game
     local pickup = Game:FindFirstChild("EggPickup")
     local state = {stage = "idle", target = nil, started = 0, lastError = "", cooldown = 0}
-    local speed = 230
+    local speed = 175
+    local MAX_STABLE_SPEED = 185
+    local lastMountRequest = 0
     local flyHeight = 38
     local reserve = 2.5
     local blocked = {}
@@ -74,10 +76,9 @@ return function(ctx)
         if distance<4 then return true end
         local deadline=soonestExpiry()
         local remaining=deadline and math.max(0.5,deadline-now()-reserve) or 8
-        speed=math.clamp(tonumber(S.EggFlightSpeed) or 230,60,500)
-        local targetSpeed=math.clamp(distance/remaining*1.4,70,450)
-        local actualSpeed=math.max(speed,targetSpeed)
-        local step=math.min(distance,actualSpeed*math.clamp(dt,0,0.09))
+        speed=math.clamp(tonumber(S.EggFlightSpeed) or 175,60,MAX_STABLE_SPEED)
+        -- Never exceed the measured stable movement threshold, even near expiry.
+        local step=math.min(distance,speed*math.clamp(dt,0,0.09))
         if step<=0 then return false end
         local nextPoint=here+delta.Unit*step
         part.CFrame=CFrame.new(nextPoint)
@@ -103,6 +104,14 @@ return function(ctx)
                 if (blocked[egg.Id] or 0)<=t then first=egg;break end
             end
             if not first then return end
+            if type(ctx.IsMounted)=="function" and not ctx.IsMounted() then
+                if type(ctx.EnsureMount)=="function" and t-lastMountRequest>2.5 then
+                    lastMountRequest=t
+                    ctx.EnsureMount()
+                end
+                ctx.Status("Waiting for fastest pet mount")
+                return
+            end
             local part=root()
             if not part then return end
             state.target=first
@@ -111,6 +120,10 @@ return function(ctx)
             local target=state.target
             local part=root()
             if not target or not part then reset();return end
+            if type(ctx.IsMounted)=="function" and not ctx.IsMounted() then
+                transition("waitMount","Mount lost; waiting to remount")
+                return
+            end
             if t-state.started>6 then
                 blocked[target.Id]=t+8
                 reset("Egg approach timeout")
@@ -126,6 +139,15 @@ return function(ctx)
                 transition("await","Waiting for egg pickup confirmation")
             else
                 reset("EggPickup remote unavailable")
+            end
+        elseif state.stage=="waitMount" then
+            if type(ctx.IsMounted)~="function" or ctx.IsMounted() then
+                transition("pickup","Mount restored")
+            elseif t-state.started>5 then
+                reset("Mount unavailable")
+            elseif type(ctx.EnsureMount)=="function" and t-lastMountRequest>2.5 then
+                lastMountRequest=t
+                ctx.EnsureMount()
             end
         elseif state.stage=="await" then
             if count()>0 then
@@ -218,6 +240,9 @@ return function(ctx)
             return (S.AutoCollectEggs or S.AutoDeliverEggs) and state.stage~="idle"
         end,
         State=function() return state.stage end,
-        SetSpeed=function(v) speed=math.clamp(tonumber(v) or 230,60,500) end,
+        SetSpeed=function(v) speed=math.clamp(tonumber(v) or 175,60,MAX_STABLE_SPEED) end,
+        WantsPriority=function()
+            return S.AutoCollectEggs and (state.stage~="idle" or #ctx.EggCandidates()>0)
+        end,
     }
 end
