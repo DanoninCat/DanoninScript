@@ -1,0 +1,800 @@
+if game.PlaceId ~= 124216119978534 and game.GameId ~= 124216119978534 then return end
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local HttpService = game:GetService("HttpService")
+local LP = Players.LocalPlayer
+local Env = (getgenv and getgenv()) or _G
+if type(Env.__CE_SETTING_PET_CLEANUP) == "function" then pcall(Env.__CE_SETTING_PET_CLEANUP) end
+
+local source = Env.__CE_F_91A7
+assert(type(source) == "string" and #source > 0, "Setting up a Pet: use the main Loader")
+local Fluent = assert(loadstring(source))()
+local Game = RS:WaitForChild("Remotes", 12):WaitForChild("Game", 12)
+local Data = RS:WaitForChild("GameData", 12)
+local Services = RS:WaitForChild("GameServices", 12)
+local Saved = LP:WaitForChild("SavedData", 12)
+assert(Game and Data and Services and Saved, "Setting up a Pet: game data unavailable")
+
+local function module(folder, name)
+    local object = folder and folder:FindFirstChild(name)
+    if not object or not object:IsA("ModuleScript") then return {} end
+    local ok, result = pcall(require, object)
+    return ok and result or {}
+end
+
+local EggData = module(Data, "Eggs")
+local FoodData = module(Data, "Foods")
+local ShopData = module(Data, "Shop")
+local PetData = module(Data, "Pets")
+local MutationData = module(Data, "Mutations")
+local PetAging = module(Services, "PetAging")
+local General = module(Services, "General")
+local GeneralData = module(Data, "General")
+local DayNight = module(Services, "DayNight")
+local RebirthData = module(Data, "Rebirths")
+local IndexData = module(Data, "IndexRewards")
+local HalloweenData = module(Data, "Halloween")
+local HalloweenEvent = module(Services, "HalloweenEvent")
+local petFolder = LP:FindFirstChild("PlayerScripts")
+petFolder = petFolder and petFolder:FindFirstChild("Game")
+petFolder = petFolder and petFolder:FindFirstChild("Pets")
+local Renderer = module(petFolder, "PetRenderer")
+
+local S = {
+    Running = true, AutoCollectEggs = false, EggsESP = false, AutoHatch = false,
+    AutoLuckUpgrade = false, AutoFeed = false, AutoPlaceBest = false,
+    AutoRebirth = false, AutoBuyItems = false, AutoBuyFood = false,
+    AutoCollectCandy = false, AutoBuyHalloweenEggs = false,
+    AutoSearchPumpkins = false, RitualAssistant = false, AutoClaimIndex = false,
+    EggPriority = "Rarest", EggMinRarity = "Common", FoodChoice = "Any Available",
+    SelectedItems = {}, SelectedFoods = {}, LastError = "", LastAction = "Ready",
+    ConfigFile = "CATEMPIRE_SettingUpAPet.json", Movement = false, BusyPlaceBest = false,
+}
+local Toggles, Links, EggVisuals, RitualVisuals, Requests = {}, {}, {}, {}, {}
+local RarityOrder = {
+    Common = 1, Uncommon = 2, Rare = 3, Epic = 4, Legendary = 5,
+    Mythic = 6, Mythical = 6, Divine = 7, Ethereal = 8,
+}
+local Window, Status, ShopItemDropdown, FoodDropdown
+
+local function notify(message)
+    pcall(function() Fluent:Notify({Title="CAT EMPIRE", Content=tostring(message), Duration=4}) end)
+end
+local function status(action)
+    S.LastAction = tostring(action)
+end
+local function remote(name, ...)
+    local endpoint = Game:FindFirstChild(name)
+    if not endpoint then S.LastError = "Missing " .. name; return false end
+    local args = table.pack(...)
+    local ok, result = pcall(function()
+        if endpoint:IsA("RemoteEvent") then
+            endpoint:FireServer(table.unpack(args, 1, args.n))
+            return true
+        elseif endpoint:IsA("RemoteFunction") then
+            return endpoint:InvokeServer(table.unpack(args, 1, args.n))
+        end
+        error("Unexpected remote type for " .. name)
+    end)
+    if not ok then S.LastError = name .. ": " .. tostring(result) end
+    return ok, result
+end
+local function due(id, seconds)
+    local t = os.clock()
+    if (Requests[id] or 0) > t then return false end
+    Requests[id] = t + seconds
+    return true
+end
+local function value(parent, name, default)
+    local object = parent and parent:FindFirstChild(name)
+    return object and object:IsA("ValueBase") and object.Value or default
+end
+local function getRoot()
+    local char = LP.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or not hum or hum.Health <= 0 then return nil end
+    return root, hum
+end
+local function positionOf(instance)
+    if not instance or not instance.Parent then return nil end
+    if instance:IsA("Attachment") then return instance.WorldPosition end
+    if instance:IsA("BasePart") then return instance.Position end
+    if instance:IsA("Model") then
+        local ok, pivot = pcall(function() return instance:GetPivot() end)
+        if ok then return pivot.Position end
+    end
+    return nil
+end
+local function getPlot()
+    if type(General) == "table" and type(General.GetPlot) == "function" then
+        local ok, plot = pcall(General.GetPlot, General, LP)
+        if ok then return plot end
+    end
+    return nil
+end
+local function eventLive()
+    if type(HalloweenEvent) == "table" and type(HalloweenEvent.IsLive) == "function" then
+        local ok, active = pcall(HalloweenEvent.IsLive)
+        return ok and active == true
+    end
+    return false
+end
+
+local function eggRank(name)
+    local config = EggData[name]
+    return RarityOrder[type(config) == "table" and config.Rarity or nil] or 0
+end
+local function claimed(name, record, cycles)
+    if record:GetAttribute("AdminSpawn") == true then
+        local id = record:GetAttribute("AdminEggId")
+        local owned = LP:GetAttribute("CollectedAdminEggs")
+        return type(id) == "string" and type(owned) == "string"
+            and owned:find("," .. id .. ",", 1, true) ~= nil
+    end
+    local cycle = tonumber(record:GetAttribute("Cycle"))
+    if cycle and tonumber(cycles[name]) and cycle <= tonumber(cycles[name]) then return true end
+    local text = LP:GetAttribute("CollectedEggs")
+    return type(text) == "string" and text:find(name .. ",", 1, true) ~= nil
+end
+local function collectedCycles()
+    local raw = LP:GetAttribute("CollectedEggCycles")
+    if type(raw) ~= "string" then return {} end
+    local ok, result = pcall(HttpService.JSONDecode, HttpService, raw)
+    return ok and type(result) == "table" and result or {}
+end
+local function eggCandidates()
+    local data = RS:FindFirstChild("ServerData")
+    local active = (data and data:FindFirstChild("ActiveEggs")) or RS:FindFirstChild("ActiveEggs")
+    local root = getRoot()
+    if not root or not active then return {} end
+    local candidates, cycles = {}, collectedCycles()
+    for _, record in ipairs(active:GetChildren()) do
+        local name = record:GetAttribute("Egg")
+        local pos = record:GetAttribute("Position")
+        local owner = record:GetAttribute("PrivateTo")
+        local drop = tonumber(record:GetAttribute("DropEndsAt")) or 0
+        if type(name) == "string" and typeof(pos) == "Vector3"
+            and (owner == nil or owner == LP.UserId)
+            and drop <= workspace:GetServerTimeNow()
+            and eggRank(name) >= (RarityOrder[S.EggMinRarity] or 1)
+            and not claimed(name, record, cycles) then
+            candidates[#candidates + 1] = {
+                Id = record.Name, Name = name, Pos = pos,
+                Rank = eggRank(name),
+                Weight = tonumber(record:GetAttribute("Weight")) or 0,
+                Distance = (root.Position - pos).Magnitude,
+            }
+        end
+    end
+    table.sort(candidates, function(a,b)
+        if S.EggPriority == "Nearest" then return a.Distance < b.Distance end
+        if S.EggPriority == "Heaviest" then
+            if a.Weight ~= b.Weight then return a.Weight > b.Weight end
+        else
+            if a.Rank ~= b.Rank then return a.Rank > b.Rank end
+        end
+        return a.Distance < b.Distance
+    end)
+    return candidates
+end
+
+local function walkTo(pos, range)
+    local root, hum = getRoot()
+    if not root or typeof(pos) ~= "Vector3" then return false end
+    if (root.Position - pos).Magnitude <= range then return true end
+    if not S.Movement and due("walk", 0.9) then
+        hum:MoveTo(pos)
+        status("Moving to target")
+    end
+    return false
+end
+local function collectEggs()
+    local candidates = eggCandidates()
+    local egg = candidates[1]
+    if not egg then return false end
+    if walkTo(egg.Pos, 11) and due("egg:" .. egg.Id, 4.5) then
+        remote("EggPickup", egg.Id)
+        status("Egg pickup: " .. egg.Name)
+    end
+    return true
+end
+
+local function readyEgg(egg)
+    local key = egg:GetAttribute("EggKey")
+    local config = EggData[egg.Name]
+    local details = egg:FindFirstChild("EggData")
+    local place = details and details:FindFirstChild("PlaceTime")
+    if type(key) ~= "string" or type(config) ~= "table" or not place then return false end
+    if LP:GetAttribute("TutorialHatchLocked") == true then
+        local only = LP:GetAttribute("TutorialLockedEggKey")
+        if only ~= nil and only ~= key then return false end
+    end
+    local weight = tonumber(value(details,"Weight",1)) or 1
+    if type(GeneralData.GrowthTimeFor) ~= "function" then return false end
+    local ok, duration = pcall(GeneralData.GrowthTimeFor, config.GrowthTime, weight)
+    if not ok or type(duration) ~= "number" then return false end
+    local elapsed = workspace:GetServerTimeNow() - tonumber(place.Value)
+    if egg:GetAttribute("FlatGrow") ~= true and type(DayNight.GrowthElapsed) == "function" then
+        local good, time = pcall(DayNight.GrowthElapsed, place.Value)
+        if good and type(time) == "number" then elapsed = time end
+    end
+    return elapsed >= duration
+end
+local function hatchReady()
+    local plot = getPlot()
+    local eggs = plot and plot:FindFirstChild("Eggs")
+    if not eggs then return end
+    for _, egg in ipairs(eggs:GetChildren()) do
+        if readyEgg(egg) then
+            local key = egg:GetAttribute("EggKey")
+            if due("hatch:" .. key, 8) then
+                remote("Hatch", {EggKey = key})
+                status("Hatching " .. egg.Name)
+                return
+            end
+        end
+    end
+end
+local function luckUpgrade()
+    local buys = tonumber(value(Saved, "LuckUpgradeBuys", 0)) or 0
+    local cash = tonumber(value(Saved, "Cash", 0)) or 0
+    if cash <= 0 then return end
+    if due("luck:" .. buys, 25) then
+        remote("Upgrades")
+        status("Luck upgrade requested")
+    end
+end
+
+local function incomeOf(tool)
+    local name = tool:GetAttribute("PetName") or tool.Name
+    local config = PetData[name]
+    local base = type(config) == "table" and tonumber(config.Income) or 0
+    if not base or base <= 0 then return 0 end
+    local unit = tonumber(PetAging.WeightStandardKG) or 1
+    local income = math.floor(base * (tonumber(tool:GetAttribute("Weight")) or 1) / math.max(unit, .01))
+    if type(MutationData.CombinedFactor) == "function" then
+        local ok, multi = pcall(MutationData.CombinedFactor, tool:GetAttribute("Mutation"), tool:GetAttribute("SpawnMutation"))
+        if ok and type(multi) == "number" then income = income * multi end
+    end
+    return income
+end
+local function ownedPets()
+    local found, present = {}, {}
+    if type(Renderer.GetAll) == "function" then
+        local ok, pets = pcall(Renderer.GetAll)
+        if ok and type(pets) == "table" then
+            for _, pet in pairs(pets) do
+                if pet.OwnerUserId == LP.UserId and pet.Model and pet.Model.Parent and pet.PetKey then
+                    present[pet.PetKey] = true
+                    found[#found + 1] = {
+                        Key=pet.PetKey, Placed=true, Income=tonumber(pet.DisplayIncome) or 0,
+                        Position=positionOf(pet.Model), Model=pet.Model,
+                    }
+                end
+            end
+        end
+    end
+    for _, parent in ipairs({LP.Character, LP:FindFirstChildOfClass("Backpack")}) do
+        if parent then
+            for _, tool in ipairs(parent:GetChildren()) do
+                local key = tool:GetAttribute("PetKey")
+                if tool:IsA("Tool") and key and not present[key] then
+                    present[key] = true
+                    found[#found + 1] = {Key=key, Placed=false, Income=incomeOf(tool), Tool=tool}
+                end
+            end
+        end
+    end
+    table.sort(found, function(a,b) return a.Income > b.Income end)
+    return found
+end
+local function placeBest()
+    if S.BusyPlaceBest then return end
+    local root, hum = getRoot()
+    local plot = getPlot()
+    local plate = plot and plot:FindFirstChild("Baseplate")
+    if not root or not plate or (plate.Position - root.Position).Magnitude > math.max(plate.Size.X, plate.Size.Z) then return end
+    S.BusyPlaceBest = true
+    local ok, err = pcall(function()
+        local all = ownedPets()
+        local count = math.min(tonumber(LP:GetAttribute("MaxPets")) or 5, #all)
+        local best, reuse = {}, {}
+        for i=1,count do best[all[i].Key]=true end
+        for _, pet in ipairs(all) do
+            if not S.Running or not S.AutoPlaceBest then break end
+            if pet.Placed and not best[pet.Key] then
+                if pet.Position then reuse[#reuse+1]=pet.Position end
+                remote("PickupPet", pet.Key)
+                task.wait(.25)
+            end
+        end
+        for i=1,count do
+            if not S.Running or not S.AutoPlaceBest then break end
+            local pet = all[i]
+            if pet and not pet.Placed and pet.Tool and pet.Tool.Parent then
+                hum:EquipTool(pet.Tool)
+                task.wait(.3)
+                if pet.Tool.Parent == LP.Character then
+                    local offset = Vector3.new(((i-1)%3-1)*4,0,-(math.floor((i-1)/3)*4+8))
+                    local pos = table.remove(reuse,1) or root.CFrame:PointToWorldSpace(offset)
+                    local p = plate.CFrame:PointToObjectSpace(pos)
+                    pos = plate.CFrame:PointToWorldSpace(Vector3.new(
+                        math.clamp(p.X,-plate.Size.X/2+2,plate.Size.X/2-2), p.Y,
+                        math.clamp(p.Z,-plate.Size.Z/2+2,plate.Size.Z/2-2)))
+                    remote("PlacePet", pet.Key, pos, "PlaceBest")
+                    task.wait(.25)
+                end
+            end
+        end
+    end)
+    S.BusyPlaceBest = false
+    if not ok then S.LastError = tostring(err) end
+end
+local function feedPets()
+    local food = S.FoodChoice
+    local found
+    for _, parent in ipairs({LP.Character, LP:FindFirstChildOfClass("Backpack")}) do
+        if parent then
+            for _, tool in ipairs(parent:GetChildren()) do
+                if tool:IsA("Tool") and FoodData[tool.Name]
+                    and (food == "Any Available" or tool.Name == food) then
+                    found=tool
+                    break
+                end
+            end
+        end
+        if found then break end
+    end
+    if not found then return end
+    local _, hum = getRoot()
+    if not hum then return end
+    if found.Parent ~= LP.Character then hum:EquipTool(found); task.wait(.25) end
+    if found.Parent ~= LP.Character then return end
+    for _, pet in ipairs(ownedPets()) do
+        if pet.Placed and due("feed:"..tostring(pet.Key), 24) then
+            remote("FeedPet", pet.Key, found.Name)
+            status("Feeding " .. tostring(pet.Key))
+            return
+        end
+    end
+end
+local function rebirth()
+    local current = tonumber(value(Saved,"Rebirths",0)) or 0
+    local cash = tonumber(value(Saved,"Cash",0)) or 0
+    if (tonumber(RebirthData.Cap) or math.huge) <= current then return end
+    if type(RebirthData.GetCost) ~= "function" then return end
+    local ok, cost = pcall(RebirthData.GetCost,current)
+    if not ok or type(cost)~="number" or cash<cost then return end
+    local required = type(GeneralData.RebirthRequirements)=="table" and
+        GeneralData.RebirthRequirements[math.clamp(current+1,1,#GeneralData.RebirthRequirements)]
+    if type(required) ~= "string" then return end
+    local hasPet = false
+    for _,pet in ipairs(ownedPets()) do
+        if pet.Placed and pet.Model and pet.Model.Name == required then hasPet = true; break end
+        if pet.Tool and (pet.Tool:GetAttribute("PetName") == required or
+            (pet.Tool.Name:match("^(.-) %[") or pet.Tool.Name) == required) then hasPet = true; break end
+    end
+    if hasPet and due("rebirth:" .. current, 25) then remote("Rebirth"); status("Rebirth requested") end
+end
+
+local function normalizeChoice(value)
+    local selected = {}
+    if type(value) == "table" then
+        for k,v in pairs(value) do
+            if type(k)=="string" and v==true then selected[k]=true
+            elseif type(v)=="string" then selected[v]=true end
+        end
+    end
+    return selected
+end
+local function shopLists()
+    local items, foods = {}, {}
+    if type(ShopData.Categories) ~= "table" then return items,foods end
+    for category, entries in pairs(ShopData.Categories) do
+        if type(entries)=="table" then
+            for item in pairs(entries) do
+                if type(item)=="string" then
+                    local id=tostring(category).." / "..item
+                    if tostring(category):lower():find("food") then
+                        foods[#foods+1]=id
+                    else items[#items+1]=id end
+                end
+            end
+        end
+    end
+    table.sort(items); table.sort(foods)
+    return items,foods
+end
+local function applyNativeAutobuy(category, selections, enabled)
+    local count = 0
+    for id in pairs(selections) do
+        local c, item = id:match("^(.-) / (.+)$")
+        if c and item and ShopData.Categories and ShopData.Categories[c]
+            and ShopData.Categories[c][item] then
+            remote("Autobuy", c, item, enabled == true)
+            count=count+1
+            task.wait(.12)
+        end
+    end
+    status((enabled and "Enabled " or "Disabled ") .. count .. " autobuy items")
+end
+local function refreshNativeAutobuy(category)
+    if category=="food" then applyNativeAutobuy(category,S.SelectedFoods,S.AutoBuyFood)
+    else applyNativeAutobuy(category,S.SelectedItems,S.AutoBuyItems) end
+end
+
+local function candyOrPumpkin(tag, remoteName, reach, cooldown, ready)
+    if not eventLive() or LP:GetAttribute("InHalloweenZone")~=true then return false end
+    local root = getRoot()
+    if not root then return false end
+    local near, distance
+    for _, inst in ipairs(CollectionService:GetTagged(tag)) do
+        if inst:IsA("BasePart") and inst:IsDescendantOf(workspace)
+            and (not ready or inst:GetAttribute("SpawnReady") == true) then
+            local d = (inst.Position-root.Position).Magnitude
+            if not distance or d<distance then near=inst;distance=d end
+        end
+    end
+    if not near then return false end
+    local baseRange = reach
+    if remoteName=="CollectCandy" and tonumber(HalloweenData.PickupRange) then
+        baseRange = math.min(reach, tonumber(HalloweenData.PickupRange))
+    elseif remoteName=="SearchPumpkin" and type(HalloweenData.Pumpkins)=="table" then
+        baseRange = math.min(reach,tonumber(HalloweenData.Pumpkins.SearchRange) or reach)
+    end
+    if walkTo(near.Position, baseRange) then
+        local id = near:GetAttribute("Id")
+        if type(id)~="string" or id=="" then id=near:GetFullName() end
+        if due(remoteName..":"..id, cooldown) then
+            remote(remoteName, id)
+            status(remoteName)
+        end
+    end
+    return true
+end
+local function buyHalloween()
+    if not eventLive() then return end
+    local config = type(HalloweenData.Eggs)=="table" and HalloweenData.Eggs["Halloween Egg"]
+    local price = config and tonumber(config.Price)
+    if not price or price<=0 then return end
+    local currency = tonumber(value(Saved,"HalloweenCandy",0)) or 0
+    if currency < price or not due("halloweenBuy", 4) then return end
+    local ok, result = remote("BuyHalloweenEgg","Halloween Egg")
+    if ok and result==true then status("Halloween Egg bought") end
+end
+local function claimIndex()
+    if type(IndexData.StageAt)~="function" or type(IndexData.DiscoveredCount)~="function" then return end
+    local owned = value(Saved,"OwnedPets",nil)
+    local stage = tonumber(value(Saved,"IndexRewardStage",0)) or 0
+    if owned==nil then return end
+    local ok, count = pcall(IndexData.DiscoveredCount,owned)
+    local ok2, nextStage = pcall(IndexData.StageAt,stage)
+    if ok and ok2 and type(nextStage)=="table" and tonumber(nextStage.Goal)
+        and count>=nextStage.Goal and due("index:"..stage,10) then
+        remote("ClaimIndexReward","Normal")
+        status("Index reward claimed")
+    end
+end
+
+local function clearVisual(map)
+    for object, instances in pairs(map) do
+        for _, visual in ipairs(instances) do pcall(function() visual:Destroy() end) end
+        map[object] = nil
+    end
+end
+local function highlight(map, obj, label, color)
+    if map[obj] or not obj.Parent then return end
+    local host = obj
+    if obj:IsA("Attachment") then host = obj.Parent end
+    local h = Instance.new("Highlight")
+    h.Name = "CAT_EMPIRE_ESP"
+    h.Adornee = obj:IsA("PVInstance") and obj or host
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.FillColor = color
+    h.OutlineColor = color
+    h.FillTransparency = .82
+    h.OutlineTransparency = .04
+    h.Parent = host
+    local anchor = host:IsA("BasePart") and host or host:FindFirstChildWhichIsA("BasePart",true)
+    local visuals = {h}
+    if anchor then
+        local b = Instance.new("BillboardGui")
+        b.Name = "CAT_EMPIRE_TAG"
+        b.Adornee = anchor
+        b.AlwaysOnTop = true
+        b.MaxDistance = 700
+        b.Size = UDim2.fromOffset(170,42)
+        b.StudsOffsetWorldSpace = Vector3.new(0,3,0)
+        local t = Instance.new("TextLabel")
+        t.BackgroundTransparency = 1
+        t.Size = UDim2.fromScale(1,1)
+        t.Text = label
+        t.TextColor3 = color
+        t.TextStrokeTransparency = .2
+        t.Font = Enum.Font.GothamBold
+        t.TextScaled = true
+        t.Parent = b
+        b.Parent = host
+        visuals[#visuals+1]=b
+    end
+    map[obj]=visuals
+end
+local function refreshESP()
+    local marked = {}
+    if S.EggsESP then
+        local folder = workspace:FindFirstChild("RenderedEggs")
+        if folder then
+            for _, egg in ipairs(folder:GetChildren()) do
+                if egg:IsA("Model") or egg:IsA("BasePart") then
+                    marked[egg]=true
+                    local rank=eggRank(egg.Name)
+                    local color=rank>=6 and Color3.fromRGB(230,95,255)
+                        or rank>=5 and Color3.fromRGB(255,215,70)
+                        or rank>=4 and Color3.fromRGB(170,105,255)
+                        or Color3.fromRGB(105,225,255)
+                    highlight(EggVisuals,egg,egg.Name,color)
+                end
+            end
+        end
+    end
+    for object, visuals in pairs(EggVisuals) do
+        if not marked[object] or not object.Parent then
+            for _,v in ipairs(visuals) do pcall(function() v:Destroy() end) end
+            EggVisuals[object]=nil
+        end
+    end
+    local rituals={}
+    if S.RitualAssistant and eventLive() then
+        for _, prompt in ipairs(CollectionService:GetTagged("HalloweenRitualPrompt")) do
+            if prompt:IsA("ProximityPrompt") and prompt:IsDescendantOf(workspace)
+                and prompt:GetAttribute("RitualAvailable")==true then
+                rituals[prompt]=true
+                highlight(RitualVisuals,prompt,"Ritual available",Color3.fromRGB(255,135,70))
+            end
+        end
+    end
+    for object,visuals in pairs(RitualVisuals) do
+        if not rituals[object] or not object.Parent then
+            for _,v in ipairs(visuals) do pcall(function() v:Destroy() end) end
+            RitualVisuals[object]=nil
+        end
+    end
+end
+local function goToRitual()
+    local root = getRoot()
+    if not root then return end
+    local best, dist
+    for _,prompt in ipairs(CollectionService:GetTagged("HalloweenRitualPrompt")) do
+        if prompt:GetAttribute("RitualAvailable")==true then
+            local pos=positionOf(prompt)
+            if pos then
+                local d=(root.Position-pos).Magnitude
+                if not dist or d<dist then best=pos;dist=d end
+            end
+        end
+    end
+    if best then
+        S.Movement=false
+        walkTo(best,8)
+        notify("Moving to nearest available ritual")
+    else notify("No available ritual found") end
+end
+local function teleportPlot()
+    remote("TeleportToPlot")
+    status("Teleport to plot requested")
+end
+
+local function cleanup()
+    S.Running=false
+    S.AutoCollectEggs=false
+    S.AutoCollectCandy=false
+    S.AutoSearchPumpkins=false
+    S.AutoFeed=false
+    S.AutoPlaceBest=false
+    for _,c in ipairs(Links) do pcall(function() c:Disconnect() end) end
+    clearVisual(EggVisuals)
+    clearVisual(RitualVisuals)
+    if Window and Window.Destroy then pcall(function() Window:Destroy() end)
+    elseif Fluent.Destroy then pcall(function() Fluent:Destroy() end) end
+    Env.__CE_SETTING_PET_CLEANUP=nil
+end
+Env.__CE_SETTING_PET_CLEANUP=cleanup
+
+Window = Fluent:CreateWindow({
+    Title="CAT EMPIRE", SubTitle="Setting up a Pet",
+    TabWidth=158, Size=UDim2.fromOffset(765,480),
+    Acrylic=true, Animated=true, Theme="Dark",
+    MinimizeKey=Enum.KeyCode.RightControl,
+    ScreenGuiName="CAT_EMPIRE_SETTING_UP_A_PET_124216119978534",
+})
+local Tabs={
+    Eggs=Window:AddTab({Title="Eggs",Icon="solar/star-bold"}),
+    Pets=Window:AddTab({Title="Pets",Icon="solar/paw-bold"}),
+    Shop=Window:AddTab({Title="Shop",Icon="solar/bag-bold"}),
+    Halloween=Window:AddTab({Title="Halloween",Icon="solar/moon-bold"}),
+    Misc=Window:AddTab({Title="Misc",Icon="solar/settings-bold"}),
+}
+local function addToggle(tab,label,key,cb)
+    Toggles[key]=tab:AddToggle("SUP_"..key,{
+        Title=label,Default=false,Callback=function(enabled)
+            S[key]=enabled==true
+            if cb then task.spawn(cb) end
+        end,
+    })
+end
+local function button(tab,label,callback)
+    tab:AddButton({Title=label,Callback=function()
+        task.spawn(function()
+            local ok,err=pcall(callback)
+            if not ok then S.LastError=tostring(err);notify(err) end
+        end)
+    end})
+end
+Status=Tabs.Eggs:AddParagraph({Title="Setting up a Pet",Content="Initialized"})
+addToggle(Tabs.Eggs,"Auto Collect Eggs","AutoCollectEggs")
+Tabs.Eggs:AddDropdown("SUP_PriorityEggs",{
+    Title="Priority Eggs",Values={"Rarest","Nearest","Heaviest"},Default="Rarest",
+    Callback=function(v) S.EggPriority=v end,
+})
+Tabs.Eggs:AddDropdown("SUP_MinRarity",{
+    Title="Minimum Egg Rarity",Values={"Common","Uncommon","Rare","Epic","Legendary","Mythic","Divine","Ethereal"},
+    Default="Common",Callback=function(v) S.EggMinRarity=v end,
+})
+addToggle(Tabs.Eggs,"Eggs ESP","EggsESP")
+addToggle(Tabs.Eggs,"Auto Hatch","AutoHatch")
+addToggle(Tabs.Eggs,"Auto Luck Upgrade","AutoLuckUpgrade")
+
+addToggle(Tabs.Pets,"Auto Feed","AutoFeed")
+local choices={"Any Available"}
+for name in pairs(FoodData) do if type(name)=="string" then choices[#choices+1]=name end end
+table.sort(choices)
+Tabs.Pets:AddDropdown("SUP_FoodChoice",{
+    Title="Feed Food",Values=choices,Default="Any Available",
+    Callback=function(v) S.FoodChoice=v end,
+})
+addToggle(Tabs.Pets,"Auto Place Best","AutoPlaceBest")
+button(Tabs.Pets,"Place Best Once",placeBest)
+addToggle(Tabs.Pets,"Auto Rebirth","AutoRebirth")
+
+local items,foods=shopLists()
+ShopItemDropdown=Tabs.Shop:AddDropdown("SUP_SelectedItems",{
+    Title="Auto Buy Items",Values=items,Multi=true,Default={},
+    DropdownOutsideWindow=true,Callback=function(v)
+        local old=S.SelectedItems
+        local updated=normalizeChoice(v)
+        S.SelectedItems=updated
+        if S.AutoBuyItems then
+            task.spawn(function()
+                for id in pairs(old) do
+                    if not updated[id] then applyNativeAutobuy("items",{[id]=true},false) end
+                end
+                refreshNativeAutobuy("items")
+            end)
+        end
+    end,
+})
+addToggle(Tabs.Shop,"Auto Buy Items","AutoBuyItems",function()
+    refreshNativeAutobuy("items")
+end)
+FoodDropdown=Tabs.Shop:AddDropdown("SUP_SelectedFoods",{
+    Title="Auto Buy Food",Values=foods,Multi=true,Default={},
+    DropdownOutsideWindow=true,Callback=function(v)
+        local old=S.SelectedFoods
+        local updated=normalizeChoice(v)
+        S.SelectedFoods=updated
+        if S.AutoBuyFood then
+            task.spawn(function()
+                for id in pairs(old) do
+                    if not updated[id] then applyNativeAutobuy("food",{[id]=true},false) end
+                end
+                refreshNativeAutobuy("food")
+            end)
+        end
+    end,
+})
+addToggle(Tabs.Shop,"Auto Buy Food","AutoBuyFood",function()
+    refreshNativeAutobuy("food")
+end)
+
+addToggle(Tabs.Halloween,"Auto Collect Candy","AutoCollectCandy")
+addToggle(Tabs.Halloween,"Auto Buy Halloween Eggs","AutoBuyHalloweenEggs")
+addToggle(Tabs.Halloween,"Auto Search Pumpkins","AutoSearchPumpkins")
+addToggle(Tabs.Halloween,"Ritual Assistant","RitualAssistant")
+button(Tabs.Halloween,"Go to Ritual",goToRitual)
+
+addToggle(Tabs.Misc,"Auto Claim Index","AutoClaimIndex")
+button(Tabs.Misc,"Teleport to Plot",teleportPlot)
+button(Tabs.Misc,"Show Diagnostics",function()
+    notify(S.LastAction.." | "..(S.LastError~="" and S.LastError or "No remote errors"))
+end)
+Tabs.Misc:AddDropdown("SUP_Theme",{
+    Title="Theme",Values=Fluent.Themes,Default="Dark",
+    Callback=function(v) pcall(function() Fluent:SetTheme(v) end) end,
+})
+local configKeys={
+    "AutoCollectEggs","EggsESP","AutoHatch","AutoLuckUpgrade","AutoFeed",
+    "AutoPlaceBest","AutoRebirth","AutoCollectCandy","AutoBuyHalloweenEggs",
+    "AutoSearchPumpkins","RitualAssistant","AutoClaimIndex","AutoBuyItems","AutoBuyFood",
+}
+button(Tabs.Misc,"Save Profile",function()
+    if type(writefile)~="function" then notify("Executor has no writefile");return end
+    local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
+        FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods}
+    for _,key in ipairs(configKeys) do payload[key]=S[key] end
+    local ok,err=pcall(writefile,S.ConfigFile,HttpService:JSONEncode(payload))
+    notify(ok and "Profile saved" or tostring(err))
+end)
+button(Tabs.Misc,"Load Profile",function()
+    if type(readfile)~="function" then notify("Executor has no readfile");return end
+    local ok,data=pcall(function() return HttpService:JSONDecode(readfile(S.ConfigFile)) end)
+    if not ok or type(data)~="table" then notify("No valid profile");return end
+    if type(data.EggPriority)=="string" then S.EggPriority=data.EggPriority end
+    if type(data.EggMinRarity)=="string" then S.EggMinRarity=data.EggMinRarity end
+    if type(data.FoodChoice)=="string" then S.FoodChoice=data.FoodChoice end
+    if type(data.SelectedItems)=="table" then
+        S.SelectedItems=data.SelectedItems
+        pcall(function() ShopItemDropdown:SetValue(data.SelectedItems) end)
+    end
+    if type(data.SelectedFoods)=="table" then
+        S.SelectedFoods=data.SelectedFoods
+        pcall(function() FoodDropdown:SetValue(data.SelectedFoods) end)
+    end
+    for _,key in ipairs(configKeys) do
+        if type(data[key])=="boolean" and Toggles[key] then
+            pcall(function() Toggles[key]:SetValue(data[key]) end)
+        end
+    end
+    notify("Profile loaded")
+end)
+button(Tabs.Misc,"Unload",cleanup)
+
+local function worker(key,delay,fn)
+    task.spawn(function()
+        while S.Running do
+            if S[key] then
+                local ok,err=pcall(fn)
+                if not ok then S.LastError=key..": "..tostring(err) end
+            end
+            task.wait(delay)
+        end
+    end)
+end
+task.spawn(function()
+    while S.Running do
+        local ok,err=pcall(function()
+            S.Movement=false
+            if S.AutoCollectEggs then S.Movement=collectEggs() end
+            if not S.Movement and S.AutoCollectCandy then
+                S.Movement=candyOrPumpkin("HalloweenCandySpawn","CollectCandy",10,3,false)
+            end
+            if not S.Movement and S.AutoSearchPumpkins then
+                S.Movement=candyOrPumpkin("HalloweenPumpkinSpawn","SearchPumpkin",10,5,true)
+            end
+        end)
+        if not ok then S.LastError="movement: "..tostring(err) end
+        task.wait(.8)
+    end
+end)
+worker("AutoHatch",3,hatchReady)
+worker("AutoLuckUpgrade",14,luckUpgrade)
+worker("AutoFeed",3,feedPets)
+worker("AutoPlaceBest",30,placeBest)
+worker("AutoRebirth",10,rebirth)
+worker("AutoBuyHalloweenEggs",3,buyHalloween)
+worker("AutoClaimIndex",5,claimIndex)
+task.spawn(function()
+    while S.Running do
+        pcall(refreshESP)
+        if Status then
+            pcall(function()
+                Status:SetTitle("Setting up a Pet")
+                Status:SetDesc(S.LastAction .. (S.LastError ~= "" and (" | " .. S.LastError) or ""))
+            end)
+        end
+        task.wait(2)
+    end
+end)
+notify("Setting up a Pet loaded | 16 features ready for validation")
