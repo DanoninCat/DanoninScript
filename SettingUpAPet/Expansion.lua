@@ -22,7 +22,10 @@ return function(ctx)
     S.AutoFarmHalloweenEvent=false
     S.AutoHeadlessRitual=false
     S.ShowEggDistance=false
+    S.ShowEggName=false
     S.ShowPetValue=false
+    S.ShowPetName=true
+    S.ShowPetDistance=false
 
     local function notify(v) ctx.Notify(tostring(v)) end
     local function throttle(key,delay)
@@ -256,32 +259,26 @@ return function(ctx)
     end
     local function updateVisuals()
         local seen={}
-        if S.EggsESP and S.ShowEggDistance then
-            local folder=workspace:FindFirstChild("RenderedEggs")
+        if S.ShowPetValue or S.ShowPetName or S.ShowPetDistance then
             local root=ctx.GetRoot()
-            if folder and root then
-                for _,egg in ipairs(folder:GetChildren()) do
-                    if egg:IsA("Model") or egg:IsA("BasePart") then
-                        local ok,p=pcall(function()
-                            return egg:IsA("Model") and egg:GetPivot().Position or egg.Position
-                        end)
-                        if ok and p then
-                            local id="egg:"..tostring(egg)
-                            seen[id]=true
-                            visual(egg,"egg",tostring(math.floor((root.Position-p).Magnitude)).." studs",
-                                Color3.fromRGB(225,240,255))
-                        end
-                    end
-                end
-            end
-        end
-        if S.ShowPetValue then
             for _,pet in ipairs(ctx.PetList()) do
-                if pet.Placed and pet.Model then
-                    local id="pet:"..tostring(pet.Model)
-                    seen[id]=true
-                    visual(pet.Model,"pet","$"..tostring(pet.Income or 0).."/s",
-                        Color3.fromRGB(120,245,160))
+                if pet.Placed and pet.Model and pet.Model.Parent then
+                    local lines={}
+                    if S.ShowPetName then
+                        lines[#lines+1]=tostring(pet.Name or pet.Model:GetAttribute("PetName") or pet.Model.Name)
+                    end
+                    if S.ShowPetValue then
+                        lines[#lines+1]="$"..tostring(pet.Income or 0).."/s"
+                    end
+                    if S.ShowPetDistance and root then
+                        local ok,p=pcall(function() return pet.Model:GetPivot().Position end)
+                        if ok then lines[#lines+1]=tostring(math.floor((root.Position-p).Magnitude)).." studs" end
+                    end
+                    if #lines>0 then
+                        local id="pet:"..tostring(pet.Model)
+                        seen[id]=true
+                        visual(pet.Model,"pet",table.concat(lines,"  |  "),Color3.fromRGB(120,245,160))
+                    end
                 end
             end
         end
@@ -312,7 +309,8 @@ return function(ctx)
         Callback=function(v) S.EggFlightSpeed=tonumber(v) or 230 end,
     })
     toggle(Tabs.Eggs,"AutoDeliverEggs","Auto Deliver Carried Eggs",false)
-    toggle(Tabs.Eggs,"ShowEggDistance","World Egg ESP: Show Distance",false)
+    toggle(Tabs.Intel,"ShowEggDistance","Egg ESP: Distance",false)
+    toggle(Tabs.Intel,"ShowEggName","Egg ESP: Name",false)
 
     toggle(Tabs.Pets,"AutoCollectCash","Auto Collect Cash",false)
     button(Tabs.Pets,"Collect All Pet Cash Once",collectCash)
@@ -368,7 +366,9 @@ return function(ctx)
 
     local stat=Tabs.Intel:AddParagraph({Title="Account Stats",Content="Waiting for account data"})
     local best=Tabs.Intel:AddParagraph({Title="Best Pet",Content="Waiting for pet data"})
-    toggle(Tabs.Intel,"ShowPetValue","Pet Value ESP",false)
+    toggle(Tabs.Intel,"ShowPetName","Pet ESP: Name",true)
+    toggle(Tabs.Intel,"ShowPetValue","Pet ESP: Value",false)
+    toggle(Tabs.Intel,"ShowPetDistance","Pet ESP: Distance",false)
 
     loop("AutoRideFastest",12,mountBest)
     loop("AutoCollectCash",7,collectCash)
@@ -447,7 +447,7 @@ return function(ctx)
                         end
                     end
                 end
-                best:SetDesc(fastest and ("Pet: "..tostring(petName or "Unknown")..
+                best:SetDesc(fastest and ("Pet: "..tostring(fastest.Name or petName or "Unknown")..
                     " | Income/s: "..tostring(fastest.Income or 0)) or "No pets found")
             end)
             task.wait(4)
@@ -457,7 +457,7 @@ return function(ctx)
     for _,key in ipairs({
         "AutoDeliverEggs","AutoCollectCash","AutoRideFastest","AutoUnlockNests",
         "AutoFusePets","AutoClaimFusion","AutoClaimOfflineIndex",
-        "AutoFarmHalloweenEvent","AutoHeadlessRitual","ShowEggDistance","ShowPetValue",
+        "AutoFarmHalloweenEvent","AutoHeadlessRitual","ShowEggDistance","ShowEggName","ShowPetName","ShowPetValue","ShowPetDistance",
     }) do ctx.ConfigKeys[#ctx.ConfigKeys+1]=key end
     return {
         EnsureMount=ensureMount,
