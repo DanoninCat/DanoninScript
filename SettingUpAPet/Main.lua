@@ -1402,6 +1402,7 @@ task.delay(3,function()
     if S.Running and S.AutoLoadProfiles then loadProfile() end
 end)
 local cleanupEggESP
+local EggESPUrl = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/EggESP.lua"
 local LuminExpansion, EggTransport
 do
     local ok, builder=pcall(function()
