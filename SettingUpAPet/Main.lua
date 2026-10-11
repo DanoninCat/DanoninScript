@@ -903,7 +903,7 @@ local function highlight(map, obj, label, color)
 end
 local function refreshESP()
     local marked = {}
-    local function markEgg(obj,rarity)
+    local function markEgg(obj,rarity,eggName)
         marked[obj]=true
         local colors={
             Common=Color3.fromRGB(210,215,225),
@@ -941,7 +941,7 @@ local function refreshESP()
                         local pos=positionOf(egg)
                         if pos then
                             positions[#positions+1]=pos
-                            markEgg(egg,eggRarity(name))
+                            markEgg(egg,eggRarity(name),name)
                         end
                     end
                 end
@@ -982,7 +982,7 @@ local function refreshESP()
                             EggWorldMarkers[record]=marker
                         end
                         marker.Position=pos+Vector3.new(0,1,0)
-                        markEgg(marker,eggRarity(name))
+                        markEgg(marker,eggRarity(name),name)
                     end
                 end
             end
