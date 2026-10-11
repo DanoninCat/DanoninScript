@@ -1135,6 +1135,7 @@ Tabs.Settings:AddInput("SUP_ProfileName",{
         ProfileNameInput=tostring(v or ""):gsub("[^%w_%-]","_"):sub(1,32)
     end,
 })
+local saveProfile
 button(Tabs.Settings,"Create Profiles",function()
     if ProfileNameInput=="" then return end
     for _,v in ipairs(ProfileNames) do
@@ -1146,7 +1147,6 @@ button(Tabs.Settings,"Create Profiles",function()
     ProfilesMenu:SetValue(ProfileNameInput)
     if saveProfile then saveProfile() end
 end)
-local saveProfile
 Toggles.AutoLoadProfiles=Tabs.Settings:AddToggle("SUP_AutoLoadProfiles",{
     Title="Auto Load Profiles",Default=S.AutoLoadProfiles==true,
     Callback=function(v)
@@ -1157,7 +1157,10 @@ Toggles.AutoLoadProfiles=Tabs.Settings:AddToggle("SUP_AutoLoadProfiles",{
 saveProfile=function()
     if type(writefile)~="function" then notify("Executor has no writefile");return end
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
-        FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods}
+        FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods,
+        EggFilterMode=S.EggFilterMode,SelectedEggs=S.SelectedEggs,
+        EggFlightSpeed=S.EggFlightSpeed,EggHoldSeconds=S.EggHoldSeconds,
+        WalkSpeed=S.WalkSpeed,JumpPower=S.JumpPower,FlySpeed=S.FlySpeed,MaxFPS=S.MaxFPS}
     for _,key in ipairs(configKeys) do payload[key]=S[key] end
     for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS"}) do payload[key]=S[key] end
     ProfileDatabase[SelectedProfile]=payload
@@ -1178,6 +1181,11 @@ local function loadProfile()
     if type(data.EggPriority)=="string" then S.EggPriority=data.EggPriority end
     if type(data.EggMinRarity)=="string" then S.EggMinRarity=data.EggMinRarity end
     if type(data.FoodChoice)=="string" then S.FoodChoice=data.FoodChoice end
+    if type(data.EggFilterMode)=="string" then S.EggFilterMode=data.EggFilterMode end
+    if type(data.SelectedEggs)=="table" then S.SelectedEggs=data.SelectedEggs end
+    for _,key in ipairs({"EggFlightSpeed","EggHoldSeconds","WalkSpeed","JumpPower","FlySpeed","MaxFPS"}) do
+        if type(data[key])=="number" then S[key]=data[key] end
+    end
     if type(data.SelectedItems)=="table" then
         S.SelectedItems=data.SelectedItems
         pcall(function() ShopItemDropdown:SetValue(data.SelectedItems) end)
