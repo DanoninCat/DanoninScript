@@ -23,6 +23,7 @@ return function(ctx)
     S.AutoHeadlessRitual=false
     S.ShowEggDistance=false
     S.ShowEggName=false
+    S.ShowEggValue=false
     S.ShowPetValue=false
     S.ShowPetName=false
     S.ShowPetDistance=false
@@ -311,6 +312,7 @@ return function(ctx)
     toggle(Tabs.Eggs,"AutoDeliverEggs","Auto Deliver Carried Eggs",false)
     toggle(Tabs.Intel,"ShowEggDistance","Egg ESP: Distance",false)
     toggle(Tabs.Intel,"ShowEggName","Egg ESP: Name",false)
+    toggle(Tabs.Intel,"ShowEggValue","Egg ESP: Value",false)
 
     toggle(Tabs.Pets,"AutoCollectCash","Auto Collect Cash",false)
     button(Tabs.Pets,"Collect All Pet Cash Once",collectCash)
@@ -445,7 +447,7 @@ return function(ctx)
     for _,key in ipairs({
         "AutoDeliverEggs","AutoCollectCash","AutoRideFastest","AutoUnlockNests",
         "AutoFusePets","AutoClaimFusion","AutoClaimOfflineIndex",
-        "AutoFarmHalloweenEvent","AutoHeadlessRitual","ShowEggDistance","ShowEggName","ShowPetName","ShowPetValue","ShowPetDistance",
+        "AutoFarmHalloweenEvent","AutoHeadlessRitual","ShowEggDistance","ShowEggName","ShowEggValue","ShowPetName","ShowPetValue","ShowPetDistance",
     }) do ctx.ConfigKeys[#ctx.ConfigKeys+1]=key end
     return {
         EnsureMount=ensureMount,
