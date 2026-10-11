@@ -11,6 +11,11 @@ return function(ctx)
     local snapshots = {}
     local function rootGui()
         if ownedRoot and ownedRoot.Parent then return ownedRoot end
+        local direct=Window and (Window.ScreenGui or Window.Gui)
+        if typeof(direct)=="Instance" and direct:IsA("ScreenGui") then
+            ownedRoot=direct
+            return direct
+        end
         local parents = {LP:FindFirstChildOfClass("PlayerGui"), game:GetService("CoreGui")}
         for _,parent in ipairs(parents) do
             local gui = parent and parent:FindFirstChild(rootName, true)
