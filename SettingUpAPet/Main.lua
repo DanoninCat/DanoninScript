@@ -153,6 +153,7 @@ local function collectedCycles()
 end
 local EggCycle = {Stage="idle", Started=0, Id=nil, Name=nil, Origin=nil}
 local EggBlocked = {}
+local EggWorldMarkers = {}
 local CandyCycle = {Stage="idle", Started=0, Target=nil, LastCarry=0}
 local CandyBlocked = {}
 local CandyDepositAckAt = 0
@@ -802,7 +803,7 @@ local function highlight(map, obj, label, color)
         b.Name = "CAT_EMPIRE_TAG"
         b.Adornee = anchor
         b.AlwaysOnTop = true
-        b.MaxDistance = 700
+        b.MaxDistance = 0
         b.Size = UDim2.fromOffset(170,42)
         b.StudsOffsetWorldSpace = Vector3.new(0,3,0)
         local t = Instance.new("TextLabel")
@@ -821,49 +822,101 @@ local function highlight(map, obj, label, color)
 end
 local function refreshESP()
     local marked = {}
+    local function markEgg(obj,rarity)
+        marked[obj]=true
+        local colors={
+            Common=Color3.fromRGB(210,215,225),
+            Uncommon=Color3.fromRGB(140,220,140),
+            Rare=Color3.fromRGB(75,175,255),
+            Epic=Color3.fromRGB(175,95,255),
+            Legendary=Color3.fromRGB(255,194,70),
+            Mythic=Color3.fromRGB(255,90,180),
+            Mythical=Color3.fromRGB(255,90,180),
+            Divine=Color3.fromRGB(255,236,115),
+            Secret=Color3.fromRGB(240,85,85),
+            Ethereal=Color3.fromRGB(95,245,225),
+        }
+        local color=colors[rarity] or colors.Common
+        highlight(EggVisuals,obj,rarity,color)
+        local visual=EggVisuals[obj]
+        if visual then
+            local h=visual[1]
+            if h and h.Parent then h.FillColor=color;h.OutlineColor=color end
+            local billboard=visual[2]
+            local label=billboard and billboard:FindFirstChildWhichIsA("TextLabel")
+            if label then label.Text=rarity;label.TextColor3=color end
+        end
+    end
     if S.EggsESP then
-        local folder = workspace:FindFirstChild("RenderedEggs")
+        local positions={}
+        local folder=workspace:FindFirstChild("RenderedEggs")
         if folder then
-            for _, egg in ipairs(folder:GetChildren()) do
-                if egg:IsA("Model") or egg:IsA("BasePart") then
-                    marked[egg]=true
-                    local eggName = egg:GetAttribute("Egg") or egg.Name
-                    local rarity = eggRarity(eggName)
-                    local rank = RarityOrder[rarity] or 1
-                    local colors = {
-                        Common = Color3.fromRGB(210, 215, 225),
-                        Rare = Color3.fromRGB(75, 175, 255),
-                        Epic = Color3.fromRGB(175, 95, 255),
-                        Legendary = Color3.fromRGB(255, 194, 70),
-                        Mythic = Color3.fromRGB(255, 90, 180),
-                        Divine = Color3.fromRGB(255, 236, 115),
-                        Secret = Color3.fromRGB(240, 85, 85),
-                        Ethereal = Color3.fromRGB(95, 245, 225),
-                    }
-                    local color = colors[rarity] or Color3.fromRGB(220, 225, 235)
-                    highlight(EggVisuals, egg, rarity, color)
-                    local visuals = EggVisuals[egg]
-                    if visuals then
-                        local outline = visuals[1]
-                        if outline and outline.Parent then
-                            outline.FillColor = color
-                            outline.OutlineColor = color
-                        end
-                        local board = visuals[2]
-                        local label = board and board:FindFirstChildWhichIsA("TextLabel")
-                        if label then
-                            label.Text = rarity
-                            label.TextColor3 = color
+            for _,egg in ipairs(folder:GetDescendants()) do
+                if (egg:IsA("Model") or egg:IsA("BasePart"))
+                    and not egg.Parent:IsA("Model") then
+                    local name=egg:GetAttribute("Egg") or egg.Name
+                    if type(name)=="string" and
+                        (EggData[name]~=nil or egg:GetAttribute("Egg")~=nil) then
+                        local pos=positionOf(egg)
+                        if pos then
+                            positions[#positions+1]=pos
+                            markEgg(egg,eggRarity(name))
                         end
                     end
                 end
             end
         end
+        -- RenderedEggs e um cache visual: ovos distantes podem estar fora dele.
+        -- ActiveEggs contem registros com a posicao mesmo sem modelo renderizado.
+        local serverData=RS:FindFirstChild("ServerData")
+        local active=(serverData and serverData:FindFirstChild("ActiveEggs"))
+            or RS:FindFirstChild("ActiveEggs")
+        if active then
+            local cycles=collectedCycles()
+            for _,record in ipairs(active:GetChildren()) do
+                local name=record:GetAttribute("Egg")
+                local pos=record:GetAttribute("Position")
+                local privateTo=record:GetAttribute("PrivateTo")
+                local delayUntil=tonumber(record:GetAttribute("DropEndsAt")) or 0
+                if type(name)=="string" and typeof(pos)=="Vector3"
+                    and (privateTo==nil or privateTo==LP.UserId)
+                    and delayUntil<=workspace:GetServerTimeNow()
+                    and not claimed(name,record,cycles) then
+                    local rendered=false
+                    for _,rp in ipairs(positions) do
+                        if (rp-pos).Magnitude<10 then rendered=true;break end
+                    end
+                    if not rendered then
+                        local marker=EggWorldMarkers[record]
+                        if not marker or not marker.Parent then
+                            marker=Instance.new("Part")
+                            marker.Name="CAT_EMPIRE_EGG_ESP_ANCHOR"
+                            marker.Size=Vector3.new(.3,.3,.3)
+                            marker.Transparency=1
+                            marker.Anchored=true
+                            marker.CanCollide=false
+                            marker.CanTouch=false
+                            marker.CanQuery=false
+                            marker.Parent=workspace
+                            EggWorldMarkers[record]=marker
+                        end
+                        marker.Position=pos+Vector3.new(0,1,0)
+                        markEgg(marker,eggRarity(name))
+                    end
+                end
+            end
+        end
     end
-    for object, visuals in pairs(EggVisuals) do
+    for object,visuals in pairs(EggVisuals) do
         if not marked[object] or not object.Parent then
             for _,v in ipairs(visuals) do pcall(function() v:Destroy() end) end
             EggVisuals[object]=nil
+        end
+    end
+    for record,marker in pairs(EggWorldMarkers) do
+        if not marked[marker] or not record.Parent then
+            pcall(function() marker:Destroy() end)
+            EggWorldMarkers[record]=nil
         end
     end
     local rituals={}
@@ -915,6 +968,10 @@ local function cleanup()
     S.AutoPlaceBest=false
     for _,c in ipairs(Links) do pcall(function() c:Disconnect() end) end
     clearVisual(EggVisuals)
+    for record, marker in pairs(EggWorldMarkers) do
+        pcall(function() marker:Destroy() end)
+        EggWorldMarkers[record]=nil
+    end
     clearVisual(RitualVisuals)
     if Window and Window.Destroy then pcall(function() Window:Destroy() end)
     elseif Fluent.Destroy then pcall(function() Fluent:Destroy() end) end
