@@ -993,6 +993,10 @@ button(Tabs.Settings,"Create Profiles",function()
     ProfilesMenu:SetValues(ProfileNames)
     ProfilesMenu:SetValue(ProfileNameInput)
 end)
+Toggles.AutoLoadProfiles=Tabs.Settings:AddToggle("SUP_AutoLoadProfiles",{
+    Title="Auto Load Profiles",Default=false,
+    Callback=function(v) S.AutoLoadProfiles=v==true end,
+})
 button(Tabs.Settings,"Save Profiles",function()
     if type(writefile)~="function" then notify("Executor has no writefile");return end
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
