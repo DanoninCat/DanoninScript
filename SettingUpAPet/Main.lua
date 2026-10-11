@@ -499,6 +499,7 @@ local function ownedPets()
                     present[pet.PetKey] = true
                     found[#found + 1] = {
                         Key=pet.PetKey, Placed=true, Income=tonumber(pet.DisplayIncome) or 0,
+                        Name=pet.PetName or pet.Name or pet.Model:GetAttribute("PetName") or pet.Model.Name,
                         Position=positionOf(pet.Model), Model=pet.Model,
                     }
                 end
