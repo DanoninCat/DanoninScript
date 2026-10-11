@@ -273,6 +273,10 @@ return function(ctx)
                 reset("EggPickup remote unavailable")
                 return
             end
+            if not prompt and workspace.StreamingEnabled
+                and t-state.started<1.25 then
+                return
+            end
             state.pickupRetries=(state.pickupRetries or 0)+1
             state.pickupLastAt=t
             local fired=false
