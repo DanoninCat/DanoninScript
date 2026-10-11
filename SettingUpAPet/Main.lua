@@ -1003,6 +1003,69 @@ button(Tabs.Settings,"Load Profile",function()
     end
     notify("Profile loaded")
 end)
+local userCard=Tabs.Misc:AddParagraph({Title="Player",Content="Loading"})
+local gameCard=Tabs.Misc:AddParagraph({Title="Game",Content="Loading"})
+local discordCard=Tabs.Misc:AddParagraph({Title="Discord",Content="Invite not configured"})
+local discordInvite=""
+local function attachImage(card,asset)
+    if type(card)~="table" then return end
+    local parent=card.Frame or card.Root or card.Container
+    if typeof(parent)~="Instance" or not parent:IsA("GuiObject") then return end
+    local image=parent:FindFirstChild("CAT_EMPIRE_PHOTO")
+    if not image then
+        image=Instance.new("ImageLabel")
+        image.Name="CAT_EMPIRE_PHOTO"
+        image.AnchorPoint=Vector2.new(1,.5)
+        image.Position=UDim2.new(1,-8,.5,0)
+        image.Size=UDim2.fromOffset(46,46)
+        image.BackgroundTransparency=1
+        image.ZIndex=parent.ZIndex+1
+        image.Parent=parent
+    end
+    image.Image=asset
+end
+local function refreshMisc()
+    local avatar=""
+    pcall(function()
+        avatar=Players:GetUserThumbnailAsync(LP.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size150x150)
+    end)
+    pcall(function()
+        userCard:SetDesc("@"..LP.Name.."  |  "..LP.DisplayName.."  |  ID: "..LP.UserId)
+        gameCard:SetDesc(game.Name.."  |  Place ID: "..game.PlaceId.."  |  Game ID: "..game.GameId)
+    end)
+    attachImage(userCard,avatar)
+    attachImage(gameCard,"rbxthumb://type=GameIcon&id="..game.GameId.."&w=150&h=150")
+end
+Tabs.Misc:AddInput("SUP_DiscordInvite",{
+    Title="Discord Invite Code",Default="",Placeholder="Invite code",
+    Callback=function(v) discordInvite=tostring(v or ""):match("([%w_%-]+)$") or "" end,
+})
+button(Tabs.Misc,"Refresh Discord",function()
+    if discordInvite=="" then
+        discordCard:SetDesc("Enter your Discord invitation code")
+        return
+    end
+    local ok,response=pcall(function()
+        return HttpService:JSONDecode(game:HttpGet(
+            "https://discord.com/api/v10/invites/"..discordInvite.."?with_counts=true",true))
+    end)
+    if not ok or type(response)~="table" or type(response.guild)~="table" then
+        discordCard:SetDesc("Live Discord data unavailable")
+        return
+    end
+    local guild=response.guild
+    discordCard:SetDesc(tostring(guild.name or "Discord")..
+        " | Members: "..tostring(response.approximate_member_count or "?")..
+        " | Online: "..tostring(response.approximate_presence_count or "?"))
+    if guild.id and guild.icon then
+        attachImage(discordCard,"https://cdn.discordapp.com/icons/"..
+            tostring(guild.id).."/"..tostring(guild.icon)..".png")
+    end
+end)
+task.spawn(function()
+    while S.Running do pcall(refreshMisc);task.wait(120) end
+end)
+
 local function notifySettings(message)
     notify(message)
 end
