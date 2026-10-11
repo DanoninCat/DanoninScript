@@ -97,8 +97,11 @@ return function(ctx)
                 return
             end
             local candidates=ctx.EggCandidates()
-            local first=candidates[1]
-            if not first or (blocked[first.Id] or 0)>t then return end
+            local first
+            for _,egg in ipairs(candidates) do
+                if (blocked[egg.Id] or 0)<=t then first=egg;break end
+            end
+            if not first then return end
             local part=root()
             if not part then return end
             state.target=first
