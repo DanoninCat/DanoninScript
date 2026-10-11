@@ -215,6 +215,72 @@ return function(ctx)
         fire("ClaimEventReward",tostring(id))
     end
 
+    local function visual(obj,key,label,color)
+        local id=tostring(key)..":"..tostring(obj)
+        local instance=visuals[id]
+        if not obj or not obj.Parent then return end
+        local anchor=obj:IsA("BasePart") and obj or
+            (obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart",true)))
+        if not anchor then return end
+        if not instance or not instance.Parent then
+            instance=Instance.new("BillboardGui")
+            instance.Name="CAT_EMPIRE_INFO"
+            instance.AlwaysOnTop=true
+            instance.Adornee=anchor
+            instance.MaxDistance=650
+            instance.Size=UDim2.fromOffset(140,27)
+            instance.StudsOffsetWorldSpace=Vector3.new(0,4,0)
+            local text=Instance.new("TextLabel")
+            text.BackgroundTransparency=1
+            text.Size=UDim2.fromScale(1,1)
+            text.Font=Enum.Font.GothamBold
+            text.TextSize=13
+            text.TextStrokeTransparency=.2
+            text.Parent=instance
+            instance.Parent=anchor
+            visuals[id]=instance
+        end
+        local text=instance:FindFirstChildWhichIsA("TextLabel")
+        if text then text.Text=label;text.TextColor3=color end
+    end
+    local function updateVisuals()
+        local seen={}
+        if S.EggsESP and S.ShowEggDistance then
+            local folder=workspace:FindFirstChild("RenderedEggs")
+            local root=ctx.GetRoot()
+            if folder and root then
+                for _,egg in ipairs(folder:GetChildren()) do
+                    if egg:IsA("Model") or egg:IsA("BasePart") then
+                        local ok,p=pcall(function()
+                            return egg:IsA("Model") and egg:GetPivot().Position or egg.Position
+                        end)
+                        if ok and p then
+                            local id="egg:"..tostring(egg)
+                            seen[id]=true
+                            visual(egg,"egg",tostring(math.floor((root.Position-p).Magnitude)).." studs",
+                                Color3.fromRGB(225,240,255))
+                        end
+                    end
+                end
+            end
+        end
+        if S.ShowPetValue then
+            for _,pet in ipairs(ctx.PetList()) do
+                if pet.Placed and pet.Model then
+                    local id="pet:"..tostring(pet.Model)
+                    seen[id]=true
+                    visual(pet.Model,"pet","$"..tostring(pet.Income or 0).."/s",
+                        Color3.fromRGB(120,245,160))
+                end
+            end
+        end
+        for key,billboard in pairs(visuals) do
+            if not seen[key] or not billboard.Parent then
+                pcall(function() billboard:Destroy() end)
+                visuals[key]=nil
+            end
+        end
+    end
     local eggs={}
     for name in pairs(EggData) do if type(name)=="string" then eggs[#eggs+1]=name end end
     table.sort(eggs)
@@ -287,7 +353,7 @@ return function(ctx)
     loop("AutoFusePets",3,fusionTick)
     loop("AutoClaimFusion",4,fusionTick)
     loop("AutoHeadlessRitual",3,function()
-        if S.AutoCollectEggs or S.AutoCollectCandy then return end
+        if S.Movement then return end
         local root=ctx.GetRoot()
         if not root then return end
         for _,prompt in ipairs(CollectionService:GetTagged("HalloweenRitualPrompt")) do
@@ -312,6 +378,13 @@ return function(ctx)
     loop("AutoClaimOfflineIndex",30,function()
         claimOffline()
         claimIndex()
+    end)
+    task.spawn(function()
+        while S.Running do
+            pcall(updateVisuals)
+            task.wait(1.2)
+        end
+        for _,v in pairs(visuals) do pcall(function() v:Destroy() end) end
     end)
     task.spawn(function()
         local previousCandy,previousPumpkins
