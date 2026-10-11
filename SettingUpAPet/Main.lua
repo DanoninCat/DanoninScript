@@ -1155,6 +1155,7 @@ local function cleanup()
     S.Running=false
     if type(cleanupSettings)=="function" then pcall(cleanupSettings) end
     if type(cleanupVisual)=="function" then pcall(cleanupVisual) end
+    if type(cleanupEggESP)=="function" then pcall(cleanupEggESP) end
     S.AutoCollectEggs=false
     EggCycle.Stage="idle"
     S.AutoCollectCandy=false
