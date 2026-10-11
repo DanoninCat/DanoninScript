@@ -873,7 +873,9 @@ local function collectCandy()
             CandyCycle={Stage="idle",Started=now,LastCarry=0}
             return false
         end
-        if now-cycle.Started<0.18 then return true end
+        local level=math.clamp(tonumber(S.CandyFarmSpeed) or 7,1,10)
+        local reactionDelay=math.clamp(0.36-(level-1)*0.028,0.1,0.36)
+        if now-cycle.Started<reactionDelay then return true end
         local prompted=interactAt(cycle.Position,cycle.TargetInstance)
         local ok=prompted or remote("CollectCandy",cycle.Target)
         CandyBlocked[cycle.Target]=now+5
@@ -1512,7 +1514,7 @@ task.spawn(function()
             end
         end)
         if not ok then S.LastError="movement: "..tostring(err) end
-        task.wait(.18)
+        task.wait(S.AutoFarmHalloweenEvent and .1 or .18)
     end
 end)
 worker("AutoHatch",3,hatchReady)
