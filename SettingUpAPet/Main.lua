@@ -659,7 +659,7 @@ local function collectCandy()
     local now=os.clock()
     local carried=localCandy()
     local cycle=CandyCycle
-    if not S.AutoCollectCandy and carried<=0 then
+    if not S.AutoFarmHalloweenEvent and carried<=0 then
         CandyCycle={Stage="idle",Started=0,LastCarry=0}
         return false
     end
@@ -692,9 +692,16 @@ local function collectCandy()
         return true
     end
     if cycle.Stage=="approach" then
+        if not cycle.TargetInstance or not cycle.TargetInstance:IsDescendantOf(workspace)
+            or cycle.TargetInstance:GetAttribute("Collected")==true then
+            if cycle.Target then CandyBlocked[cycle.Target]=now+20 end
+            CandyCycle={Stage="idle",Started=now,LastCarry=0}
+            return false
+        end
         if now-cycle.Started<0.45 then return true end
         local prompted=interactAt(cycle.Position,cycle.TargetInstance)
         local ok=prompted or remote("CollectCandy",cycle.Target)
+        CandyBlocked[cycle.Target]=now+20
         cycle.Stage="await"
         cycle.Started=now
         if not ok then
@@ -704,8 +711,15 @@ local function collectCandy()
         return true
     end
     if cycle.Stage=="await" then
-        if now-cycle.Started<=4 then return true end
-        if cycle.Target then CandyBlocked[cycle.Target]=now+8 end
+        if carried>cycle.LastCarry
+            or not cycle.TargetInstance
+            or not cycle.TargetInstance:IsDescendantOf(workspace) then
+            CandyCycle={Stage="idle",Started=now,LastCarry=carried}
+            status("Halloween Candy collected")
+            return false
+        end
+        if now-cycle.Started<=3 then return true end
+        if cycle.Target then CandyBlocked[cycle.Target]=now+22 end
         CandyCycle={Stage="idle",Started=now,LastCarry=0}
         return false
     end
@@ -717,13 +731,17 @@ local function collectCandy()
         local id=inst:GetAttribute("Id")
         if type(id)~="string" or id=="" then id=inst:GetFullName() end
         if inst:IsA("BasePart") and inst:IsDescendantOf(workspace)
+            and inst:GetAttribute("Collected")~=true
+            and inst:GetAttribute("Taken")~=true
+            and inst:GetAttribute("Available")~=false
             and (CandyBlocked[id] or 0)<=now then
             local distance=(inst.Position-root.Position).Magnitude
             if not dist or distance<dist then nearest={Instance=inst,Id=id};dist=distance end
         end
     end
     if not nearest then return false end
-    if teleportNear(nearest.Instance.Position) then
+    if nearest.Instance:IsDescendantOf(workspace)
+        and teleportNear(nearest.Instance.Position) then
         local id=nearest.Id
         CandyCycle={
             Stage="approach",Target=id,TargetInstance=nearest.Instance,
