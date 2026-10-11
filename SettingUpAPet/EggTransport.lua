@@ -316,7 +316,7 @@ return function(ctx)
             if not S.AutoCollectEggs then return false end
             local t=now()
             for _,egg in ipairs(ctx.EggCandidates()) do
-                if (blocked[egg.Id] or 0)<=t and feasible(egg) then return true end
+                if (blocked[egg.Id] or 0)<=t and eligible(egg) then return true end
             end
             return false
         end,
