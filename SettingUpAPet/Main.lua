@@ -294,12 +294,12 @@ local function eggCandidates()
         if type(name) == "string" and typeof(pos) == "Vector3"
             and (owner == nil or owner == LP.UserId)
             and drop <= workspace:GetServerTimeNow()
-            and eggRank(name) >= (RarityOrder[S.EggMinRarity] or 1)
+            and eggRank(name,record) >= (RarityOrder[S.EggMinRarity] or 1)
             and not claimed(name, record, cycles)
             and (EggBlocked[record.Name] or 0) <= os.clock() then
             candidates[#candidates + 1] = {
                 Id = record.Name, Name = name, Pos = pos,
-                Rarity = eggRarity(name), Rank = eggRank(name),
+                Rarity = eggRarity(name,record), Rank = eggRank(name,record),
                 BreakSeconds = tonumber(record:GetAttribute("BreakSeconds"))
                     or (type(EggData[name])=="table" and tonumber(EggData[name].BreakSeconds)),
                 Weight = tonumber(record:GetAttribute("Weight")) or 0,
