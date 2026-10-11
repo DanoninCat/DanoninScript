@@ -145,8 +145,17 @@ return function(ctx)
             local first
             for _,egg in ipairs(candidates) do
                 if (blocked[egg.Id] or 0)<=t then
-                    local ok,eta,limit=feasible(egg)
-                    if ok then first=egg;break end
+                    local allowed,risky,eta,limit=eligible(egg)
+                    if allowed then
+                        first=egg
+                        state.risky=risky
+                        if risky then
+                            ctx.Status(string.format(
+                                "Priority attempt %s: estimated return %.0fs / %.0fs lifetime (delivery at risk)",
+                                tostring(egg.Name),eta,limit))
+                        end
+                        break
+                    end
                     blocked[egg.Id]=t+5
                     ctx.Status(string.format("Skipping %s: return %.1fs vs %.1fs lifetime",
                         tostring(egg.Name),eta,limit))
