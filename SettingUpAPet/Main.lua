@@ -1482,6 +1482,13 @@ task.spawn(function()
             elseif S.AutoCollectEggs or EggCycle.Stage~="idle" then
                 S.Movement=collectEggs()
             end
+            if (S.Movement or LP:GetAttribute("InHalloweenZone")~=true)
+                and (CandyCycle.Stage=="approach" or CandyCycle.Stage=="await") then
+                if CandyCycle.Target then
+                    CandyBlocked[CandyCycle.Target]=os.clock()+3
+                end
+                CandyCycle={Stage="idle",Started=os.clock(),LastCarry=localCandy()}
+            end
             if not S.Movement and S.AutoFarmHalloweenEvent then
                 S.Movement=enterHalloween()
                 if not S.Movement and LP:GetAttribute("InHalloweenZone")==true then
