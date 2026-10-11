@@ -156,6 +156,7 @@ local EggBlocked = {}
 local EggWorldMarkers = {}
 local CandyCycle = {Stage="idle", Started=0, Target=nil, LastCarry=0}
 local CandyBlocked = {}
+local CandySuppressed = setmetatable({}, {__mode="k"})
 local CandyDepositAckAt = 0
 local function teleportNear(pos, offset)
     local root,hum=getRoot()
@@ -762,6 +763,12 @@ local function collectCandy()
         if carried>cycle.LastCarry
             or not cycle.TargetInstance
             or not cycle.TargetInstance:IsDescendantOf(workspace) then
+            if cycle.TargetInstance then
+                CandySuppressed[cycle.TargetInstance]={
+                    Stamp=cycle.TargetInstance:GetAttribute("SpawnAt")
+                        or cycle.TargetInstance:GetAttribute("SpawnCycle"),
+                }
+            end
             CandyCycle={Stage="idle",Started=now,LastCarry=carried}
             status("Halloween Candy collected")
             return false
@@ -778,7 +785,15 @@ local function collectCandy()
     for _,inst in ipairs(CollectionService:GetTagged("HalloweenCandySpawn")) do
         local id=inst:GetAttribute("Id")
         if type(id)~="string" or id=="" then id=inst:GetFullName() end
+        local suppressed=CandySuppressed[inst]
+        local currentStamp=inst:GetAttribute("SpawnAt") or inst:GetAttribute("SpawnCycle")
+        if suppressed and currentStamp and currentStamp~=suppressed.Stamp then
+            CandySuppressed[inst]=nil
+            suppressed=nil
+        end
         if inst:IsA("BasePart") and inst:IsDescendantOf(workspace)
+            and not suppressed
+            and inst:GetAttribute("SpawnReady")~=false
             and inst:GetAttribute("Collected")~=true
             and inst:GetAttribute("Taken")~=true
             and inst:GetAttribute("Available")~=false
