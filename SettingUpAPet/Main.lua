@@ -1026,6 +1026,11 @@ button(Tabs.Settings,"Load Profile",function()
             pcall(function() Toggles[key]:SetValue(data[key]) end)
         end
     end
+    for _,key in ipairs({"AutoRejoin","AntiAFK","AutoCloseUI","AutoLoadAfterRejoin","BoostFPS","RemoveTextures"}) do
+        if type(data[key])=="boolean" and Toggles[key] then
+            pcall(function() Toggles[key]:SetValue(data[key]) end)
+        end
+    end
     notify("Profile loaded")
 end)
 local userCard=Tabs.Misc:AddParagraph({Title="Player",Content="Loading"})
