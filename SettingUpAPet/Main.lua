@@ -55,10 +55,10 @@ local S = {
 }
 local Toggles, Links, EggVisuals, RitualVisuals, Requests = {}, {}, {}, {}, {}
 local RarityOrder = {
-    Common=1, Rare=2, Epic=3, Legendary=4,
+    Common=1, Uncommon=1.5, Rare=2, Epic=3, Legendary=4,
     Mythic=5, Divine=6, Secret=7, Ethereal=8,
 }
-local RarityAliases = {Uncommon="Common",Mythical="Mythic"}
+local RarityAliases = {Mythical="Mythic"}
 local Window, Status, ShopItemDropdown, FoodDropdown
 
 local function notify(message)
