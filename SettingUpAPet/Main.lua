@@ -660,49 +660,136 @@ local function refreshNativeAutobuy(category)
     else applyNativeAutobuy(category,S.SelectedItems,S.AutoBuyItems) end
 end
 
-local HalloweenEntrance = {LastTry=0, Pending=false}
+local HalloweenEntrance = {
+    LastSearch=0, LastInteraction=0, WaitingUntil=0,
+    Position=nil, Marker=nil, Prompt=nil, Streaming=false,
+}
+local function entranceLabel(instance)
+    local current=instance
+    local buffer={}
+    for i=1,5 do
+        if not current or current==workspace then break end
+        buffer[#buffer+1]=current.Name:lower()
+        current=current.Parent
+    end
+    return table.concat(buffer,"/")
+end
+local function portalCandidate(instance)
+    if not instance or not instance:IsDescendantOf(workspace) then return false end
+    local name=entranceLabel(instance)
+    return (name:find("halloween",1,true)~=nil)
+        and (name:find("portal",1,true) or name:find("entrance",1,true)
+            or name:find("door",1,true) or name:find("gate",1,true)
+            or name:find("enter",1,true))
+        and not name:find("deposit",1,true)
+        and not name:find("homeanchor",1,true)
+end
+local function scanHalloweenEntrance()
+    local root=getRoot()
+    if not root then return end
+    local bestPrompt,bestPart,promptScore,partScore
+    local function consider(instance, tagged)
+        if not instance or not instance:IsDescendantOf(workspace) then return end
+        local pos=positionOf(instance)
+        if not pos then return end
+        local score=(root.Position-pos).Magnitude
+        local valid=tagged or portalCandidate(instance)
+        if instance:IsA("ProximityPrompt") then
+            local action=tostring(instance.ActionText or ""):lower()
+            if valid and (action=="" or action:find("enter",1,true)
+                or action:find("entrar",1,true) or action:find("halloween",1,true)) then
+                if not promptScore or score<promptScore then
+                    bestPrompt,promptScore=instance,score
+                end
+            end
+        elseif valid and (instance:IsA("BasePart") or instance:IsA("Model")) then
+            if not partScore or score<partScore then
+                bestPart,partScore=instance,score
+            end
+        end
+    end
+    for _,tag in ipairs({"HalloweenEntrance","HalloweenPortal","HalloweenDoor",
+        "HalloweenGate","HalloweenEnterPrompt"}) do
+        for _,object in ipairs(CollectionService:GetTagged(tag)) do
+            consider(object,true)
+            for _,child in ipairs(object:GetDescendants()) do consider(child,true) end
+        end
+    end
+    if not bestPrompt or not bestPart then
+        for _,obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ProximityPrompt") or obj:IsA("BasePart") or obj:IsA("Model") then
+                if portalCandidate(obj) then consider(obj,false) end
+            end
+        end
+    end
+    if bestPrompt then
+        HalloweenEntrance.Prompt=bestPrompt
+        HalloweenEntrance.Position=positionOf(bestPrompt)
+    elseif bestPart then
+        HalloweenEntrance.Marker=bestPart
+        HalloweenEntrance.Position=positionOf(bestPart)
+    end
+end
+local function streamEntrance(pos)
+    if HalloweenEntrance.Streaming then return end
+    HalloweenEntrance.Streaming=true
+    task.spawn(function()
+        pcall(function()
+            if workspace.StreamingEnabled then workspace:RequestStreamAroundAsync(pos) end
+        end)
+        HalloweenEntrance.Streaming=false
+    end)
+end
 local function enterHalloween()
-    if not S.AutoFarmHalloweenEvent or not eventLive()
-        or LP:GetAttribute("InHalloweenZone")==true then
-        HalloweenEntrance.Pending=false
+    if not S.AutoFarmHalloweenEvent or not eventLive() then return false end
+    if LP:GetAttribute("InHalloweenZone")==true then
+        HalloweenEntrance.WaitingUntil=0
         return false
     end
-    local current=os.clock()
-    if current-HalloweenEntrance.LastTry<2.5 then return true end
-    HalloweenEntrance.LastTry=current
-    local best,bestPos,score
-    local function consider(prompt)
-        if not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return end
-        if prompt.ActionText~="Enter" and prompt.ActionText~="Entrar" then return end
-        local host=prompt.Parent
-        local text=tostring(host and host:GetFullName() or ""):lower()
-        if not text:find("halloween",1,true)
-            and not text:find("portal",1,true) then return end
-        local pos=positionOf(prompt)
-        local root=getRoot()
-        if not pos or not root then return end
-        local d=(root.Position-pos).Magnitude
-        if not score or d<score then best,bestPos,score=prompt,pos,d end
+    local t=os.clock()
+    if t-HalloweenEntrance.LastSearch>=3 or not HalloweenEntrance.Position then
+        HalloweenEntrance.LastSearch=t
+        scanHalloweenEntrance()
     end
-    for _,tag in ipairs({"HalloweenEntrance","HalloweenPortal","HalloweenEnterPrompt"}) do
-        for _,obj in ipairs(CollectionService:GetTagged(tag)) do
-            if obj:IsA("ProximityPrompt") then consider(obj) end
-            for _,desc in ipairs(obj:GetDescendants()) do consider(desc) end
-        end
-    end
-    if not best then
-        for _,obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("ProximityPrompt") then consider(obj) end
-        end
-    end
-    if not best then
-        status("Halloween entrance not found")
+    local pos=HalloweenEntrance.Position
+    if not pos then
+        status("Halloween entrance is not replicated: waiting for a locator")
         return true
     end
-    teleportNear(bestPos,Vector3.new(0,2,0))
-    local acted=interactAt(bestPos,best)
-    HalloweenEntrance.Pending=acted
-    status(acted and "Entering Halloween; awaiting zone confirmation" or "Halloween entrance interaction unavailable")
+    local root=getRoot()
+    if not root then return true end
+    if (root.Position-pos).Magnitude>14 then
+        streamEntrance(pos)
+        if due("halloweenEntranceMove",0.5) then
+            teleportNear(pos,Vector3.new(0,2,0))
+            status("Approaching Halloween entrance")
+        end
+        return true
+    end
+    if HalloweenEntrance.WaitingUntil>t then return true end
+    local prompt=HalloweenEntrance.Prompt
+    if not prompt or not prompt.Parent or not prompt:IsDescendantOf(workspace)
+        or not prompt.Enabled then
+        scanHalloweenEntrance()
+        prompt=HalloweenEntrance.Prompt
+        if not prompt or not prompt.Parent or not prompt.Enabled then
+            streamEntrance(pos)
+            status("Waiting for Halloween entrance prompt to stream in")
+            return true
+        end
+    end
+    if t-HalloweenEntrance.LastInteraction<2.5 then return true end
+    if (root.Position-positionOf(prompt)).Magnitude>prompt.MaxActivationDistance+1 then
+        teleportNear(positionOf(prompt),Vector3.new(0,1,0))
+        return true
+    end
+    HalloweenEntrance.LastInteraction=t
+    if interactAt(positionOf(prompt),prompt) then
+        HalloweenEntrance.WaitingUntil=os.clock()+3
+        status("Halloween interaction sent; waiting for zone confirmation")
+    else
+        status("Halloween interaction unavailable: will retry")
+    end
     return true
 end
 local function collectCandy()
