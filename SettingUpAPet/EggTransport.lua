@@ -73,6 +73,7 @@ return function(ctx)
         state.nativeTeleportAt=nil
         state.nativeTeleportRequested=false
         state.receivedDeposit=false
+        state.lastApproachTeleport=nil
         state.retryAt=nil
         state.lastRefusal=nil
         state.warnedLate=false
@@ -148,8 +149,10 @@ return function(ctx)
         local plate=plotBase()
         local insidePlot=part and plate and inside(plate,part.Position)
         local withinTime=not state.initialDeadline or now()<state.initialDeadline
-        if (insidePlot or state.arrived) and withinTime then
-            reset("Egg delivery confirmed at plot")
+        if state.receivedDeposit then
+            reset("Egg delivery confirmed by server")
+        elseif (insidePlot or state.arrived) and withinTime then
+            reset("Egg removed at plot; awaiting independent deposit proof")
         else
             if state.risky and state.target then
                 blocked[state.target.Id]=now()+60
@@ -229,6 +232,11 @@ return function(ctx)
             local part=root()
             if not part then return end
             state.target=first
+            if workspace.StreamingEnabled then
+                task.spawn(function()
+                    pcall(function() workspace:RequestStreamAroundAsync(first.Pos) end)
+                end)
+            end
             state.pickupRetries=0
             state.approachAt=nil
             state.retryAt=nil
@@ -300,8 +308,9 @@ return function(ctx)
         elseif state.stage=="awaitBasket" then
             if count()>0 then
                 beginReturn("Egg acquired; returning immediately")
-            elseif t-state.started>1.8 then
-                reset("Waiting for egg replication timed out")
+            elseif t-state.started>2.8 then
+                if state.target then blocked[state.target.Id]=t+10 end
+                reset("Pickup acknowledged, but basket did not replicate")
             end
         elseif state.stage=="return" then
             if not S.AutoCollectEggs and not S.AutoDeliverEggs then
@@ -365,6 +374,14 @@ return function(ctx)
 
     if pickup and pickup:IsA("RemoteEvent") then
         Links[#Links+1]=pickup.OnClientEvent:Connect(function(result, name, id)
+            if result=="Deposited" then
+                if state.stage=="return" or state.stage=="verify" or state.stage=="confirm" then
+                    state.receivedDeposit=true
+                    ctx.Status("Server acknowledged egg deposit")
+                    if count()==0 then finishOrFail() end
+                end
+                return
+            end
             if state.stage~="await" then return end
             if id~=nil and state.target and tostring(id)~=tostring(state.target.Id) then return end
             if result=="PickedUp" then
@@ -380,7 +397,11 @@ return function(ctx)
                     reset("Pickup refused: "..state.lastRefusal)
                 end
             elseif result=="BasketFull" then
-                reset("Basket is full; stopping pickup attempts")
+                if count()>0 then
+                    beginReturn("Basket full; delivering already carried eggs")
+                else
+                    reset("Basket full; waiting for inventory")
+                end
             end
         end)
     end
