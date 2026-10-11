@@ -973,7 +973,10 @@ local SelectedProfile="Default"
 local ProfileNameInput=""
 local ProfilesMenu=Tabs.Settings:AddDropdown("SUP_Profiles",{
     Title="Profiles",Values=ProfileNames,Default="Default",
-    Callback=function(v) SelectedProfile=tostring(v or "Default") end,
+    Callback=function(v)
+        SelectedProfile=tostring(v or "Default")
+        S.ConfigFile="CATEMPIRE_SettingUpAPet_"..SelectedProfile..".json"
+    end,
 })
 Tabs.Settings:AddInput("SUP_ProfileName",{
     Title="Create Profiles",Default="",Placeholder="New profile name",
