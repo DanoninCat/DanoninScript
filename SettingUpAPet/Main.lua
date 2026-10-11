@@ -991,7 +991,7 @@ local ProfilesMenu=Tabs.Settings:AddDropdown("SUP_Profiles",{
     end,
 })
 Tabs.Settings:AddInput("SUP_ProfileName",{
-    Title="Create Profiles",Default="",Placeholder="New profile name",
+    Title="New Profile Name",Default="",Placeholder="New profile name",
     Callback=function(v)
         ProfileNameInput=tostring(v or ""):gsub("[^%w_%-]","_"):sub(1,32)
     end,
@@ -1003,6 +1003,7 @@ button(Tabs.Settings,"Create Profiles",function()
         if v==ProfileNameInput then ProfilesMenu:SetValue(v);return end
     end
     ProfileNames[#ProfileNames+1]=ProfileNameInput
+    SelectedProfile=ProfileNameInput
     ProfilesMenu:SetValues(ProfileNames)
     ProfilesMenu:SetValue(ProfileNameInput)
     if saveProfile then saveProfile() end
