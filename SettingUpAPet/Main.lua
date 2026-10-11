@@ -1247,7 +1247,7 @@ do
     end)
     if ok and type(builder)=="function" then
         local good,result=pcall(builder,{
-            State=S,Player=LP,Tabs=Tabs,Links=Links,ConfigKeys=configKeys,
+            State=S,Player=LP,Tabs=Tabs,Links=Links,ConfigKeys=configKeys,Toggles=Toggles,
             GetRoot=getRoot,Notify=notify,
         })
         if good then cleanupVisual=result
