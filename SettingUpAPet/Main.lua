@@ -294,6 +294,11 @@ local function collectEggs()
         elseif not teleportNear(cycle.Position) then
             cycle.Stage="return"
         else
+            cycle.Stage="interact"
+            cycle.Started=now
+        end
+    elseif cycle.Stage=="interact" then
+        if now-cycle.Started>=0.45 then
             cycle.Stage="await"
             cycle.Started=now
             local prompted=interactAt(cycle.Position,workspace:FindFirstChild("RenderedEggs"))
@@ -686,6 +691,18 @@ local function collectCandy()
         end
         return true
     end
+    if cycle.Stage=="approach" then
+        if now-cycle.Started<0.45 then return true end
+        local prompted=interactAt(cycle.Position,cycle.TargetInstance)
+        local ok=prompted or remote("CollectCandy",cycle.Target)
+        cycle.Stage="await"
+        cycle.Started=now
+        if not ok then
+            CandyBlocked[cycle.Target]=now+8
+            cycle.Stage="idle"
+        end
+        return true
+    end
     if cycle.Stage=="await" then
         if now-cycle.Started<=4 then return true end
         if cycle.Target then CandyBlocked[cycle.Target]=now+8 end
@@ -708,11 +725,11 @@ local function collectCandy()
     if not nearest then return false end
     if teleportNear(nearest.Instance.Position) then
         local id=nearest.Id
-        CandyCycle={Stage="await",Target=id,Started=now,LastCarry=0}
-        local prompted=interactAt(nearest.Instance.Position,nearest.Instance)
-        local ok=prompted or remote("CollectCandy",id)
-        if not ok then CandyBlocked[id]=now+8;CandyCycle.Stage="idle" end
-        status("Collecting Halloween candy")
+        CandyCycle={
+            Stage="approach",Target=id,TargetInstance=nearest.Instance,
+            Position=nearest.Instance.Position,Started=now,LastCarry=0
+        }
+        status("Approaching Halloween candy")
     end
     return true
 end
