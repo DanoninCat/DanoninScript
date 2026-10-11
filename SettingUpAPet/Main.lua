@@ -1021,7 +1021,7 @@ button(Tabs.Settings,"Save Profiles",function()
     local ok,err=pcall(writefile,S.ConfigFile,HttpService:JSONEncode(catalog))
     notify(ok and "Profile saved" or tostring(err))
 end)
-button(Tabs.Settings,"Load Profile",function()
+local function loadProfile()
     if type(readfile)~="function" then notify("Executor has no readfile");return end
     local ok,data=pcall(function() return HttpService:JSONDecode(readfile(S.ConfigFile)) end)
     if not ok or type(data)~="table" then notify("No valid profile");return end
@@ -1051,7 +1051,8 @@ button(Tabs.Settings,"Load Profile",function()
         end
     end
     notify("Profile loaded")
-end)
+end
+button(Tabs.Settings,"Load Selected Profile",loadProfile)
 local function notifySettings(message)
     notify(message)
 end
@@ -1071,6 +1072,9 @@ else
     S.LastError="Settings module unavailable: "..tostring(settingsBuilder)
 end
 
+task.delay(3,function()
+    if S.Running and S.AutoLoadProfiles then loadProfile() end
+end)
 local function worker(key,delay,fn)
     task.spawn(function()
         while S.Running do
