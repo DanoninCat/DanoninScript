@@ -1150,7 +1150,7 @@ local function refreshESP()
     end
 
 end
-local cleanupSettings, cleanupVisual
+local cleanupSettings, cleanupVisual, cleanupEggESP
 local function cleanup()
     S.Running=false
     if type(cleanupSettings)=="function" then pcall(cleanupSettings) end
@@ -1401,7 +1401,6 @@ end
 task.delay(3,function()
     if S.Running and S.AutoLoadProfiles then loadProfile() end
 end)
-local cleanupEggESP
 local EggESPUrl = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/EggESP.lua"
 local okESPModule, eggESPBuilder = pcall(function()
     return assert(loadstring(game:HttpGet(EggESPUrl,true)))()
