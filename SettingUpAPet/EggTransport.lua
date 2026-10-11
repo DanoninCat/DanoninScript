@@ -107,6 +107,9 @@ return function(ctx)
         if (insidePlot or state.arrived) and withinTime then
             reset("Egg delivery confirmed at plot")
         else
+            if state.risky and state.target then
+                blocked[state.target.Id]=now()+60
+            end
             reset("Egg removed from basket without confirmed on-time delivery")
         end
     end
@@ -273,6 +276,7 @@ return function(ctx)
                 transition("return","Re-aligning plot position")
             end
             if state.initialDeadline and t>state.initialDeadline+1.5 then
+                if state.risky and state.target then blocked[state.target.Id]=t+60 end
                 reset("Egg delivery deadline expired without server confirmation")
             elseif t-state.started>5 and not state.waitingNotified then
                 state.waitingNotified=true
