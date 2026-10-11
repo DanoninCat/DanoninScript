@@ -104,12 +104,17 @@ return function(ctx)
         table.sort(result,function(a,b) return a.Speed>b.Speed end)
         return result
     end
+    local function mounted()
+        return LP:GetAttribute("IsRiding")==true or LP:GetAttribute("IsPassenger")==true
+    end
+    local mountPending=false
     local function mountBest()
-        if LP:GetAttribute("IsRiding")==true or LP:GetAttribute("IsPassenger")==true then return end
+        if mounted() or mountPending then return true end
+        mountPending=true
         local best=getPets()[1]
-        if not best then return end
+        if not best then mountPending=false;return false end
         local root,hum=ctx.GetRoot()
-        if not root or not hum then return end
+        if not root or not hum then mountPending=false;return false end
         if best.Tool.Parent~=LP.Character then
             hum:EquipTool(best.Tool)
             task.wait(0.25)
@@ -117,6 +122,12 @@ return function(ctx)
         if best.Tool.Parent==LP.Character then
             fire("Mounting")
         end
+        mountPending=false
+        return mounted()
+    end
+    local function ensureMount()
+        if mounted() then return end
+        if not mountPending then task.spawn(mountBest) end
     end
     local function collectCash()
         local pets=ctx.PetList()
@@ -353,7 +364,7 @@ return function(ctx)
     end)
 
     toggle(Tabs.Halloween,"AutoFarmHalloweenEvent","Auto Farm Halloween Event",false)
-    toggle(Tabs.Halloween,"AutoHeadlessRitual","Auto Headless Ritual",false)
+    toggle(Tabs.Halloween,"AutoHeadlessRitual","Auto Headless Event",false)
 
     local stat=Tabs.Intel:AddParagraph({Title="Account Stats",Content="Waiting for account data"})
     local best=Tabs.Intel:AddParagraph({Title="Best Pet",Content="Waiting for pet data"})
@@ -426,7 +437,17 @@ return function(ctx)
                     tostring(val(Saved,"Cash",0)),tostring(val(Saved,"Rebirths",0)),
                     tostring(val(Saved,"HatchUpgrades",0)),total,
                     active and #active:GetChildren() or 0))
-                best:SetDesc(fastest and ("Pet Key: "..tostring(fastest.Key)..
+                local petName
+                if fastest then
+                    petName=fastest.Model and (fastest.Model:GetAttribute("PetName") or fastest.Model.Name)
+                    if not petName or type(PetData[petName])~="table" then
+                        for name,config in pairs(PetData) do
+                            if type(config)=="table" and fastest.Model
+                                and fastest.Model.Name==name then petName=name;break end
+                        end
+                    end
+                end
+                best:SetDesc(fastest and ("Pet: "..tostring(petName or "Unknown")..
                     " | Income/s: "..tostring(fastest.Income or 0)) or "No pets found")
             end)
             task.wait(4)
@@ -439,6 +460,8 @@ return function(ctx)
         "AutoFarmHalloweenEvent","AutoHeadlessRitual","ShowEggDistance","ShowPetValue",
     }) do ctx.ConfigKeys[#ctx.ConfigKeys+1]=key end
     return {
+        EnsureMount=ensureMount,
+        IsMounted=mounted,
         FilterEggs=function(candidates)
             if S.EggFilterMode=="All" then return candidates end
             local filtered={}
