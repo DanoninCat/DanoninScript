@@ -1509,7 +1509,6 @@ worker("AutoBuyHalloweenEggs",3,buyHalloween)
 worker("AutoClaimIndex",5,claimIndex)
 task.spawn(function()
     while S.Running do
-        pcall(refreshESP)
         if Status then
             pcall(function()
                 Status:SetTitle("Setting up a Pet")
