@@ -157,6 +157,11 @@ local EggWorldMarkers = {}
 local CandyCycle = {Stage="idle", Started=0, Target=nil, LastCarry=0}
 local CandyBlocked = {}
 local CandySuppressed = setmetatable({}, {__mode="k"})
+local CandyLocations = {}
+local CandyLastSpawn = {}
+local function candyLocationKey(pos)
+    return string.format("%d:%d:%d",math.floor(pos.X/3),math.floor(pos.Y/3),math.floor(pos.Z/3))
+end
 local CandyDepositAckAt = 0
 local function teleportNear(pos, offset)
     local root,hum=getRoot()
@@ -836,10 +841,10 @@ local function collectCandy()
             CandyCycle={Stage="idle",Started=now,LastCarry=0}
             return false
         end
-        if now-cycle.Started<0.45 then return true end
+        if now-cycle.Started<0.18 then return true end
         local prompted=interactAt(cycle.Position,cycle.TargetInstance)
         local ok=prompted or remote("CollectCandy",cycle.Target)
-        CandyBlocked[cycle.Target]=now+20
+        CandyBlocked[cycle.Target]=now+5
         cycle.Stage="await"
         cycle.Started=now
         if not ok then
@@ -856,14 +861,20 @@ local function collectCandy()
                 CandySuppressed[cycle.TargetInstance]={
                     Stamp=cycle.TargetInstance:GetAttribute("SpawnAt")
                         or cycle.TargetInstance:GetAttribute("SpawnCycle"),
+                    Until=now+35,
                 }
+                if cycle.Position then
+                    CandyLocations[candyLocationKey(cycle.Position)]={
+                        Instance=cycle.TargetInstance,Until=now+4,
+                    }
+                end
             end
             CandyCycle={Stage="idle",Started=now,LastCarry=carried}
             status("Halloween Candy collected")
             return false
         end
-        if now-cycle.Started<=3 then return true end
-        if cycle.Target then CandyBlocked[cycle.Target]=now+22 end
+        if now-cycle.Started<=1.3 then return true end
+        if cycle.Target then CandyBlocked[cycle.Target]=now+6 end
         CandyCycle={Stage="idle",Started=now,LastCarry=0}
         return false
     end
@@ -876,12 +887,22 @@ local function collectCandy()
         if type(id)~="string" or id=="" then id=inst:GetFullName() end
         local suppressed=CandySuppressed[inst]
         local currentStamp=inst:GetAttribute("SpawnAt") or inst:GetAttribute("SpawnCycle")
-        if suppressed and currentStamp and currentStamp~=suppressed.Stamp then
+        local previousStamp=CandyLastSpawn[id]
+        if currentStamp and previousStamp and currentStamp~=previousStamp then
+            CandyBlocked[id]=nil
             CandySuppressed[inst]=nil
             suppressed=nil
         end
+        if currentStamp then CandyLastSpawn[id]=currentStamp end
+        if suppressed and ((currentStamp and currentStamp~=suppressed.Stamp)
+            or (suppressed.Until and now>=suppressed.Until)) then
+            CandySuppressed[inst]=nil
+            suppressed=nil
+        end
+        local location=CandyLocations[candyLocationKey(inst.Position)]
+        local visited=location and location.Instance==inst and location.Until>now
         if inst:IsA("BasePart") and inst:IsDescendantOf(workspace)
-            and not suppressed
+            and not suppressed and not visited
             and inst:GetAttribute("SpawnReady")~=false
             and inst:GetAttribute("Collected")~=true
             and inst:GetAttribute("Taken")~=true
@@ -897,7 +918,7 @@ local function collectCandy()
         local id=nearest.Id
         CandyCycle={
             Stage="approach",Target=id,TargetInstance=nearest.Instance,
-            Position=nearest.Instance.Position,Started=now,LastCarry=0
+            Position=nearest.Instance.Position,Started=now,LastCarry=carried
         }
         status("Approaching Halloween candy")
     end
@@ -1426,7 +1447,7 @@ task.spawn(function()
             end
         end)
         if not ok then S.LastError="movement: "..tostring(err) end
-        task.wait(.8)
+        task.wait(.18)
     end
 end)
 worker("AutoHatch",3,hatchReady)
