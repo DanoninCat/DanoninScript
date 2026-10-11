@@ -208,53 +208,37 @@ return function(ctx)
     end)
     local Players = game:GetService("Players")
     local MarketplaceService = game:GetService("MarketplaceService")
-    local userCard = Tabs.Misc:AddParagraph({Title="Player",Content="Loading"})
-    local gameCard = Tabs.Misc:AddParagraph({Title="Game",Content="Loading"})
-    local community = Tabs.Misc:AddSection("Community", "solar/chat-round-bold")
-    -- Mesma integracao Discord ja configurada em ScopedV2/Main.lua (Murder Duels)
-    community:AddDiscord({InviteCode = "yykVnTjd2Y"})
-
-    local function attachLargeImage(card, asset)
-        if type(card) ~= "table" then return end
-        local parent = card.Frame or card.Root or card.Container
-        if typeof(parent) ~= "Instance" or not parent:IsA("GuiObject") then return end
-        local image = parent:FindFirstChild("CAT_EMPIRE_PHOTO")
-        if not image then
-            image = Instance.new("ImageLabel")
-            image.Name = "CAT_EMPIRE_PHOTO"
-            image.AnchorPoint = Vector2.new(1, 0.5)
-            image.Position = UDim2.new(1, -12, 0.5, 0)
-            image.Size = UDim2.fromOffset(90, 90)
-            image.BackgroundTransparency = 1
-            image.ScaleType = Enum.ScaleType.Fit
-            image.ZIndex = parent.ZIndex + 1
-            image.Parent = parent
-            pcall(function()
-                parent.Size = UDim2.new(parent.Size.X.Scale, parent.Size.X.Offset, 0, math.max(parent.AbsoluteSize.Y, 108))
-                parent.ClipsDescendants = false
-            end)
+    local function gameIcon()
+        local fallback = "rbxthumb://type=GameIcon&id="..tostring(game.GameId).."&w=420&h=420"
+        local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, game.PlaceId)
+        if ok and type(info)=="table" then
+            local assetId=tonumber(info.IconImageAssetId)
+            if assetId and assetId>0 then return "rbxassetid://"..tostring(assetId) end
         end
-        image.Image = asset
+        return fallback
     end
-    local gameTitle = "Setting up a Pet"
+    local avatarURL = "https://www.roblox.com/headshot-thumbnail/image?userId="
+        ..tostring(LP.UserId).."&width=420&height=420&format=png"
+    local accountSection=Tabs.Misc:AddSection("Account", "solar/user-bold")
+    accountSection:AddSocial({
+        Username=LP.Name,DisplayName=LP.DisplayName,Platform="Roblox",Avatar=avatarURL,
+    })
+    local userCard=accountSection:AddParagraph({Title="Player",Content="Loading account"})
+    local gameSection=Tabs.Misc:AddSection("Game", "solar/gamepad-bold")
+    gameSection:AddImage({Image=gameIcon(),AspectRatio="4:1",Radius=10})
+    local gameCard=gameSection:AddParagraph({Title="Game",Content="Loading game"})
+    local community=Tabs.Misc:AddSection("Community","solar/chat-round-bold")
+    community:AddDiscord({InviteCode="yykVnTjd2Y"})
+    local gameTitle="Setting up a Pet"
     pcall(function()
-        local info = MarketplaceService:GetProductInfo(game.PlaceId, Enum.InfoType.Asset)
-        local name = info and info.Name
-        if type(name) == "string" and name ~= "" and name:lower() ~= "ugc" then
-            gameTitle = name
-        end
+        local info=MarketplaceService:GetProductInfo(game.PlaceId)
+        if info and type(info.Name)=="string" and info.Name~="" then gameTitle=info.Name end
     end)
     local function refreshMisc()
-        local avatar = ""
-        pcall(function()
-            avatar = Players:GetUserThumbnailAsync(LP.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
-        end)
         pcall(function()
             userCard:SetDesc("@"..LP.Name.." | "..LP.DisplayName.." | ID: "..LP.UserId)
             gameCard:SetDesc(gameTitle.." | Place ID: "..game.PlaceId.." | Universe ID: "..game.GameId)
         end)
-        attachLargeImage(userCard, avatar)
-        attachLargeImage(gameCard, "rbxthumb://type=GameIcon&id="..game.GameId.."&w=420&h=420")
     end
     task.spawn(function()
         while S.Running and not stopped do
