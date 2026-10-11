@@ -90,6 +90,14 @@ return function(ctx)
         local eta,available=estimateReturn(egg)
         return eta<available,eta,available
     end
+    local function eligible(egg)
+        local safe,eta,limit=feasible(egg)
+        -- Rare priority must not silently disappear behind the ETA filter.
+        -- An unsafe trip remains an attempt, not a delivery guarantee.
+        local highest=(tonumber(egg.Rank) or 0)>=7
+        local attempt=not safe and highest and S.EggPriority=="Rarest"
+        return safe or attempt,attempt,eta,limit
+    end
     local function finishOrFail()
         local part=root()
         local plate=plotBase()
