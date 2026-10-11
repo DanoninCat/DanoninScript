@@ -95,37 +95,65 @@ return function(ctx)
             end,
         })
     end
+    local boostConnection, boostGeneration = nil, 0
+    local function saveProperty(inst, prop, newValue)
+        local ok, previous = pcall(function() return inst[prop] end)
+        if not ok or previous == newValue then return end
+        local entry = snapshots[inst]
+        if not entry then entry = {}; snapshots[inst] = entry end
+        if entry[prop] == nil then entry[prop] = previous end
+        pcall(function() inst[prop] = newValue end)
+    end
     local function restore()
-        for instance, entry in pairs(snapshots) do
-            pcall(function() instance[entry[1]]=entry[2] end)
-            snapshots[instance]=nil
+        boostGeneration = boostGeneration + 1
+        if boostConnection then boostConnection:Disconnect(); boostConnection = nil end
+        for inst, entry in pairs(snapshots) do
+            if inst and inst.Parent then
+                for prop, previous in pairs(entry) do
+                    pcall(function() inst[prop] = previous end)
+                end
+            end
+            snapshots[inst] = nil
+        end
+    end
+    local function simplify(inst)
+        if inst:IsA("Texture") or inst:IsA("Decal") then
+            saveProperty(inst, "Transparency", 1)
+        elseif inst:IsA("MeshPart") then
+            saveProperty(inst, "TextureID", "")
+        elseif inst:IsA("SpecialMesh") then
+            saveProperty(inst, "TextureId", "")
+        elseif inst:IsA("SurfaceAppearance") then
+            for _, property in ipairs({"ColorMap", "NormalMap", "MetalnessMap", "RoughnessMap"}) do
+                saveProperty(inst, property, "")
+            end
+            saveProperty(inst, "AlphaMode", Enum.AlphaMode.Overlay)
+        end
+        if inst:IsA("BasePart") then
+            saveProperty(inst, "Material", Enum.Material.SmoothPlastic)
+            saveProperty(inst, "MaterialVariant", "")
+            saveProperty(inst, "Reflectance", 0)
+            saveProperty(inst, "CastShadow", false)
+        elseif inst:IsA("ParticleEmitter") or inst:IsA("Beam") or inst:IsA("Trail")
+            or inst:IsA("Fire") or inst:IsA("Smoke") or inst:IsA("Sparkles") then
+            saveProperty(inst, "Enabled", false)
         end
     end
     local function boost(on)
         restore()
         if not on then return end
+        local generation = boostGeneration
+        boostConnection = workspace.DescendantAdded:Connect(function(inst)
+            if S.Running and S.BoostFPS and boostGeneration == generation then
+                simplify(inst)
+            end
+        end)
         task.spawn(function()
-            local objects=workspace:GetDescendants()
-            local n=0
-            for _,inst in ipairs(objects) do
-                if not S.Running or not S.BoostFPS then return end
-                local prop,newVal
-                if inst:IsA("ParticleEmitter") or inst:IsA("Beam")
-                    or inst:IsA("Trail") or inst:IsA("Fire")
-                    or inst:IsA("Smoke") then
-                    prop,newVal="Enabled",false
-                elseif S.RemoveTextures and (inst:IsA("Texture") or inst:IsA("Decal")) then
-                    prop,newVal="Transparency",1
-                end
-                if prop then
-                    local ok,previous=pcall(function() return inst[prop] end)
-                    if ok then
-                        snapshots[inst]={prop,previous}
-                        pcall(function() inst[prop]=newVal end)
-                    end
-                end
-                n=n+1
-                if n%120==0 then task.wait() end
+            local objects = workspace:GetDescendants()
+            for i, inst in ipairs(objects) do
+                if not S.Running or not S.BoostFPS or boostGeneration ~= generation then return end
+                simplify(inst)
+                if i % 120 == 0 then task.wait() end
             end
         end)
     end
@@ -142,10 +170,6 @@ return function(ctx)
     end)
     toggle("AutoLoadAfterRejoin","Auto Load After Rejoin")
     toggle("BoostFPS","Boost FPS",boost)
-    toggle("RemoveTextures","Remove Textures (Boost FPS)",function()
-        if S.BoostFPS then boost(true) end
-    end)
-    Tabs.Settings:AddButton({Title="Close UI",Callback=function() visible(false) end})
     Tabs.Settings:AddButton({Title="Unload Script",Callback=function() ctx.cleanup() end})
     Links[#Links+1]=LP.Idled:Connect(function()
         if S.AntiAFK then
@@ -175,76 +199,62 @@ return function(ctx)
             end)
         end
     end)
-    local Players=game:GetService("Players")
-    local HttpService=game:GetService("HttpService")
-    local function button(tab,title,fn)
-        tab:AddButton({Title=title,Callback=function()
-            task.spawn(function() pcall(fn) end)
-        end})
-    end
-local userCard=Tabs.Misc:AddParagraph({Title="Player",Content="Loading"})
-local gameCard=Tabs.Misc:AddParagraph({Title="Game",Content="Loading"})
-local discordCard=Tabs.Misc:AddParagraph({Title="Discord",Content="Invite not configured"})
-local discordInvite=""
-local function attachImage(card,asset)
-    if type(card)~="table" then return end
-    local parent=card.Frame or card.Root or card.Container
-    if typeof(parent)~="Instance" or not parent:IsA("GuiObject") then return end
-    local image=parent:FindFirstChild("CAT_EMPIRE_PHOTO")
-    if not image then
-        image=Instance.new("ImageLabel")
-        image.Name="CAT_EMPIRE_PHOTO"
-        image.AnchorPoint=Vector2.new(1,.5)
-        image.Position=UDim2.new(1,-8,.5,0)
-        image.Size=UDim2.fromOffset(46,46)
-        image.BackgroundTransparency=1
-        image.ZIndex=parent.ZIndex+1
-        image.Parent=parent
-    end
-    image.Image=asset
-end
-local function refreshMisc()
-    local avatar=""
-    pcall(function()
-        avatar=Players:GetUserThumbnailAsync(LP.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size150x150)
-    end)
-    pcall(function()
-        userCard:SetDesc("@"..LP.Name.."  |  "..LP.DisplayName.."  |  ID: "..LP.UserId)
-        gameCard:SetDesc(game.Name.."  |  Place ID: "..game.PlaceId.."  |  Game ID: "..game.GameId)
-    end)
-    attachImage(userCard,avatar)
-    attachImage(gameCard,"rbxthumb://type=GameIcon&id="..game.GameId.."&w=150&h=150")
-end
-Tabs.Misc:AddInput("SUP_DiscordInvite",{
-    Title="Discord Invite Code",Default="",Placeholder="Invite code",
-    Callback=function(v) discordInvite=tostring(v or ""):match("([%w_%-]+)$") or "" end,
-})
-button(Tabs.Misc,"Refresh Discord",function()
-    if discordInvite=="" then
-        discordCard:SetDesc("Enter your Discord invitation code")
-        return
-    end
-    local ok,response=pcall(function()
-        return HttpService:JSONDecode(game:HttpGet(
-            "https://discord.com/api/v10/invites/"..discordInvite.."?with_counts=true",true))
-    end)
-    if not ok or type(response)~="table" or type(response.guild)~="table" then
-        discordCard:SetDesc("Live Discord data unavailable")
-        return
-    end
-    local guild=response.guild
-    discordCard:SetDesc(tostring(guild.name or "Discord")..
-        " | Members: "..tostring(response.approximate_member_count or "?")..
-        " | Online: "..tostring(response.approximate_presence_count or "?"))
-    if guild.id and guild.icon then
-        attachImage(discordCard,"https://cdn.discordapp.com/icons/"..
-            tostring(guild.id).."/"..tostring(guild.icon)..".png")
-    end
-end)
-task.spawn(function()
-    while S.Running do pcall(refreshMisc);task.wait(120) end
-end)
+    local Players = game:GetService("Players")
+    local MarketplaceService = game:GetService("MarketplaceService")
+    local userCard = Tabs.Misc:AddParagraph({Title="Player",Content="Loading"})
+    local gameCard = Tabs.Misc:AddParagraph({Title="Game",Content="Loading"})
+    local community = Tabs.Misc:AddSection("Community", "solar/chat-round-bold")
+    -- Mesma integracao Discord ja configurada em ScopedV2/Main.lua (Murder Duels)
+    community:AddDiscord({InviteCode = "yykVnTjd2Y"})
 
+    local function attachLargeImage(card, asset)
+        if type(card) ~= "table" then return end
+        local parent = card.Frame or card.Root or card.Container
+        if typeof(parent) ~= "Instance" or not parent:IsA("GuiObject") then return end
+        local image = parent:FindFirstChild("CAT_EMPIRE_PHOTO")
+        if not image then
+            image = Instance.new("ImageLabel")
+            image.Name = "CAT_EMPIRE_PHOTO"
+            image.AnchorPoint = Vector2.new(1, 0.5)
+            image.Position = UDim2.new(1, -12, 0.5, 0)
+            image.Size = UDim2.fromOffset(90, 90)
+            image.BackgroundTransparency = 1
+            image.ScaleType = Enum.ScaleType.Fit
+            image.ZIndex = parent.ZIndex + 1
+            image.Parent = parent
+            pcall(function()
+                parent.Size = UDim2.new(parent.Size.X.Scale, parent.Size.X.Offset, 0, math.max(parent.AbsoluteSize.Y, 108))
+                parent.ClipsDescendants = false
+            end)
+        end
+        image.Image = asset
+    end
+    local gameTitle = "Setting up a Pet"
+    pcall(function()
+        local info = MarketplaceService:GetProductInfo(game.PlaceId, Enum.InfoType.Asset)
+        local name = info and info.Name
+        if type(name) == "string" and name ~= "" and name:lower() ~= "ugc" then
+            gameTitle = name
+        end
+    end)
+    local function refreshMisc()
+        local avatar = ""
+        pcall(function()
+            avatar = Players:GetUserThumbnailAsync(LP.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+        end)
+        pcall(function()
+            userCard:SetDesc("@"..LP.Name.." | "..LP.DisplayName.." | ID: "..LP.UserId)
+            gameCard:SetDesc(gameTitle.." | Place ID: "..game.PlaceId.." | Universe ID: "..game.GameId)
+        end)
+        attachLargeImage(userCard, avatar)
+        attachLargeImage(gameCard, "rbxthumb://type=GameIcon&id="..game.GameId.."&w=420&h=420")
+    end
+    task.spawn(function()
+        while S.Running and not stopped do
+            pcall(refreshMisc)
+            task.wait(120)
+        end
+    end)
 
     return function()
         stopped=true
