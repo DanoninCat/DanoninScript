@@ -61,6 +61,7 @@ return function(ctx)
     end
     local function reset(message)
         state.target=nil
+        state.risky=false
         state.initialDeadline=nil
         state.arrived=false
         state.warnedLate=false
