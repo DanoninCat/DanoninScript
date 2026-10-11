@@ -72,6 +72,7 @@ return function(ctx)
         state.approachAt=nil
         state.nativeTeleportAt=nil
         state.nativeTeleportRequested=false
+        state.nativeTeleportEvaluated=false
         state.receivedDeposit=false
         state.lastApproachTeleport=nil
         state.retryAt=nil
@@ -121,6 +122,7 @@ return function(ctx)
     local function beginReturn(message)
         state.initialDeadline=soonestExpiry()
         state.nativeTeleportRequested=false
+        state.nativeTeleportEvaluated=false
         state.nativeTeleportAt=nil
         transition("return",message)
     end
@@ -336,6 +338,18 @@ return function(ctx)
                 return
             end
             if state.nativeTeleportAt and t-state.nativeTeleportAt<.45 then return end
+            if state.nativeTeleportRequested and not state.nativeTeleportEvaluated then
+                state.nativeTeleportEvaluated=true
+                if not inside(plate,part.Position) then
+                    local remaining=(soonestExpiry() or t)-t
+                    local speedNow=math.clamp(tonumber(S.EggFlightSpeed) or 175,60,MAX_STABLE_SPEED)
+                    local estimated=(Vector2.new(part.Position.X,part.Position.Z)
+                        -Vector2.new(target.X,target.Z)).Magnitude/speedNow
+                    ctx.Status(string.format(
+                        "Native plot teleport not confirmed; air return %.0fs, remaining %.0fs",
+                        estimated,remaining))
+                end
+            end
             local expires=soonestExpiry()
             if expires and t>=expires-0.2 and not state.warnedLate then
                 state.warnedLate=true
