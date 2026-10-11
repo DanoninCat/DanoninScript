@@ -126,13 +126,29 @@ local function eventLive()
     return false
 end
 
-local function eggRarity(name)
-    local config = EggData[name]
-    local rarity = type(config) == "table" and config.Rarity or nil
-    return RarityOrder[rarity] and rarity or "Common"
+local function eggRarity(name,record)
+    local config=EggData[name]
+    local raw=(type(config)=="table" and config.Rarity)
+        or (record and record:GetAttribute("Rarity"))
+    if type(raw)=="string" then
+        local value=raw:gsub("^%s+",""):gsub("%s+$","")
+        for rarity in pairs(RarityOrder) do
+            if rarity:lower()==value:lower() then return rarity end
+        end
+        for alias,canonical in pairs(RarityAliases) do
+            if alias:lower()==value:lower() then return canonical end
+        end
+        return value
+    end
+    return "Unknown"
 end
-local function eggRank(name)
-    return RarityOrder[eggRarity(name)] or 1
+local function eggRank(name,record)
+    local config=EggData[name]
+    local rarity=eggRarity(name,record)
+    return RarityOrder[rarity]
+        or tonumber(record and record:GetAttribute("RarityRank"))
+        or (type(config)=="table" and tonumber(config.RarityRank))
+        or 1
 end
 local function claimed(name, record, cycles)
     if record:GetAttribute("AdminSpawn") == true then
