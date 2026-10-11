@@ -1403,8 +1403,9 @@ task.delay(3,function()
 end)
 local cleanupEggESP
 local EggESPUrl = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/EggESP.lua"
-local eggESPSource = game:HttpGet(EggESPUrl,true)
-local eggESPBuilder = loadstring(eggESPSource)()
+local okESPModule, eggESPBuilder = pcall(function()
+    return assert(loadstring(game:HttpGet(EggESPUrl,true)))()
+end)
 local okESP, resultESP=pcall(eggESPBuilder,{
     State=S,Player=LP,Links=Links,EggData=EggData,
     IsClaimed=claimed,CollectedCycles=collectedCycles,
