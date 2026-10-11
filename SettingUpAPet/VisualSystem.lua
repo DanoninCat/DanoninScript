@@ -48,7 +48,7 @@ return function(ctx)
         end})
     end
     local function toggle(name,title)
-        Tabs.Settings:AddToggle("SUP_OPT_"..name,{
+        ctx.Toggles[name]=Tabs.Settings:AddToggle("SUP_OPT_"..name,{
             Title=title,Default=false,
             Callback=function(v) S[name]=v==true end,
         })
