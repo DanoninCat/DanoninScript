@@ -7,6 +7,7 @@ return function(ctx)
     local speed = 175
     local MAX_STABLE_SPEED = 185
     local lastMountRequest = 0
+    local waitingForMountSince = nil
     local flyHeight = 38
     local reserve = 2.5
     local blocked = {}
@@ -105,6 +106,14 @@ return function(ctx)
             end
             if not first then return end
             if type(ctx.IsMounted)=="function" and not ctx.IsMounted() then
+                waitingForMountSince=waitingForMountSince or t
+                if t-waitingForMountSince>7 then
+                    blocked[first.Id]=t+10
+                    waitingForMountSince=nil
+                    state.cooldown=t+2
+                    ctx.Status("Mount unavailable; Halloween may resume")
+                    return
+                end
                 if type(ctx.EnsureMount)=="function" and t-lastMountRequest>2.5 then
                     lastMountRequest=t
                     ctx.EnsureMount()
@@ -112,6 +121,7 @@ return function(ctx)
                 ctx.Status("Waiting for fastest pet mount")
                 return
             end
+            waitingForMountSince=nil
             local part=root()
             if not part then return end
             state.target=first
@@ -242,7 +252,14 @@ return function(ctx)
         State=function() return state.stage end,
         SetSpeed=function(v) speed=math.clamp(tonumber(v) or 175,60,MAX_STABLE_SPEED) end,
         WantsPriority=function()
-            return S.AutoCollectEggs and (state.stage~="idle" or #ctx.EggCandidates()>0)
+            if state.stage~="idle" then return true end
+            if count()>0 then return S.AutoDeliverEggs or S.AutoCollectEggs end
+            if not S.AutoCollectEggs then return false end
+            local t=now()
+            for _,egg in ipairs(ctx.EggCandidates()) do
+                if (blocked[egg.Id] or 0)<=t then return true end
+            end
+            return false
         end,
     }
 end
