@@ -21,6 +21,13 @@ return function(ctx)
             local gui = parent and parent:FindFirstChild(rootName, true)
             if gui and gui:IsA("ScreenGui") then ownedRoot=gui;return gui end
         end
+        local ok,uiParent=pcall(function()
+            return type(gethui)=="function" and gethui() or nil
+        end)
+        if ok and uiParent then
+            local found=uiParent:FindFirstChild(rootName,true)
+            if found and found:IsA("ScreenGui") then ownedRoot=found;return found end
+        end
         return nil
     end
     local function visible(enabled)
