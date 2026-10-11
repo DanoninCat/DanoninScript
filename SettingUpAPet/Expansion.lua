@@ -24,7 +24,7 @@ return function(ctx)
     S.ShowEggDistance=false
     S.ShowEggName=false
     S.ShowPetValue=false
-    S.ShowPetName=true
+    S.ShowPetName=false
     S.ShowPetDistance=false
 
     local function notify(v) ctx.Notify(tostring(v)) end
@@ -242,7 +242,7 @@ return function(ctx)
             instance.AlwaysOnTop=true
             instance.Adornee=anchor
             instance.MaxDistance=650
-            instance.Size=UDim2.fromOffset(140,27)
+            instance.Size=UDim2.fromOffset(260,48)
             instance.StudsOffsetWorldSpace=Vector3.new(0,4,0)
             local text=Instance.new("TextLabel")
             text.BackgroundTransparency=1
@@ -366,7 +366,7 @@ return function(ctx)
 
     local stat=Tabs.Intel:AddParagraph({Title="Account Stats",Content="Waiting for account data"})
     local best=Tabs.Intel:AddParagraph({Title="Best Pet",Content="Waiting for pet data"})
-    toggle(Tabs.Intel,"ShowPetName","Pet ESP: Name",true)
+    toggle(Tabs.Intel,"ShowPetName","Pet ESP: Name",false)
     toggle(Tabs.Intel,"ShowPetValue","Pet ESP: Value",false)
     toggle(Tabs.Intel,"ShowPetDistance","Pet ESP: Distance",false)
 
@@ -410,19 +410,7 @@ return function(ctx)
         for _,v in pairs(visuals) do pcall(function() v:Destroy() end) end
     end)
     task.spawn(function()
-        local previousCandy,previousPumpkins
         while S.Running do
-            if S.AutoFarmHalloweenEvent then
-                if previousCandy==nil then
-                    previousCandy,previousPumpkins=S.AutoCollectCandy,S.AutoSearchPumpkins
-                end
-                S.AutoCollectCandy=true
-                S.AutoSearchPumpkins=true
-            elseif previousCandy~=nil then
-                S.AutoCollectCandy=previousCandy
-                S.AutoSearchPumpkins=previousPumpkins
-                previousCandy,previousPumpkins=nil,nil
-            end
             local placed=ctx.PetList()
             local total=0
             local fastest
