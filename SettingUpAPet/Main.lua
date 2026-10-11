@@ -1404,6 +1404,7 @@ end)
 local cleanupEggESP
 local EggESPUrl = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/EggESP.lua"
 local eggESPSource = game:HttpGet(EggESPUrl,true)
+local eggESPBuilder = loadstring(eggESPSource)()
 local LuminExpansion, EggTransport
 do
     local ok, builder=pcall(function()
