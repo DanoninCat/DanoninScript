@@ -99,7 +99,7 @@ return function(ctx)
         for _,model in ipairs(rendered:GetChildren()) do
             if model.Name==egg.Name then
                 local prompt=model:FindFirstChildWhichIsA("ProximityPrompt",true)
-                if prompt and prompt.Enabled then
+                if prompt and prompt.Enabled and prompt.Parent then
                     local host=prompt.Parent
                     local pos=(host:IsA("BasePart") and host.Position)
                         or (host:IsA("Attachment") and host.WorldPosition)
