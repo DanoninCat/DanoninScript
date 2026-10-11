@@ -844,8 +844,10 @@ local function teleportPlot()
     status("Teleport to plot requested")
 end
 
+local cleanupSettings
 local function cleanup()
     S.Running=false
+    if type(cleanupSettings)=="function" then pcall(cleanupSettings) end
     S.AutoCollectEggs=false
     EggCycle.Stage="idle"
     S.AutoCollectCandy=false
@@ -865,7 +867,7 @@ Env.__CE_SETTING_PET_CLEANUP=cleanup
 Window = Fluent:CreateWindow({
     Title="CAT EMPIRE", SubTitle="Setting up a Pet",
     TabWidth=158, Size=UDim2.fromOffset(765,480),
-    Acrylic=true, Animated=true, Theme="Dark",
+    Acrylic=false, Animated=false, Theme="Dark",
     MinimizeKey=Enum.KeyCode.RightControl,
     ScreenGuiName="CAT_EMPIRE_SETTING_UP_A_PET_124216119978534",
 })
@@ -874,7 +876,8 @@ local Tabs={
     Pets=Window:AddTab({Title="Pets",Icon="solar/paw-bold"}),
     Shop=Window:AddTab({Title="Shop",Icon="solar/bag-bold"}),
     Halloween=Window:AddTab({Title="Halloween",Icon="solar/moon-bold"}),
-    Misc=Window:AddTab({Title="Misc",Icon="solar/settings-bold"}),
+    Settings=Window:AddTab({Title="Settings",Icon="solar/settings-bold"}),
+    Misc=Window:AddTab({Title="Misc",Icon="solar/user-bold"}),
 }
 local function addToggle(tab,label,key,cb)
     Toggles[key]=tab:AddToggle("SUP_"..key,{
@@ -964,17 +967,13 @@ addToggle(Tabs.Halloween,"Auto Search Pumpkins","AutoSearchPumpkins")
 addToggle(Tabs.Halloween,"Ritual Assistant","RitualAssistant")
 button(Tabs.Halloween,"Go to Ritual",goToRitual)
 
-addToggle(Tabs.Misc,"Auto Claim Index","AutoClaimIndex")
-Tabs.Misc:AddDropdown("SUP_Theme",{
-    Title="Theme",Values=Fluent.Themes,Default="Dark",
-    Callback=function(v) pcall(function() Fluent:SetTheme(v) end) end,
-})
+addToggle(Tabs.Eggs,"Auto Claim Index","AutoClaimIndex")
 local configKeys={
     "AutoCollectEggs","EggsESP","AutoHatch","AutoLuckUpgrade","AutoFeed",
     "AutoPlaceBest","AutoRebirth","AutoCollectCandy","AutoBuyHalloweenEggs",
     "AutoSearchPumpkins","RitualAssistant","AutoClaimIndex","AutoBuyItems","AutoBuyFood",
 }
-button(Tabs.Misc,"Save Profile",function()
+button(Tabs.Settings,"Save Profile",function()
     if type(writefile)~="function" then notify("Executor has no writefile");return end
     local payload={EggPriority=S.EggPriority,EggMinRarity=S.EggMinRarity,
         FoodChoice=S.FoodChoice,SelectedItems=S.SelectedItems,SelectedFoods=S.SelectedFoods}
@@ -982,7 +981,7 @@ button(Tabs.Misc,"Save Profile",function()
     local ok,err=pcall(writefile,S.ConfigFile,HttpService:JSONEncode(payload))
     notify(ok and "Profile saved" or tostring(err))
 end)
-button(Tabs.Misc,"Load Profile",function()
+button(Tabs.Settings,"Load Profile",function()
     if type(readfile)~="function" then notify("Executor has no readfile");return end
     local ok,data=pcall(function() return HttpService:JSONDecode(readfile(S.ConfigFile)) end)
     if not ok or type(data)~="table" then notify("No valid profile");return end
@@ -1004,7 +1003,24 @@ button(Tabs.Misc,"Load Profile",function()
     end
     notify("Profile loaded")
 end)
-button(Tabs.Misc,"Unload",cleanup)
+local function notifySettings(message)
+    notify(message)
+end
+local okSettings, settingsBuilder = pcall(function()
+    return assert(loadstring(game:HttpGet(
+        "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/Settings.lua", true
+    )))()
+end)
+if okSettings and type(settingsBuilder)=="function" then
+    local ok, cleanupFn=pcall(settingsBuilder,{
+        S=S,Window=Window,Tabs=Tabs,Links=Links,Toggles=Toggles,
+        LP=LP,Fluent=Fluent,cleanup=cleanup,
+    })
+    if ok and type(cleanupFn)=="function" then cleanupSettings=cleanupFn
+    else S.LastError="Settings initialization: "..tostring(cleanupFn) end
+else
+    S.LastError="Settings module unavailable: "..tostring(settingsBuilder)
+end
 
 local function worker(key,delay,fn)
     task.spawn(function()
