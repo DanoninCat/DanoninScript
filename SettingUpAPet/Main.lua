@@ -971,6 +971,17 @@ local configKeys={
 local ProfileNames={"Default"}
 local SelectedProfile="Default"
 local ProfileNameInput=""
+local ProfileMeta="CATEMPIRE_SettingUpAPet_profiles.json"
+if type(readfile)=="function" then
+    local ok,data=pcall(function()
+        return HttpService:JSONDecode(readfile(ProfileMeta))
+    end)
+    if ok and type(data)=="table" then
+        if type(data.Names)=="table" then ProfileNames=data.Names end
+        SelectedProfile=tostring(data.Selected or "Default")
+        S.AutoLoadProfiles=data.AutoLoad==true
+    end
+end
 local ProfilesMenu=Tabs.Settings:AddDropdown("SUP_Profiles",{
     Title="Profiles",Values=ProfileNames,Default="Default",
     Callback=function(v)
