@@ -376,7 +376,7 @@ return function(ctx)
     loop("AutoFusePets",3,fusionTick)
     loop("AutoClaimFusion",4,fusionTick)
     loop("AutoHeadlessRitual",3,function()
-        if S.Movement then return end
+        if S.Movement or (ctx.EggWantsPriority and ctx.EggWantsPriority()) then return end
         local root=ctx.GetRoot()
         if not root then return end
         for _,prompt in ipairs(CollectionService:GetTagged("HalloweenRitualPrompt")) do
