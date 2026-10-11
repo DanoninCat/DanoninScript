@@ -885,7 +885,7 @@ local function highlight(map, obj, label, color)
         b.Adornee = anchor
         b.AlwaysOnTop = true
         b.MaxDistance = 0
-        b.Size = UDim2.fromOffset(170,42)
+        b.Size = UDim2.fromOffset(245,52)
         b.StudsOffsetWorldSpace = Vector3.new(0,3,0)
         local t = Instance.new("TextLabel")
         t.BackgroundTransparency = 1
@@ -918,14 +918,21 @@ local function refreshESP()
             Ethereal=Color3.fromRGB(95,245,225),
         }
         local color=colors[rarity] or colors.Common
-        highlight(EggVisuals,obj,rarity,color)
+        local text=rarity
+        if S.ShowEggName and eggName then text=text.." | "..eggName end
+        if S.ShowEggDistance then
+            local p=positionOf(obj)
+            local root=getRoot()
+            if p and root then text=text.." | "..math.floor((root.Position-p).Magnitude).." studs" end
+        end
+        highlight(EggVisuals,obj,text,color)
         local visual=EggVisuals[obj]
         if visual then
             local h=visual[1]
             if h and h.Parent then h.FillColor=color;h.OutlineColor=color end
             local billboard=visual[2]
             local label=billboard and billboard:FindFirstChildWhichIsA("TextLabel")
-            if label then label.Text=rarity;label.TextColor3=color end
+            if label then label.Text=text;label.TextColor3=color end
         end
     end
     if S.EggsESP then
