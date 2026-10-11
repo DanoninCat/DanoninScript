@@ -3,6 +3,7 @@ return function(ctx)
     local RS = game:GetService("RunService")
     local Game = ctx.Game
     local pickup = Game:FindFirstChild("EggPickup")
+    local teleportPlot=Game:FindFirstChild("TeleportToPlot")
     local state = {stage = "idle", target = nil, started = 0, lastError = "", cooldown = 0}
     local speed = 175
     local MAX_STABLE_SPEED = 185
@@ -10,6 +11,8 @@ return function(ctx)
     local waitingForMountSince = nil
     local flyHeight = 38
     local reserve = 4.5
+    local pickupSettle=0.55
+    local maxPickupRetries=3
     local conservativeLifetimes = {Common=20,Rare=25,Epic=35,Legendary=30,Mythic=30,Divine=27,Ethereal=21,Secret=20}
     local blocked = {}
 
@@ -64,6 +67,14 @@ return function(ctx)
         state.risky=false
         state.initialDeadline=nil
         state.arrived=false
+        state.pickupRetries=0
+        state.pickupLastAt=nil
+        state.approachAt=nil
+        state.nativeTeleportAt=nil
+        state.nativeTeleportRequested=false
+        state.receivedDeposit=false
+        state.retryAt=nil
+        state.lastRefusal=nil
         state.warnedLate=false
         state.waitingNotified=false
         state.cooldown=now()+0.7
@@ -78,6 +89,39 @@ return function(ctx)
         local z=math.clamp(localPos.Z,-plate.Size.Z/2+margin,plate.Size.Z/2-margin)
         local point=plate.CFrame:PointToWorldSpace(Vector3.new(x,plate.Size.Y/2+4,z))
         return point,plate
+    end
+    local function findEggPrompt(egg)
+        local rendered=workspace:FindFirstChild("RenderedEggs")
+        if not rendered then return nil,nil end
+        local nearest,nearestPos,score
+        for _,model in ipairs(rendered:GetChildren()) do
+            if model.Name==egg.Name then
+                local prompt=model:FindFirstChildWhichIsA("ProximityPrompt",true)
+                if prompt and prompt.Enabled then
+                    local host=prompt.Parent
+                    local pos=(host:IsA("BasePart") and host.Position)
+                        or (host:IsA("Attachment") and host.WorldPosition)
+                    if pos then
+                        local distance=(Vector2.new(egg.Pos.X,egg.Pos.Z)
+                            -Vector2.new(pos.X,pos.Z)).Magnitude
+                        if not score or distance<score then
+                            nearest,nearestPos,score=prompt,pos,distance
+                        end
+                    end
+                end
+            end
+        end
+        return nearest,nearestPos
+    end
+    local function pickupPosition(egg)
+        local prompt,pos=findEggPrompt(egg)
+        return pos or egg.Pos,prompt
+    end
+    local function beginReturn(message)
+        state.initialDeadline=soonestExpiry()
+        state.nativeTeleportRequested=false
+        state.nativeTeleportAt=nil
+        transition("return",message)
     end
     local function estimateReturn(egg)
         local plotPoint=destination(egg.Pos)
@@ -140,8 +184,7 @@ return function(ctx)
         if state.stage=="idle" then
             if t<state.cooldown then return end
             if count()>0 then
-                state.initialDeadline=soonestExpiry()
-                transition("return","Returning carried eggs to plot")
+                beginReturn("Returning carried eggs to plot")
                 return
             end
             if not S.AutoCollectEggs then return end
@@ -186,6 +229,9 @@ return function(ctx)
             local part=root()
             if not part then return end
             state.target=first
+            state.pickupRetries=0
+            state.approachAt=nil
+            state.retryAt=nil
             transition("pickup","Travelling to egg: "..first.Name)
         elseif state.stage=="pickup" then
             local target=state.target
@@ -200,17 +246,33 @@ return function(ctx)
                 reset("Egg approach timeout")
                 return
             end
-            local pickupPos=target.Pos+Vector3.new(0,3,0)
-            if (part.Position-pickupPos).Magnitude>10 then
-                part.CFrame=CFrame.new(pickupPos)
+            local worldPos,prompt=pickupPosition(target)
+            local pickupPos=worldPos+Vector3.new(0,2,0)
+            local reach=prompt and math.max(4,prompt.MaxActivationDistance-1) or 6
+            if (part.Position-pickupPos).Magnitude>reach then
+                if t-(state.lastApproachTeleport or 0)>.65 then
+                    state.lastApproachTeleport=t
+                    part.CFrame=CFrame.new(pickupPos)
+                end
+                state.approachAt=nil
+                return
             end
-            if t-state.started < (tonumber(S.EggHoldSeconds) or 0) then return end
-            if pickup and pickup:IsA("RemoteEvent") then
-                pickup:FireServer(target.Id)
-                transition("await","Waiting for egg pickup confirmation")
-            else
+            state.approachAt=state.approachAt or t
+            if t-state.approachAt<pickupSettle+math.clamp(
+                tonumber(S.EggHoldSeconds) or 0,0,5) then return end
+            if state.retryAt and t<state.retryAt then return end
+            if not pickup or not pickup:IsA("RemoteEvent") then
                 reset("EggPickup remote unavailable")
+                return
             end
+            state.pickupRetries=(state.pickupRetries or 0)+1
+            state.pickupLastAt=t
+            local fired=false
+            if prompt and prompt.Enabled and type(fireproximityprompt)=="function" then
+                fired=pcall(fireproximityprompt,prompt)
+            end
+            if not fired then pickup:FireServer(target.Id) end
+            transition("await","Collecting "..target.Name.." (attempt "..state.pickupRetries..")")
         elseif state.stage=="waitMount" then
             if type(ctx.IsMounted)~="function" or ctx.IsMounted() then
                 transition("pickup","Mount restored")
@@ -222,18 +284,22 @@ return function(ctx)
             end
         elseif state.stage=="await" then
             if count()>0 then
-                state.initialDeadline=soonestExpiry()
-                transition("return","Egg acquired; airborne return started")
+                beginReturn("Egg acquired; returning immediately")
                 return
             end
-            if t-state.started>3.0 then
-                if state.target then blocked[state.target.Id]=t+8 end
-                reset("Egg not confirmed by server")
+            if t-state.started>1.7 then
+                if state.target and state.pickupRetries<maxPickupRetries then
+                    state.retryAt=t+.35
+                    state.approachAt=nil
+                    transition("pickup","Retrying egg pickup at the same target")
+                else
+                    if state.target then blocked[state.target.Id]=t+15 end
+                    reset("Egg pickup not confirmed after retries")
+                end
             end
         elseif state.stage=="awaitBasket" then
             if count()>0 then
-                state.initialDeadline=soonestExpiry()
-                transition("return","Returning acquired egg")
+                beginReturn("Egg acquired; returning immediately")
             elseif t-state.started>1.8 then
                 reset("Waiting for egg replication timed out")
             end
@@ -248,6 +314,15 @@ return function(ctx)
                 if t-state.started>5 then reset("Plot not available") end
                 return
             end
+            if teleportPlot and teleportPlot:IsA("RemoteEvent")
+                and not state.nativeTeleportRequested then
+                state.nativeTeleportRequested=true
+                state.nativeTeleportAt=t
+                pcall(function() teleportPlot:FireServer() end)
+                ctx.Status("Checking native plot teleport while carrying egg")
+                return
+            end
+            if state.nativeTeleportAt and t-state.nativeTeleportAt<.45 then return end
             local expires=soonestExpiry()
             if expires and t>=expires-0.2 and not state.warnedLate then
                 state.warnedLate=true
@@ -294,9 +369,18 @@ return function(ctx)
             if id~=nil and state.target and tostring(id)~=tostring(state.target.Id) then return end
             if result=="PickedUp" then
                 transition("awaitBasket","Pickup acknowledged: "..tostring(name or "egg"))
-            elseif result=="Refused" or result=="BasketFull" then
-                if state.target then blocked[state.target.Id]=now()+9 end
-                reset("Pickup refused: "..tostring(result))
+            elseif result=="Refused" then
+                state.lastRefusal=tostring(name or "refused")
+                if state.target and state.pickupRetries<maxPickupRetries then
+                    state.retryAt=now()+.5
+                    state.approachAt=nil
+                    transition("pickup","Pickup refused ("..state.lastRefusal.."); repositioning")
+                else
+                    if state.target then blocked[state.target.Id]=now()+15 end
+                    reset("Pickup refused: "..state.lastRefusal)
+                end
+            elseif result=="BasketFull" then
+                reset("Basket is full; stopping pickup attempts")
             end
         end)
     end
