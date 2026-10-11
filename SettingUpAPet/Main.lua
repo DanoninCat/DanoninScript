@@ -804,35 +804,6 @@ if depositRemote and depositRemote:IsA("RemoteEvent") then
     end)
 end
 
-local function candyOrPumpkin(tag, remoteName, reach, cooldown, ready)
-    if not eventLive() or LP:GetAttribute("InHalloweenZone")~=true then return false end
-    local root = getRoot()
-    if not root then return false end
-    local near, distance
-    for _, inst in ipairs(CollectionService:GetTagged(tag)) do
-        if inst:IsA("BasePart") and inst:IsDescendantOf(workspace)
-            and (not ready or inst:GetAttribute("SpawnReady") == true) then
-            local d = (inst.Position-root.Position).Magnitude
-            if not distance or d<distance then near=inst;distance=d end
-        end
-    end
-    if not near then return false end
-    local baseRange = reach
-    if remoteName=="CollectCandy" and tonumber(HalloweenData.PickupRange) then
-        baseRange = math.min(reach, tonumber(HalloweenData.PickupRange))
-    elseif remoteName=="SearchPumpkin" and type(HalloweenData.Pumpkins)=="table" then
-        baseRange = math.min(reach,tonumber(HalloweenData.Pumpkins.SearchRange) or reach)
-    end
-    if walkTo(near.Position, baseRange) then
-        local id = near:GetAttribute("Id")
-        if type(id)~="string" or id=="" then id=near:GetFullName() end
-        if due(remoteName..":"..id, cooldown) then
-            remote(remoteName, id)
-            status(remoteName)
-        end
-    end
-    return true
-end
 local function buyHalloween()
     if not eventLive() then return end
     local config = type(HalloweenData.Eggs)=="table" and HalloweenData.Eggs["Halloween Egg"]
@@ -1007,22 +978,7 @@ local function refreshESP()
             EggWorldMarkers[record]=nil
         end
     end
-    local rituals={}
-    if S.RitualAssistant and eventLive() then
-        for _, prompt in ipairs(CollectionService:GetTagged("HalloweenRitualPrompt")) do
-            if prompt:IsA("ProximityPrompt") and prompt:IsDescendantOf(workspace)
-                and prompt:GetAttribute("RitualAvailable")==true then
-                rituals[prompt]=true
-                highlight(RitualVisuals,prompt,"Ritual available",Color3.fromRGB(255,135,70))
-            end
-        end
-    end
-    for object,visuals in pairs(RitualVisuals) do
-        if not rituals[object] or not object.Parent then
-            for _,v in ipairs(visuals) do pcall(function() v:Destroy() end) end
-            RitualVisuals[object]=nil
-        end
-    end
+
 end
 local cleanupSettings, cleanupVisual
 local function cleanup()
@@ -1033,7 +989,6 @@ local function cleanup()
     EggCycle.Stage="idle"
     S.AutoCollectCandy=false
     CandyCycle.Stage="idle"
-    S.AutoSearchPumpkins=false
     S.AutoFeed=false
     S.AutoPlaceBest=false
     for _,c in ipairs(Links) do pcall(function() c:Disconnect() end) end
@@ -1042,7 +997,6 @@ local function cleanup()
         pcall(function() marker:Destroy() end)
         EggWorldMarkers[record]=nil
     end
-    clearVisual(RitualVisuals)
     if Window and Window.Destroy then pcall(function() Window:Destroy() end)
     elseif Fluent.Destroy then pcall(function() Fluent:Destroy() end) end
     Env.__CE_SETTING_PET_CLEANUP=nil
