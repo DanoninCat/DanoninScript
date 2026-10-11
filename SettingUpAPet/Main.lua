@@ -971,22 +971,23 @@ local configKeys={
 local ProfileNames={"Default"}
 local SelectedProfile="Default"
 local ProfileNameInput=""
-local ProfileMeta="CATEMPIRE_SettingUpAPet_profiles.json"
+local ProfileMeta=S.ConfigFile
+local ProfileDatabase={}
 if type(readfile)=="function" then
     local ok,data=pcall(function()
         return HttpService:JSONDecode(readfile(ProfileMeta))
     end)
     if ok and type(data)=="table" then
         if type(data.Names)=="table" then ProfileNames=data.Names end
+        if type(data.Profiles)=="table" then ProfileDatabase=data.Profiles end
         SelectedProfile=tostring(data.Selected or "Default")
         S.AutoLoadProfiles=data.AutoLoad==true
     end
 end
 local ProfilesMenu=Tabs.Settings:AddDropdown("SUP_Profiles",{
-    Title="Profiles",Values=ProfileNames,Default="Default",
+    Title="Profiles",Values=ProfileNames,Default=SelectedProfile,
     Callback=function(v)
         SelectedProfile=tostring(v or "Default")
-        S.ConfigFile="CATEMPIRE_SettingUpAPet_"..SelectedProfile..".json"
     end,
 })
 Tabs.Settings:AddInput("SUP_ProfileName",{
@@ -1005,7 +1006,7 @@ button(Tabs.Settings,"Create Profiles",function()
     ProfilesMenu:SetValue(ProfileNameInput)
 end)
 Toggles.AutoLoadProfiles=Tabs.Settings:AddToggle("SUP_AutoLoadProfiles",{
-    Title="Auto Load Profiles",Default=false,
+    Title="Auto Load Profiles",Default=S.AutoLoadProfiles==true,
     Callback=function(v) S.AutoLoadProfiles=v==true end,
 })
 button(Tabs.Settings,"Save Profiles",function()
