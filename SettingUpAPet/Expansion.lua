@@ -12,7 +12,7 @@ return function(ctx)
     S.SelectedEggs={}
     S.EggHoldSeconds=0
     S.EggFlightSpeed=230
-    S.AutoDeliverEggs=true
+    S.AutoDeliverEggs=false
     S.AutoCollectCash=false
     S.AutoRideFastest=false
     S.AutoUnlockNests=false
@@ -300,7 +300,7 @@ return function(ctx)
         Title="Air Return Speed",Min=60,Max=500,Default=230,Rounding=0,
         Callback=function(v) S.EggFlightSpeed=tonumber(v) or 230 end,
     })
-    toggle(Tabs.Eggs,"AutoDeliverEggs","Auto Deliver Carried Eggs",true)
+    toggle(Tabs.Eggs,"AutoDeliverEggs","Auto Deliver Carried Eggs",false)
     toggle(Tabs.Eggs,"ShowEggDistance","World Egg ESP: Show Distance",false)
 
     toggle(Tabs.Pets,"AutoCollectCash","Auto Collect Cash",false)
