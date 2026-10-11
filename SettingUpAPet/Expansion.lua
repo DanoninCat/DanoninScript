@@ -11,7 +11,7 @@ return function(ctx)
     S.EggFilterMode="All"
     S.SelectedEggs={}
     S.EggHoldSeconds=0
-    S.EggFlightSpeed=230
+    S.EggFlightSpeed=175
     S.AutoDeliverEggs=false
     S.AutoCollectCash=false
     S.AutoRideFastest=false
@@ -305,8 +305,8 @@ return function(ctx)
         Callback=function(v) S.EggHoldSeconds=tonumber(v) or 0 end,
     })
     Tabs.Eggs:AddSlider("SUP_EXTRA_EggFlightSpeed",{
-        Title="Air Return Speed",Min=60,Max=500,Default=230,Rounding=0,
-        Callback=function(v) S.EggFlightSpeed=tonumber(v) or 230 end,
+        Title="Air Return Speed (stable)",Min=60,Max=185,Default=175,Rounding=0,
+        Callback=function(v) S.EggFlightSpeed=math.clamp(tonumber(v) or 175,60,185) end,
     })
     toggle(Tabs.Eggs,"AutoDeliverEggs","Auto Deliver Carried Eggs",false)
     toggle(Tabs.Intel,"ShowEggDistance","Egg ESP: Distance",false)
