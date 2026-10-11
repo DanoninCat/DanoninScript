@@ -1405,6 +1405,12 @@ local cleanupEggESP
 local EggESPUrl = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/SettingUpAPet/EggESP.lua"
 local eggESPSource = game:HttpGet(EggESPUrl,true)
 local eggESPBuilder = loadstring(eggESPSource)()
+local okESP, resultESP=pcall(eggESPBuilder,{
+    State=S,Player=LP,Links=Links,EggData=EggData,
+    IsClaimed=claimed,CollectedCycles=collectedCycles,
+})
+if okESP and type(resultESP)=="function" then cleanupEggESP=resultESP
+else S.LastError="Egg ESP initialization: "..tostring(resultESP) end
 local LuminExpansion, EggTransport
 do
     local ok, builder=pcall(function()
