@@ -8,6 +8,84 @@ return function(ctx)
     for i,name in ipairs(order) do rank[name]=i end
     local cycle={stage="search",egg=nil,origin=nil,rarity=nil,zoneId=nil,since=0,lastSwing=0,lastCollect=0}
     local visiblePrompts=setmetatable({}, {__mode="k"})
+    local RunService=game:GetService("RunService")
+    local safeQuery
+    do
+        local m=ctx.Shared and ctx.Shared:FindFirstChild("SafeZoneQuery")
+        if m and m:IsA("ModuleScript") then
+            local ok,res=pcall(require,m)
+            if ok then safeQuery=res end
+        end
+    end
+    local delivery={started=false,bankSeen=false,confirmed=false,attemptAt=0,lossAt=nil,entry=nil,wasOutside=false}
+    local function safelyInside(pos)
+        if safeQuery and type(safeQuery.IsPositionSafe)=="function" then
+            local ok,result=pcall(safeQuery.IsPositionSafe,pos)
+            return ok and result==true
+        end
+        return false
+    end
+    local function bankable(pos)
+        if safeQuery and type(safeQuery.IsBankable)=="function" then
+            local ok,result=pcall(safeQuery.IsBankable,LP.UserId,pos)
+            return ok and result==true
+        end
+        return false
+    end
+    local function safeParts()
+        if safeQuery and type(safeQuery.GetSafeParts)=="function" then
+            local ok,result=pcall(safeQuery.GetSafeParts)
+            if ok and type(result)=="table" then return result end
+        end
+        return {}
+    end
+    local function nearestSafePart(rootPos)
+        local best,dist
+        for _,part in ipairs(safeParts()) do
+            if part:IsA("BasePart") and part:IsDescendantOf(workspace) then
+                local localPos=part.CFrame:PointToObjectSpace(rootPos)
+                local half=part.Size*0.5
+                local nearestLocal=Vector3.new(
+                    math.clamp(localPos.X,-half.X,half.X),0,
+                    math.clamp(localPos.Z,-half.Z,half.Z))
+                local nearest=part.CFrame:PointToWorldSpace(nearestLocal)
+                local d=(Vector3.new(nearest.X,0,nearest.Z)-Vector3.new(rootPos.X,0,rootPos.Z)).Magnitude
+                if not dist or d<dist then best,dist=part,d end
+            end
+        end
+        return best
+    end
+    local function insideSafeEdge(part,pos)
+        -- Pick a point just inside the closest vertical boundary, not the Plot center.
+        local localPos=part.CFrame:PointToObjectSpace(pos)
+        local hx=math.max(0,part.Size.X/2-3)
+        local hz=math.max(0,part.Size.Z/2-3)
+        local candidate=Vector3.new(math.clamp(localPos.X,-hx,hx),0,math.clamp(localPos.Z,-hz,hz))
+        local closest=part.CFrame:PointToWorldSpace(candidate)
+        return Vector3.new(closest.X,part.Position.Y+part.Size.Y/2+1.2,closest.Z)
+    end
+    local function continuousTravel(destination)
+        local root,hum=ctx.Root()
+        if not root or not ctx.CanMove("Farm") then return false end
+        local duration=0
+        -- Small frame-to-frame translations preserve the crossing trajectory.
+        while duration<0.24 and S.Running and S.AutoFarmEggs and ctx.CanMove("Farm") and not ctx.InHell() do
+            root,hum=ctx.Root()
+            if not root then break end
+            local flat=Vector3.new(destination.X-root.Position.X,0,destination.Z-root.Position.Z)
+            local dy=destination.Y-root.Position.Y
+            if flat.Magnitude<2 and math.abs(dy)<1.5 then return true end
+            local dt=math.clamp(RunService.Heartbeat:Wait(),1/120,0.05)
+            duration=duration+dt
+            local step=math.min(flat.Magnitude,math.min(5.5,130*dt))
+            local forward=flat.Magnitude>0.001 and flat.Unit
+                or Vector3.new(root.CFrame.LookVector.X,0,root.CFrame.LookVector.Z).Unit
+            local point=root.Position+forward*step+Vector3.new(0,math.clamp(dy,-1.1,1.1),0)
+            root.CFrame=CFrame.lookAt(point,point+forward)
+            if safelyInside(root.Position) then delivery.bankSeen=true end
+        end
+        return false
+    end
     local function snapshotAnimals()
         local snapshot=setmetatable({}, {__mode="k"})
         for _,animal in ipairs(CS:GetTagged("AnimalPickup")) do snapshot[animal]=true end
@@ -129,6 +207,15 @@ return function(ctx)
         cycle.pickup=nil
         cycle.inventoryBefore=nil
         cycle.lastCollect=0
+        cycle.targetPet=nil
+        cycle.missingAt=nil
+        delivery.started=false
+        delivery.bankSeen=false
+        delivery.confirmed=false
+        delivery.attemptAt=0
+        delivery.lossAt=nil
+        delivery.entry=nil
+        delivery.wasOutside=false
         cycle.beforePlaced=nil
         cycle.beforeTools=nil
         transition("search",message or "Searching eggs")
@@ -159,6 +246,16 @@ return function(ctx)
         return nil
     end
     local function nearbyPickup()
+        if cycle.targetPet then
+            local model=cycle.targetPet
+            if model.Parent and model:IsDescendantOf(workspace)
+                and model:GetAttribute("Despawning")~=true
+                and (model:GetAttribute("ReservedUserId")==nil
+                    or model:GetAttribute("ReservedUserId")==LP.UserId) then
+                return findPrompt(model),model
+            end
+            return nil,nil
+        end
         if cycle.pickup and eligibleAnimal(cycle.pickup) then
             return findPrompt(cycle.pickup),cycle.pickup
         end
@@ -176,6 +273,7 @@ return function(ctx)
             end
         end
         cycle.pickup=best
+        if best and not cycle.targetPet then cycle.targetPet=best end
         return findPrompt(best),best
     end
     local function trigger(prompt)
@@ -188,7 +286,7 @@ return function(ctx)
             ctx.Move("Farm",pos,0)
             return false
         end
-        if not ctx.Throttle("farm:prompt",math.max(1.6,prompt.HoldDuration+1)) then return false end
+        if not ctx.Throttle("farm:prompt",math.max(0.45,prompt.HoldDuration+0.25)) then return false end
         local ok,err=pcall(function()
             if type(fireproximityprompt)=="function" then
                 fireproximityprompt(prompt)
@@ -207,7 +305,14 @@ return function(ctx)
     end
     local function startReturn()
         if cycle.stage=="return" or cycle.stage=="place" then return end
-        transition("return","Animal collected; returning to Pen")
+        delivery.started=true
+        delivery.bankSeen=false
+        delivery.entry=nil
+        delivery.attemptAt=0
+        delivery.lossAt=nil
+        local root=ctx.Root()
+        delivery.wasOutside=root and not bankable(root.Position) or false
+        transition("return","Animal carried; traversing Safe Zone")
     end
     local function placementSpot(hitbox)
         if not hitbox or not hitbox:IsA("BasePart") then return nil end
@@ -299,65 +404,107 @@ return function(ctx)
             if carrying() then startReturn();return end
             local prompt,model=nearbyPickup()
             if model then
+                cycle.missingAt=nil
                 local pos=model:GetPivot().Position
                 if prompt then
-                    S.Step="Collecting spawned animal (E) - "..cycle.rarity
+                    S.Step="Collecting same Pet (E): "..tostring(cycle.rarity)
                     if trigger(prompt) then cycle.lastCollect=os.clock() end
                 else
                     local part=ctx.Root()
                     if part and (part.Position-pos).Magnitude>5 then ctx.Move("Farm",pos,0) end
-                    S.Step="Waiting for native Steal prompt on spawned animal"
+                    S.Step="Waiting for same Pet's Steal prompt"
                 end
             else
-                S.Step="Waiting for animal from selected "..tostring(cycle.rarity).." egg"
+                -- Never interpret disappearance as successful collection.
+                cycle.missingAt=cycle.missingAt or os.clock()
+                if cycle.targetPet and (not cycle.targetPet.Parent or cycle.targetPet:GetAttribute("Despawning")==true) then
+                    if os.clock()-cycle.missingAt>1.4 then
+                        reset("Pet disappeared without server receipt")
+                    end
+                elseif os.clock()-cycle.missingAt>12 then
+                    reset("Spawned Pet not found / expired")
+                else
+                    S.Step="Waiting for Pet from selected Egg"
+                end
             end
             return
         end
         if cycle.stage=="return" or cycle.stage=="place" then
-            local currentPlaced=placedCount()
-            if cycle.beforePlaced ~= nil and currentPlaced>cycle.beforePlaced then
-                reset("Pet placed in Pen (confirmed)")
-                return
-            end
-            local plot=ctx.Plot()
-            if not plot then S.Step="Waiting for owned Pen";return end
-            local hitbox=plot:FindFirstChild("Hitbox")
-            if not hitbox or not hitbox:IsA("BasePart") then
-                S.Step="Pen hitbox unavailable";return
-            end
-            local root=ctx.Root()
-            if not root then return end
-            if carrying() then
-                if (root.Position-hitbox.Position).Magnitude>8 then
-                    ctx.Move("Farm",hitbox.Position,0)
-                end
-                S.Step="Returning carried animal to Pen"
+            local count=placedCount()
+            if cycle.beforePlaced and count>cycle.beforePlaced then
+                reset("Delivered: Pen AnimalsPlaced increased")
                 return
             end
             local tool=newAnimalTool()
-            if not tool then
-                S.Step="Waiting for collected AnimalTool / Pen confirmation"
+            local carried=carrying()
+            if tool and delivery.bankSeen and not carried then
+                reset("Delivered: Safe Zone crossed and AnimalTool confirmed")
                 return
             end
-            if cycle.stage~="place" then transition("place","Placing collected animal in Pen") end
-            local spot=placementSpot(hitbox)
-            if not spot then
-                if (root.Position-hitbox.Position).Magnitude>5 then
-                    ctx.Move("Farm",hitbox.Position,0)
+            if not carried and not tool then
+                -- Server has not credited a tool or Pen placement yet.
+                delivery.lossAt=delivery.lossAt or os.clock()
+                if os.clock()-delivery.lossAt<1 then
+                    S.Step="Awaiting server inventory confirmation"
+                    return
                 end
-                S.Step="Waiting for valid Pen placement position / capacity"
+                local original=cycle.targetPet
+                if tool then
+                    S.Step="Pet in inventory; awaiting Safe Zone validation"
+                end
+                local _,recovered=nearbyPickup()
+                if recovered and recovered==original then
+                    cycle.pickup=recovered
+                    delivery.started=false
+                    transition("collect","Returning to original Pet after failed delivery")
+                    return
+                end
+                if original and original.Parent and original:IsDescendantOf(workspace)
+                    and original:GetAttribute("Despawning")~=true then
+                    local reserved=original:GetAttribute("ReservedUserId")
+                    if reserved==nil or reserved==LP.UserId then
+                        S.Step="Waiting to recover original Pet"
+                        return
+                    end
+                end
+                reset("Pet no longer recoverable; no server receipt")
                 return
             end
-            local native=ctx.Controllers.AnimalToolController
-            if native and type(native.PlaceAt)=="function" then
-                local equipped=ctx.Equip(tool.Name)
-                if equipped and ctx.Throttle("farm:place",2.5) then
-                    local ok,accepted=pcall(native.PlaceAt,equipped,spot)
-                    if not ok then ctx.Error("PlaceAt",accepted) end
-                end
+            delivery.lossAt=nil
+            local root=ctx.Root()
+            if not root then return end
+            -- No instantaneous teleport to the Plot, even in Fast travel mode.
+            local safe=nearestSafePart(root.Position)
+            if not safe then
+                S.Step="Waiting for replicated Safe Zone boundary"
+                return
+            end
+            local destination=insideSafeEdge(safe,root.Position)
+            if not safelyInside(root.Position) then
+                delivery.wasOutside=true
+                continuousTravel(destination)
+                S.Step="Running continuously across Safe Zone line"
             else
-                S.Step="Native animal placement controller unavailable"
+                if delivery.wasOutside then delivery.bankSeen=true end
+                S.Step="Inside Safe Zone: awaiting server bank confirmation"
+                if not delivery.bankSeen then
+                    -- Spawned already inside a safe area; still wait for server replication.
+                    delivery.bankSeen=true
+                end
+                if delivery.attemptAt==0 then delivery.attemptAt=os.clock() end
+                if os.clock()-delivery.attemptAt>2.5 then
+                    delivery.attemptAt=os.clock()
+                    local half=safe.Size.X*0.5+6
+                    local outside=safe.CFrame:PointToWorldSpace(Vector3.new(half,0,0))
+                    delivery.entry=Vector3.new(outside.X,root.Position.Y,outside.Z)
+                    delivery.wasOutside=false
+                end
+                if delivery.entry and not delivery.wasOutside then
+                    local point=delivery.entry
+                    continuousTravel(point)
+                end
             end
+            return
         end
     end
     ctx.Worker("AutoFarmEggs",0.28,function()
