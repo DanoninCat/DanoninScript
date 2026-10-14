@@ -13,8 +13,8 @@ local Fluent = assert(loadstring(source))()
 local Shared = RS:FindFirstChild("Shared") or RS:WaitForChild("Shared", 12)
 assert(Shared, "Shared modules unavailable")
 local playerScripts = LP:FindFirstChild("PlayerScripts") or LP:WaitForChild("PlayerScripts", 12)
-local client = playerScripts and playerScripts:FindFirstChild("Client")
-local Controllers = client and client:FindFirstChild("Controllers")
+local client = playerScripts and (playerScripts:FindFirstChild("Client") or playerScripts:WaitForChild("Client", 12))
+local Controllers = client and (client:FindFirstChild("Controllers") or client:WaitForChild("Controllers", 12))
 local function loadModule(parent, name)
     local inst = parent and parent:FindFirstChild(name)
     if not inst or not inst:IsA("ModuleScript") then return nil end
@@ -283,3 +283,5 @@ task.spawn(function()
     end
 end)
 notify("CAT EMPIRE loaded: validate each function in-game")
+
+[executed on device: Aylla-PC (bf22e6d5-d4f7-41c5-a767-5bedcd8886ac)]
