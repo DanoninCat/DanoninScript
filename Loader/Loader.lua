@@ -67,7 +67,7 @@ local ok, result = pcall(function()
         local ui = loadModule("Loader/FluentPayload.lua", "Loading UI")
         assert(type(ui) == "string" and #ui > 0, "UI module unavailable")
         env.__CE_F_91A7 = ui
-        return loadModule("BreakAndStealAnEgg/Main.lua", "Loading Break and Steal an Egg", "712aa6d42941df3202fee023cddda54fca0e91c8")
+        return loadModule("BreakAndStealAnEgg/Main.lua", "Loading Break and Steal an Egg", "dc6cd216025a8c04f6b435cd40737c7f45355556")
     end
     local isTarget, reason = matchesREAdventures105()
     env.__CE_RE105_ROUTE = reason
