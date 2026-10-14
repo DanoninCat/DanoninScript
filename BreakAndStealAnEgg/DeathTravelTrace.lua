@@ -132,7 +132,11 @@ end
 local function record(kind, details, withState)
     if not active then return end
     local event = {ms=math.floor((os.clock()-start)*1000), serverTime=serverNow(), event=kind, data=details}
-    if withState then event.state = snapshot() end
+    if type(withState)=="table" then
+        event.state=withState
+    elseif withState then
+        event.state=snapshot()
+    end
     local ok, serialized = pcall(HttpService.JSONEncode, HttpService, event)
     if not ok then return end
     queue[#queue+1]=serialized
@@ -275,6 +279,10 @@ end
 function api.GetFileName()
     return fileOk and filename or nil
 end
+function api.Copy()
+    if type(setclipboard)~="function" then return false end
+    return pcall(setclipboard,api.GetLog())
+end
 function api.Mark(label)
     record("USER_MARK",{label=tostring(label):sub(1,100)},true)
     flush()
@@ -286,7 +294,7 @@ function api.Stop()
     active=false
     for _,connection in ipairs(connections) do pcall(function() connection:Disconnect() end) end
     for _,connection in ipairs(charConnections) do pcall(function() connection:Disconnect() end) end
-    env.__CAT_EMPIRE_DEATH_TRACE=nil
+    -- Keep the API available so the captured log can still be retrieved after Stop().
     print("[CAT EMPIRE TRACE] stopped; file: "..filename)
 end
 env.__CAT_EMPIRE_DEATH_TRACE=api
@@ -322,7 +330,7 @@ task.spawn(function()
                 if current~=nil or LP:GetAttribute("BeingChased")~=nil or
                     (stateFrame.nearestGuard and stateFrame.nearestGuard.distance<65) or
                     (stateFrame.nearbyPets and #stateFrame.nearbyPets>0) then
-                    record("SAMPLE",nil,true)
+                    record("SAMPLE",nil,stateFrame)
                 end
                 lastPosition=currentPos
                 lastSample=os.clock()
