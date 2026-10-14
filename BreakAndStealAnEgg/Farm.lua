@@ -29,6 +29,15 @@ return function(ctx)
             end
             obj=obj.Parent
         end
+        local lookup=ctx.Config.ZoneHitboxLookup or {}
+        local zones=ctx.Config.ZonesConfig or {}
+        if type(lookup.GetZoneIndexAt)=="function" then
+            local ok,index=pcall(lookup.GetZoneIndexAt,part.Position)
+            if ok and type(index)=="number" then
+                local entry=(zones.Zones or {})[index]
+                if entry and type(entry.Rarity)=="string" then return entry.Rarity end
+            end
+        end
         return "Unknown"
     end
     local function live(part)
@@ -123,6 +132,25 @@ return function(ctx)
         end)
         return ok
     end
+    local function petToolCount()
+        local count=0
+        for _,container in ipairs({LP:FindFirstChildOfClass("Backpack"),LP.Character}) do
+            if container then
+                for _,obj in ipairs(container:GetChildren()) do
+                    if obj:IsA("Tool") and type(obj:GetAttribute("AnimalName"))=="string" then
+                        count=count+1
+                    end
+                end
+            end
+        end
+        return count
+    end
+    local function startReturn()
+        local plot=ctx.Plot()
+        cycle.beforePlaced=plot and tonumber(plot:GetAttribute("AnimalsPlaced")) or 0
+        cycle.beforeTools=petToolCount()
+        transition("return","Carrying animal to Pen")
+    end
     local function farm()
         if ctx.InHell() then
             S.Step="Paused (Hell area)"
@@ -130,7 +158,7 @@ return function(ctx)
         end
         if not ctx.CanMove("Farm") then return end
         if carrying() and cycle.stage~="return" then
-            transition("return","Pet collected; returning to Pen")
+            startReturn()
         end
         if cycle.stage=="search" then
             if not next(S.SelectedRarities) then
@@ -183,7 +211,7 @@ return function(ctx)
             return
         end
         if cycle.stage=="collect" then
-            if carrying() then transition("return","Carrying animal");return end
+            if carrying() then startReturn();return end
             if os.clock()-cycle.since>18 then
                 if cycle.egg then blocked[cycle.egg]=os.clock()+10 end
                 reset("No animal collected")
@@ -200,7 +228,12 @@ return function(ctx)
         end
         if cycle.stage=="return" then
             if not carrying() then
-                reset("Delivery / transport ended")
+                local plot=ctx.Plot()
+                local placed=plot and tonumber(plot:GetAttribute("AnimalsPlaced")) or 0
+                local confirmed=(placed > (cycle.beforePlaced or 0))
+                    or (petToolCount() > (cycle.beforeTools or 0))
+                reset(confirmed and "Pet delivered (replicated state)"
+                    or "Carry ended; delivery not confirmed")
                 return
             end
             local plot=ctx.Plot()
