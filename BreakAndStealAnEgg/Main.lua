@@ -24,7 +24,7 @@ end
 local configs, controllers = {}, {}
 for _, name in ipairs({
     "EggTargeting","EggConfig","EggRewards","EggTypeConfig","PickaxeConfig",
-    "PlotUpgradeConfig","TreadmillUpgradeConfig","TrailsConfig","HellEventConfig",
+    "PlotUpgradeConfig","TreadmillUpgradeConfig","TrailsConfig","ZonesConfig","ZoneHitboxLookup","HellEventConfig",
     "HellEssenceConfig","HellBossConfig","BatConfig","SpeedConfig"
 }) do configs[name] = loadModule(Shared, name) end
 for _, name in ipairs({
