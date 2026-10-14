@@ -167,7 +167,8 @@ local function worker(key, delay, action)
     end)
 end
 local function loadFeature(name)
-    local url = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/BreakAndStealAnEgg/"..name..".lua"
+    local revision = name == "Settings" and "88256a0873c6e7d1a7e20a51ee2ffaf2c4fbe867" or "main"
+    local url = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/"..revision.."/BreakAndStealAnEgg/"..name..".lua"
     local ok, fn = pcall(function()
         local text = game:HttpGet(url, true)
         return assert(loadstring(text))()
