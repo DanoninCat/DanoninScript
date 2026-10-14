@@ -55,44 +55,57 @@ return function(ctx)
             ctx.Status("Treadmill upgrade "..level.." requested")
         end
     end)
-    local function ownedTrail(id)
-        local attr=LP:GetAttribute(trailsConfig.OwnedAttribute or "OwnedTrails")
-        if type(attr)=="table" then return attr[id]==true or attr[tostring(id)]==true end
-        if type(attr)=="string" then
-            local ok, arr=pcall(ctx.HttpService.JSONDecode,ctx.HttpService,attr)
-            if ok and type(arr)=="table" then
-                for k,v in pairs(arr) do
-                    if tonumber(k)==id and v==true or tonumber(v)==id then return true end
-                end
+    local function ownedSet(attribute, equipped)
+        local set = {}
+        local initial = tonumber(equipped)
+        if initial and initial > 0 then set[initial] = true end
+        if type(attribute) == "string" then
+            for value in attribute:gmatch("[^,]+") do
+                local id = tonumber(value)
+                if id then set[id] = true end
             end
-            for n in attr:gmatch("%d+") do if tonumber(n)==id then return true end end
         end
-        return false
+        return set
     end
-    ctx.Worker("AutoBuyTrails",4,function()
-        local list=trailsConfig.Trails or {}
-        for _,item in ipairs(list) do
-            if S.SelectedTrails[item.Name] and not ownedTrail(item.Id)
-                and type(item.Price)=="number" and item.Price<=cash() then
-                if ctx.Throttle("trail:"..tostring(item.Id),9) then
-                    ctx.Remote("TrailShopRequest","Buy",item.Id)
-                    ctx.Status("Buy Trail: "..tostring(item.Name))
-                end
-                break
+    local function bestAffordable(items, owned, current, getId)
+        local highestOwned = tonumber(current) or 0
+        for id in pairs(owned) do
+            if id > highestOwned then highestOwned = id end
+        end
+        local budget = cash()
+        local best, bestId
+        for index, item in ipairs(items) do
+            local id = tonumber(getId(item, index))
+            local price = tonumber(item.Price)
+            if id and price and price <= budget and id > highestOwned
+                and not owned[id] and (not bestId or id > bestId) then
+                best, bestId = item, id
             end
+        end
+        return best, bestId
+    end
+    ctx.Worker("AutoBuyTrails", 4, function()
+        local attrName = trailsConfig.OwnedAttribute or "OwnedTrails"
+        local equippedName = trailsConfig.EquippedAttribute or "EquippedTrail"
+        local equipped = tonumber(LP:GetAttribute(equippedName)) or 0
+        local owned = ownedSet(LP:GetAttribute(attrName), equipped)
+        local best, id = bestAffordable(trailsConfig.Trails or {}, owned, equipped, function(item)
+            return item.Id
+        end)
+        if best and ctx.Throttle("trail:"..id, 8) then
+            local ok = ctx.Remote("TrailShopRequest", "Buy", id)
+            if ok then ctx.Status("Best affordable Trail requested: "..best.Name) end
         end
     end)
-    ctx.Worker("AutoBuyPickaxe",4,function()
-        local current=number(LP,"PickaxeTier",axeConfig.DefaultTier or 1)
-        for tier,item in ipairs(axeConfig.Tiers or {}) do
-            if tier>current and S.SelectedPickaxes[item.Name]
-                and type(item.Price)=="number" and item.Price<=cash() then
-                if ctx.Throttle("pickaxe:"..tier,9) then
-                    ctx.Remote("PickaxeShopRequest","Buy",tier)
-                    ctx.Status("Buy Pickaxe: "..tostring(item.Name))
-                end
-                break
-            end
+    ctx.Worker("AutoBuyPickaxe", 4, function()
+        local tier = tonumber(LP:GetAttribute("PickaxeTier")) or axeConfig.DefaultTier or 1
+        local owned = ownedSet(LP:GetAttribute("OwnedPickaxes"), tier)
+        local best, id = bestAffordable(axeConfig.Tiers or {}, owned, tier, function(_, index)
+            return index
+        end)
+        if best and ctx.Throttle("pickaxe:"..id, 8) then
+            local ok = ctx.Remote("PickaxeShopRequest", "Buy", id)
+            if ok then ctx.Status("Best affordable Pickaxe requested: "..best.Name) end
         end
     end)
     ctx.Worker("AutoPlaceBest",8,function()
@@ -104,32 +117,41 @@ return function(ctx)
     end)
     local function locateTreadmill(plot)
         if not plot then return nil end
-        for _,obj in ipairs(plot:GetDescendants()) do
-            if obj.Name=="Treadmill" and obj:IsA("BasePart") then return obj end
-            if obj.Name=="Treadmill" and obj:IsA("Model") then
-                local part=obj:FindFirstChild("Run",true)
-                    or obj:FindFirstChild("Belt",true)
-                    or obj.PrimaryPart
-                if part and part:IsA("BasePart") then return part end
+        -- The native tutorial identifies owned machines by model name plus its Hitbox.
+        for _, model in ipairs(plot:GetChildren()) do
+            if model:IsA("Model") and model.Name ~= "TreadmillBoard"
+                and string.find(model.Name, "Treadmill", 1, true) then
+                local hitbox = model:FindFirstChild("Hitbox")
+                if hitbox and hitbox:IsA("BasePart") then
+                    return hitbox
+                end
             end
         end
         return nil
     end
-    ctx.Worker("AutoTrainTreadmill",1.3,function()
+    ctx.Worker("AutoTrainTreadmill", 0.85, function()
         if not ctx.CanMove("Train") or ctx.InHell() then return end
-        local plot=ctx.Plot()
-        if not plot then S.Step="Train: waiting for Pen";return end
-        local target=locateTreadmill(plot)
-        if not target then
-            S.Step="Train: treadmill not replicated/unlocked"
+        local plot = ctx.Plot()
+        if not plot then S.Step="Train: waiting for Pen"; return end
+        local hitbox = locateTreadmill(plot)
+        if not hitbox then
+            S.Step = "Train: treadmill not replicated or unlocked"
             return
         end
-        local root,hum=ctx.Root()
+        local root, hum = ctx.Root()
         if not root then return end
-        local pos=target.Position+Vector3.new(0,target.Size.Y/2+2,0)
-        if (root.Position-pos).Magnitude>5 then
-            ctx.Move("Train",pos,0)
+        local goal = hitbox.Position + Vector3.new(0, hitbox.Size.Y / 2 + math.max(2,hum.HipHeight), 0)
+        local delta = root.Position - goal
+        if Vector3.new(delta.X, 0, delta.Z).Magnitude > 1.75 or math.abs(delta.Y) > 3.5 then
+            ctx.Move("Train", goal, 0, true)
+            S.Step = "Training: positioning on treadmill"
+            return
         end
-        S.Step="Training: checking treadmill session"
+        local speed = ctx.Config.SpeedConfig or {}
+        if LP:GetAttribute(speed.InUseAttribute or "TreadmillInUse") == true then
+            S.Step = "Training: active on treadmill"
+        else
+            S.Step = "Training: positioned; waiting for server session"
+        end
     end)
 end
