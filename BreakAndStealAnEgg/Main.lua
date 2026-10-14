@@ -283,5 +283,3 @@ task.spawn(function()
     end
 end)
 notify("CAT EMPIRE loaded: validate each function in-game")
-
-[executed on device: Aylla-PC (bf22e6d5-d4f7-41c5-a767-5bedcd8886ac)]
