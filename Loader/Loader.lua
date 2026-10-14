@@ -37,10 +37,11 @@ local function matchesREAdventures105()
     return true, "Client fingerprint"
 end
 
-local function loadModule(path, stage)
+local function loadModule(path, stage, revision)
     env.__CE_RE105_BOOT_STAGE = stage
     local ok, body = pcall(function()
-        return game:HttpGet(BASE .. path, true)
+        local base = revision and ("https://raw.githubusercontent.com/DanoninCat/DanoninScript/" .. revision .. "/") or BASE
+        return game:HttpGet(base .. path, true)
     end)
     if not ok then
         error(stage .. ": HTTP failure: " .. tostring(body), 0)
@@ -66,7 +67,7 @@ local ok, result = pcall(function()
         local ui = loadModule("Loader/FluentPayload.lua", "Loading UI")
         assert(type(ui) == "string" and #ui > 0, "UI module unavailable")
         env.__CE_F_91A7 = ui
-        return loadModule("BreakAndStealAnEgg/Main.lua", "Loading Break and Steal an Egg")
+        return loadModule("BreakAndStealAnEgg/Main.lua", "Loading Break and Steal an Egg", "712aa6d42941df3202fee023cddda54fca0e91c8")
     end
     local isTarget, reason = matchesREAdventures105()
     env.__CE_RE105_ROUTE = reason
