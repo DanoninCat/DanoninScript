@@ -349,5 +349,3 @@ return function(ctx)
         if opener then pcall(function() opener:Destroy() end) end
     end
 end
-
-[executed on device: Aylla-PC (bf22e6d5-d4f7-41c5-a767-5bedcd8886ac)]
