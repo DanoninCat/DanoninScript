@@ -109,20 +109,27 @@ local function inHell()
     local cfg = configs.HellEventConfig or {}
     return LP:GetAttribute(cfg.PlayerAttribute or "InHell") == true
 end
-local function canMove(owner)
-    if S.AutoHellEvent and owner ~= "Hell" then return false end
-    if S.AutoFarmEggs and owner ~= "Farm" and owner ~= "Hell" then return false end
-    return S.Moving == nil or S.Moving == owner
+local function priorityOwner()
+    local hellConfig = configs.HellEventConfig or {}
+    if S.AutoHellEvent and (inHell() or workspace:GetAttribute(hellConfig.JoinableAttribute or "HellJoinable") == true) then
+        return "Hell"
+    end
+    if S.AutoFarmEggs then return "Farm" end
+    if S.AutoTrainTreadmill then return "Train" end
+    return nil
 end
-local function move(owner, destination, offset)
+local function canMove(owner)
+    return priorityOwner() == owner and (S.Moving == nil or S.Moving == owner)
+end
+local function move(owner, destination, offset, forceFast)
     local part, hum = root()
     if not part or typeof(destination) ~= "Vector3" or not canMove(owner) then return false end
     if LP:GetAttribute("Jailed") == true then return false end
     local goal = destination + Vector3.new(0,offset or 3,0)
-    if (goal - part.Position).Magnitude < 7 then return true end
+    if (goal - part.Position).Magnitude < 3.5 then return true end
     S.Moving = owner
     local ok = pcall(function()
-        if S.TravelMode == "Fast" then
+        if forceFast or S.TravelMode == "Fast" then
             part.CFrame = CFrame.new(goal)
         else
             hum:MoveTo(goal)
@@ -233,31 +240,11 @@ toggle(Tabs.Progress,"AutoTrainTreadmill","Auto Train Treadmill")
 toggle(Tabs.Shop,"AutoBuyTrails","Auto Buy Trails")
 toggle(Tabs.Shop,"AutoBuyPickaxe","Auto Buy Pickaxe")
 toggle(Tabs.Hell,"AutoHellEvent","Auto Hell Event")
-local function choiceList(config, field, key)
-    local values, map = {}, {}
-    local items = config and config[field] or {}
-    for n,item in ipairs(items) do
-        local name = type(item.Name)=="string" and item.Name or ("Tier "..n)
-        values[#values+1] = name
-        map[name] = item[key] or n
-    end
-    return values, map
-end
-local pickaxeNames, pickaxeMap=choiceList(configs.PickaxeConfig,"Tiers","Tier")
-local trailNames, trailMap=choiceList(configs.TrailsConfig,"Trails","Id")
-Tabs.Shop:AddDropdown("BREAK_PickaxeChoice",{
-    Title="Pickaxes",Values=pickaxeNames,Multi=true,Default={},
-    Callback=function(v) S.SelectedPickaxes=selected(v) end,
-})
-Tabs.Shop:AddDropdown("BREAK_TrailChoice",{
-    Title="Trails",Values=trailNames,Multi=true,Default={},
-    Callback=function(v) S.SelectedTrails=selected(v) end,
-})
 local ctx = {
     S=S, Player=LP, RS=RS, CS=CS, Shared=Shared,
     Config=configs, Controllers=controllers, Tabs=Tabs, Toggles=Toggles,
     Window=Window, Fluent=Fluent, Links=Links, HttpService=HttpService,
-    PickaxeNames=pickaxeMap, TrailNames=trailMap, Root=root, Position=position,
+    Root=root, Position=position, PriorityOwner=priorityOwner,
     Plot=ownPlot, Move=move, CanMove=canMove, InHell=inHell, Remote=remote,
     Throttle=throttle, Equip=equip, Status=status, Notify=notify,
     Error=errorState, Worker=worker, Cleanup=cleanup, Selected=selected,
