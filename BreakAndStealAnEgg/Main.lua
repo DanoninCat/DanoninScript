@@ -175,7 +175,7 @@ local function worker(key, delay, action)
 end
 local function loadFeature(name)
     local versions = {
-        Farm = "7fb4d321de54b54f0a78b91b0919a519f23a31b4",
+        Farm = "063a1118a46930c84417195bd932df959bbaa338",
         Progress = "d1bcee52c907d7fa27a4e15e77b1904fb808e3fb",
         Hell = "c441b8e19b082fb7fd38c0131a73d21ea96e08ec",
         Settings = "88256a0873c6e7d1a7e20a51ee2ffaf2c4fbe867",
