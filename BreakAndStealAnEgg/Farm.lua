@@ -8,7 +8,7 @@ return function(ctx)
     for i,name in ipairs(order) do rank[name]=i end
     local cycle={stage="search",egg=nil,origin=nil,rarity=nil,zoneId=nil,since=0,lastSwing=0,lastCollect=0}
     local visiblePrompts=setmetatable({}, {__mode="k"})
-    local RunService=game:GetService("RunService")
+    -- Movement is delegated to the native Humanoid navigation / WalkSpeed.
     local safeQuery
     do
         local m=ctx.Shared and ctx.Shared:FindFirstChild("SafeZoneQuery")
@@ -17,7 +17,8 @@ return function(ctx)
             if ok then safeQuery=res end
         end
     end
-    local delivery={started=false,bankSeen=false,confirmed=false,attemptAt=0,lossAt=nil,entry=nil,wasOutside=false}
+    local delivery={started=false,bankSeen=false,confirmed=false,attemptAt=0,lossAt=nil,entry=nil,wasOutside=false,
+        lastCarriedPos=nil, lastCarryingToken=nil, droppedAt=nil, recovering=false}
     local function safelyInside(pos)
         if safeQuery and type(safeQuery.IsPositionSafe)=="function" then
             local ok,result=pcall(safeQuery.IsPositionSafe,pos)
@@ -66,24 +67,16 @@ return function(ctx)
     end
     local function continuousTravel(destination)
         local root,hum=ctx.Root()
-        if not root or not ctx.CanMove("Farm") then return false end
-        local duration=0
-        -- Small frame-to-frame translations preserve the crossing trajectory.
-        while duration<0.24 and S.Running and S.AutoFarmEggs and ctx.CanMove("Farm") and not ctx.InHell() do
-            root,hum=ctx.Root()
-            if not root then break end
-            local flat=Vector3.new(destination.X-root.Position.X,0,destination.Z-root.Position.Z)
-            local dy=destination.Y-root.Position.Y
-            if flat.Magnitude<2 and math.abs(dy)<1.5 then return true end
-            local dt=math.clamp(RunService.Heartbeat:Wait(),1/120,0.05)
-            duration=duration+dt
-            local step=math.min(flat.Magnitude,math.min(5.5,130*dt))
-            local forward=flat.Magnitude>0.001 and flat.Unit
-                or Vector3.new(root.CFrame.LookVector.X,0,root.CFrame.LookVector.Z).Unit
-            local point=root.Position+forward*step+Vector3.new(0,math.clamp(dy,-1.1,1.1),0)
-            root.CFrame=CFrame.lookAt(point,point+forward)
-            if safelyInside(root.Position) then delivery.bankSeen=true end
+        if not root or not hum or not ctx.CanMove("Farm") or ctx.InHell() then return false end
+        -- Humanoid:MoveTo uses the walk speed already maintained by the native game.
+        -- Do not modify WalkSpeed or artificially cap studs per second.
+        local target=Vector3.new(destination.X,root.Position.Y,destination.Z)
+        local current=Vector3.new(root.Position.X,0,root.Position.Z)
+        local targetFlat=Vector3.new(target.X,0,target.Z)
+        if (targetFlat-current).Magnitude<2 then
+            return true
         end
+        hum:MoveTo(target)
         return false
     end
     local function snapshotAnimals()
@@ -216,6 +209,10 @@ return function(ctx)
         delivery.lossAt=nil
         delivery.entry=nil
         delivery.wasOutside=false
+        delivery.lastCarriedPos=nil
+        delivery.lastCarryingToken=nil
+        delivery.droppedAt=nil
+        delivery.recovering=false
         cycle.beforePlaced=nil
         cycle.beforeTools=nil
         transition("search",message or "Searching eggs")
@@ -245,15 +242,65 @@ return function(ctx)
         end
         return nil
     end
+    local function sameAnimalAttributes(a,b)
+        for _,key in ipairs({"AnimalId","AnimalUID","AnimalGuid","PetId","UniqueId","UID"}) do
+            local av=a and a:GetAttribute(key)
+            local bv=b and b:GetAttribute(key)
+            if av~=nil and bv~=nil then return av==bv, true end
+        end
+        if not a or not b then return false,false end
+        local aName=a:GetAttribute("AnimalName") or a.Name
+        local bName=b:GetAttribute("AnimalName") or b.Name
+        if aName~=bName then return false,false end
+        for _,key in ipairs({"Weight","Size","Mutation","ZoneId"}) do
+            local av=a:GetAttribute(key)
+            local bv=b:GetAttribute(key)
+            if av~=nil and bv~=nil and av~=bv then return false,false end
+        end
+        return true,false
+    end
+    local function recoveryPickup()
+        local original=cycle.targetPet
+        if not original then return nil end
+        if original.Parent and original:IsDescendantOf(workspace)
+            and original:GetAttribute("Despawning")~=true then
+            local owner=original:GetAttribute("ReservedUserId")
+            if owner==nil or owner==LP.UserId then return original end
+        end
+        -- After guard knockback the server may recreate the drop as a new model.
+        -- Associate only an unambiguous nearby match with the lost original Pet.
+        local where=delivery.lastCarriedPos
+        if not where then return nil end
+        local options={}
+        for _,candidate in ipairs(CS:GetTagged("AnimalPickup")) do
+            if candidate~=original and candidate:IsA("Model")
+                and candidate:IsDescendantOf(workspace)
+                and candidate:GetAttribute("Despawning")~=true then
+                local owner=candidate:GetAttribute("ReservedUserId")
+                if owner==nil or owner==LP.UserId then
+                    local matching,strong=sameAnimalAttributes(original,candidate)
+                    local distance=(candidate:GetPivot().Position-where).Magnitude
+                    if matching and (distance<=45 or strong) then
+                        options[#options+1]={model=candidate,distance=distance,strong=strong}
+                    end
+                end
+            end
+        end
+        table.sort(options,function(x,y)
+            if x.strong~=y.strong then return x.strong end
+            return x.distance<y.distance
+        end)
+        if options[1] and (options[1].strong or #options==1) then
+            cycle.targetPet=options[1].model
+            cycle.pickup=options[1].model
+            return cycle.targetPet
+        end
+        return nil
+    end
     local function nearbyPickup()
         if cycle.targetPet then
-            local model=cycle.targetPet
-            if model.Parent and model:IsDescendantOf(workspace)
-                and model:GetAttribute("Despawning")~=true
-                and (model:GetAttribute("ReservedUserId")==nil
-                    or model:GetAttribute("ReservedUserId")==LP.UserId) then
-                return findPrompt(model),model
-            end
+            local model=recoveryPickup()
+            if model then return findPrompt(model),model end
             return nil,nil
         end
         if cycle.pickup and eligibleAnimal(cycle.pickup) then
@@ -311,8 +358,11 @@ return function(ctx)
         delivery.attemptAt=0
         delivery.lossAt=nil
         local root=ctx.Root()
-        delivery.wasOutside=root and not bankable(root.Position) or false
-        transition("return","Animal carried; traversing Safe Zone")
+        delivery.wasOutside=root and not safelyInside(root.Position) or false
+        delivery.lastCarriedPos=root and root.Position or delivery.lastCarriedPos
+        delivery.lastCarryingToken=LP:GetAttribute("Carrying")
+        delivery.recovering=false
+        transition("return","Carrying Pet with native speed to Safe Zone")
     end
     local function placementSpot(hitbox)
         if not hitbox or not hitbox:IsA("BasePart") then return nil end
@@ -407,11 +457,14 @@ return function(ctx)
                 cycle.missingAt=nil
                 local pos=model:GetPivot().Position
                 if prompt then
-                    S.Step="Collecting same Pet (E): "..tostring(cycle.rarity)
+                    S.Step=(delivery.recovering and "Recovering dropped Pet: " or "Collecting Pet: ")..tostring(cycle.rarity)
                     if trigger(prompt) then cycle.lastCollect=os.clock() end
                 else
                     local part=ctx.Root()
-                    if part and (part.Position-pos).Magnitude>5 then ctx.Move("Farm",pos,0) end
+                    if part and (part.Position-pos).Magnitude>5 then
+                        if delivery.recovering then continuousTravel(pos)
+                        else ctx.Move("Farm",pos,0) end
+                    end
                     S.Step="Waiting for same Pet's Steal prompt"
                 end
             else
@@ -448,31 +501,36 @@ return function(ctx)
                     S.Step="Awaiting server inventory confirmation"
                     return
                 end
-                local original=cycle.targetPet
-                if tool then
-                    S.Step="Pet in inventory; awaiting Safe Zone validation"
-                end
-                local _,recovered=nearbyPickup()
-                if recovered and recovered==original then
+                local recovered=recoveryPickup()
+                if recovered then
                     cycle.pickup=recovered
                     delivery.started=false
-                    transition("collect","Returning to original Pet after failed delivery")
+                    delivery.recovering=true
+                    delivery.droppedAt=os.clock()
+                    transition("collect","Boss dropped Pet; returning to recover SAME animal")
                     return
                 end
+                local original=cycle.targetPet
                 if original and original.Parent and original:IsDescendantOf(workspace)
                     and original:GetAttribute("Despawning")~=true then
-                    local reserved=original:GetAttribute("ReservedUserId")
-                    if reserved==nil or reserved==LP.UserId then
-                        S.Step="Waiting to recover original Pet"
-                        return
-                    end
+                    S.Step="Dropped Pet temporarily unavailable; holding current cycle"
+                    return
                 end
-                reset("Pet no longer recoverable; no server receipt")
+                -- Grace for a server-replicated replacement of the dropped model.
+                if os.clock()-delivery.lossAt<6 then
+                    S.Step="Waiting for dropped Pet replication"
+                    return
+                end
+                reset("Original Pet unavailable after drop; no delivery receipt")
                 return
             end
             delivery.lossAt=nil
             local root=ctx.Root()
             if not root then return end
+            if carried then
+                delivery.lastCarriedPos=root.Position
+                delivery.lastCarryingToken=LP:GetAttribute("Carrying")
+            end
             -- No instantaneous teleport to the Plot, even in Fast travel mode.
             local safe=nearestSafePart(root.Position)
             if not safe then
@@ -487,15 +545,24 @@ return function(ctx)
             else
                 if delivery.wasOutside then delivery.bankSeen=true end
                 S.Step="Inside Safe Zone: awaiting server bank confirmation"
-                if not delivery.bankSeen then
-                    -- Spawned already inside a safe area; still wait for server replication.
-                    delivery.bankSeen=true
-                end
+                -- Do not credit a crossing until we have approached from outside.
                 if delivery.attemptAt==0 then delivery.attemptAt=os.clock() end
                 if os.clock()-delivery.attemptAt>2.5 then
                     delivery.attemptAt=os.clock()
-                    local half=safe.Size.X*0.5+6
-                    local outside=safe.CFrame:PointToWorldSpace(Vector3.new(half,0,0))
+                    local localPos=safe.CFrame:PointToObjectSpace(root.Position)
+                    local hx=safe.Size.X*0.5
+                    local hz=safe.Size.Z*0.5
+                    local nearX=hx-math.abs(localPos.X)
+                    local nearZ=hz-math.abs(localPos.Z)
+                    local outsideLocal
+                    if nearX<=nearZ then
+                        local sign=localPos.X>=0 and 1 or -1
+                        outsideLocal=Vector3.new(sign*(hx+4),0,math.clamp(localPos.Z,-hz,hz))
+                    else
+                        local sign=localPos.Z>=0 and 1 or -1
+                        outsideLocal=Vector3.new(math.clamp(localPos.X,-hx,hx),0,sign*(hz+4))
+                    end
+                    local outside=safe.CFrame:PointToWorldSpace(outsideLocal)
                     delivery.entry=Vector3.new(outside.X,root.Position.Y,outside.Z)
                     delivery.wasOutside=false
                 end
