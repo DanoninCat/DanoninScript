@@ -32,7 +32,7 @@ for _, name in ipairs({
     "AnimalToolController","PetsInventoryController","HellBossController"
 }) do controllers[name] = loadModule(Controllers, name) end
 local S = {
-    Running = true, AutoFarmEggs = false, AutoUpgradeTreadmill = false,
+    Running = true, AutoFarmEggs = false, DeathTravel = false, AutoUpgradeTreadmill = false,
     AutoUpgradePlot = false, AutoPlaceBest = false, AutoTrainTreadmill = false,
     AutoBuyTrails = false, AutoBuyPickaxe = false, AutoHellEvent = false,
     SelectedRarities = {}, SelectedTrails = {}, SelectedPickaxes = {},
@@ -175,7 +175,8 @@ local function worker(key, delay, action)
 end
 local function loadFeature(name)
     local versions = {
-        Farm = "063a1118a46930c84417195bd932df959bbaa338",
+        Farm = "841d3b97159e09a23cb6997db6e2290ea7627b73",
+        DeathTravel = "57b2566e57703c51749bbe02e6f00c3af006c8f4",
         Progress = "d1bcee52c907d7fa27a4e15e77b1904fb808e3fb",
         Hell = "c441b8e19b082fb7fd38c0131a73d21ea96e08ec",
         Settings = "88256a0873c6e7d1a7e20a51ee2ffaf2c4fbe867",
@@ -225,6 +226,7 @@ end
 Status = Tabs.Farm:AddParagraph({Title="Break and Steal an Egg",Content="Initializing"})
 HellStatus = Tabs.Hell:AddParagraph({Title="Hell Event",Content="Waiting"})
 toggle(Tabs.Farm,"AutoFarmEggs","Auto Farm Eggs")
+toggle(Tabs.Farm,"DeathTravel","Death Travel (Boss Respawn) [TEST]")
 local rarities={"Common","Uncommon","Rare","Epic","Legendary","Mythic","Divine","Cosmic","Secret","Celestial","Inferno","Void","Omega","Unknown"}
 Tabs.Farm:AddDropdown("BREAK_EggRarities",{
     Title="Egg Rarities",Values=rarities,Multi=true,Default={},
@@ -255,7 +257,7 @@ local ctx = {
     Throttle=throttle, Equip=equip, Status=status, Notify=notify,
     Error=errorState, Worker=worker, Cleanup=cleanup, Selected=selected,
 }
-for _, name in ipairs({"Farm","Progress","Hell","Settings"}) do
+for _, name in ipairs({"DeathTravel","Farm","Progress","Hell","Settings"}) do
     local init = loadFeature(name)
     if init then
         local ok, result = pcall(init, ctx)
