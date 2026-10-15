@@ -176,7 +176,7 @@ end
 local function loadFeature(name)
     local versions = {
         Farm = "841d3b97159e09a23cb6997db6e2290ea7627b73",
-        DeathTravel = "57b2566e57703c51749bbe02e6f00c3af006c8f4",
+        DeathTravel = "f2409532209759e873a635eceb5cfee0a35ab9d3",
         Progress = "d1bcee52c907d7fa27a4e15e77b1904fb808e3fb",
         Hell = "c441b8e19b082fb7fd38c0131a73d21ea96e08ec",
         Settings = "88256a0873c6e7d1a7e20a51ee2ffaf2c4fbe867",
