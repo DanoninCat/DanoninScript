@@ -192,6 +192,11 @@ return function(ctx)
         if message then ctx.Status(message) end
     end
     local function reset(message)
+        if ctx.DeathTravel and type(ctx.DeathTravel.Stop)=="function" then
+            ctx.DeathTravel.Stop()
+        end
+        cycle.deathTravelActive=false
+        cycle.deathTravelTried=false
         cycle.egg=nil
         cycle.origin=nil
         cycle.rarity=nil
@@ -362,6 +367,8 @@ return function(ctx)
         delivery.lastCarriedPos=root and root.Position or delivery.lastCarriedPos
         delivery.lastCarryingToken=LP:GetAttribute("Carrying")
         delivery.recovering=false
+        cycle.deathTravelTried=false
+        cycle.deathTravelActive=false
         transition("return","Carrying Pet with native speed to Safe Zone")
     end
     local function placementSpot(hitbox)
@@ -481,6 +488,38 @@ return function(ctx)
                 end
             end
             return
+        end
+        if cycle.stage=="return" then
+            -- Death Travel is opt-in; normal Safe Zone transport remains unchanged.
+            if cycle.deathTravelActive and (not S.DeathTravel or not ctx.DeathTravel) then
+                if ctx.DeathTravel then ctx.DeathTravel.Stop() end
+                cycle.deathTravelActive=false
+            end
+            if S.DeathTravel and ctx.DeathTravel and not cycle.deathTravelTried and carrying() then
+                cycle.deathTravelTried=true
+                cycle.deathTravelActive=ctx.DeathTravel.Start(cycle,{
+                    placedCount=placedCount,
+                    newTool=newAnimalTool,
+                    recoveryPickup=recoveryPickup,
+                    findPrompt=findPrompt,
+                    bankable=bankable,
+                })
+            end
+            if cycle.deathTravelActive then
+                local outcome=ctx.DeathTravel.Step()
+                if outcome=="delivered" then
+                    reset("Death Travel: Pet saved (inventory/Pen verified)")
+                    return
+                elseif outcome=="gone" then
+                    reset("Death Travel: original Pet expired; no delivery credited")
+                    return
+                elseif outcome=="fallback" then
+                    cycle.deathTravelActive=false
+                else
+                    -- Boss combat, death and recovery are handled by DeathTravel.lua.
+                    return
+                end
+            end
         end
         if cycle.stage=="return" or cycle.stage=="place" then
             local count=placedCount()
