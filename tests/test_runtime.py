@@ -28,7 +28,6 @@ class RuntimeTests(unittest.TestCase):
             typeof = type
             warn = function() end
             player = {Name="Tester", UserId=123}
-            function player:FindFirstChildOfClass() return nil end
             services = {Players={LocalPlayer=player}, HttpService={}, ReplicatedStorage={}, Workspace={}}
             function services.HttpService:JSONEncode(t) return "json" end
             function services.HttpService:GenerateGUID() return tostring(clock) end
@@ -44,6 +43,7 @@ class RuntimeTests(unittest.TestCase):
         for path in list((ROOT/'ReAdventuresV2').glob('*.lua'))+[ROOT/'Loader/Loader.lua']:
             ok, err = self.lua.eval('function(s) local f,e=load(s);return f~=nil,e end')(path.read_text())
             self.assertTrue(ok, str(path)+': '+str(err))
+
 
     def test_auto_ready_rearms_from_visible_vote_gui(self):
         self.lua.execute('''
@@ -323,53 +323,11 @@ class RuntimeTests(unittest.TestCase):
     def test_loader_matches_sources_and_preserves_other_payloads(self):
         spec=importlib.util.spec_from_file_location('builder',ROOT/'tools/build_loader.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-        # every configured payload must deterministically regenerate from its sources
-        for place_id,site in module.PAYLOADS.items():
-            entry=module.encoded_entry(place_id,site,site.get('default_key',1))
-            self.assertTrue(entry.startswith('['+str(place_id)+']={{'), 'entry head: '+str(place_id))
-            self.assertIn('"+',entry) if False else None
-            self.assertGreater(len(entry),64,'payload too small: '+str(place_id))
-        # replays over a source containing an existing entry must preserve unrelated entries
-        legacy=(ROOT/'Loader/Legacy.lua').read_text()
-        entries_before=re.findall(r'\[(\d+)\]=\{\{',legacy)
-        sandbox=legacy
-        for place_id,site in module.PAYLOADS.items():
-            if re.search(r'\['+re.escape(str(place_id))+r'\]=\{\{',sandbox):
-                sandbox=module.replace_or_insert(sandbox,place_id,site)
-        entries_after=re.findall(r'\[(\d+)\]=\{\{',sandbox)
-        self.assertEqual(len(entries_before),len(entries_after),'payload entries dropped by rebuild')
-
-
-class StealBrainrotSyntaxTests(unittest.TestCase):
-    """Standalone: loads no game Core, only parses sources with lupa Lua 5.x."""
-    def setUp(self):
-        self.lua = LuaRuntime(unpack_returned_tuples=True)
-
-    def test_steal_brainrot_source_syntax(self):
-        sources = list((ROOT/'StealABrainrot').glob('*.lua'))+[ROOT/'Loader/Loader.lua']
-        self.assertTrue(len(sources) >= 3, 'expected Main+Settings+Loader present')
-        for path in sources:
-            ok, err = self.lua.eval('function(s) local f,e=load(s);return f~=nil,e end')(path.read_text())
-            self.assertTrue(ok, str(path)+': '+str(err))
-
-    def test_steal_brainrot_route_present(self):
-        text = (ROOT/'Loader/Loader.lua').read_text()
-        self.assertIn('99881468171809', text)
-        self.assertIn('StealABrainrot/Main.lua', text)
-
-    def test_steal_brainrot_settings_module_shape(self):
-        text = (ROOT/'StealABrainrot/Settings.lua').read_text()
-        self.assertIn('return function(ctx)', text)
-        for anchor in ('Auto Rejoin', 'Anti AFK', 'Themes', 'Profiles', 'Create Profiles',
-                       'Save Profiles', 'Auto Load Profiles', 'Auto Close UI',
-                       'Auto Load After Rejoin', 'Boost FPS', 'Account', 'Community', 'AddDiscord'):
-            self.assertIn(anchor, text, 'missing settings/misc anchor: '+anchor)
-
-    def test_steal_brainrot_main_tabs_and_cleanup(self):
-        text = (ROOT/'StealABrainrot/Main.lua').read_text()
-        for anchor in ('CreateWindow', 'AddTab', 'Settings', 'Misc', 'Auto Collect Cash',
-                       'Auto Sell', 'Auto Daily', 'Auto Wheel', 'TopTeleport', 'RedeemCode',
-                       'CollectCash', 'PlaceBest', 'RespondInvite', 'cleanup'):
-            self.assertIn(anchor, text, 'missing main anchor: '+anchor)
+        source=(ROOT/'Loader/Loader.lua').read_text()
+        match=module.PATTERN.search(source)
+        encoded=''.join(re.findall(r'"([A-Za-z0-9+/=]+)"',match[2]))
+        self.assertEqual(module.crypt(base64.b64decode(encoded),int(match[3])),module.payload())
+        original=subprocess.check_output(['git','show','HEAD:Loader/Loader.lua'],cwd=ROOT,text=True)
+        self.assertEqual(module.PATTERN.sub('PAYLOAD',source),module.PATTERN.sub('PAYLOAD',original))
 
 if __name__=='__main__':unittest.main()

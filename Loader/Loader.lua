@@ -67,7 +67,7 @@ local ok, result = pcall(function()
         local ui = loadModule("Loader/FluentPayload.lua", "Loading UI")
         assert(type(ui) == "string" and #ui > 0, "UI module unavailable")
         env.__CE_F_91A7 = ui
-        return loadModule("StealABrainrot/Main.lua", "Loading Steal A Brainrot")
+        return loadModule("StealABrainrot/Main.lua", "Loading place 99881468171809")
     end
     if game.PlaceId == 114326934417838 or game.GameId == 114326934417838 then
         local ui = loadModule("Loader/FluentPayload.lua", "Loading UI")

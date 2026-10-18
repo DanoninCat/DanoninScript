@@ -1,4 +1,4 @@
--- CAT EMPIRE — Steal A Brainrot (place 99881468171809)
+-- CAT EMPIRE - game identified by PlaceId 99881468171809; display name resolved from Roblox
 -- Built from decompiled client dump; every remote call below is copied from
 -- the game's own LocalScripts/Modules (evidence analysis/remote_calls.json).
 if game.PlaceId ~= 99881468171809 then
@@ -8,6 +8,7 @@ end
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
 local LP = Players.LocalPlayer
 local Env = (getgenv and getgenv()) or _G
 if type(Env.__CE_STEAL_BRAINROT_CLEANUP) == "function" then pcall(Env.__CE_STEAL_BRAINROT_CLEANUP) end
@@ -458,8 +459,23 @@ task.spawn(function()
 end)
 
 -- ---------------------------------------------------------------- UI
+-- Get the name from the current Roblox place, never from the dump or directory name.
+local function getOfficialGameName()
+    for attempt = 1, 3 do
+        local ok, info = pcall(function()
+            return MarketplaceService:GetProductInfo(game.PlaceId)
+        end)
+        if ok and type(info) == "table" and type(info.Name) == "string"
+            and info.Name:match("%S") then
+            return info.Name
+        end
+        if attempt < 3 then task.wait(0.5) end
+    end
+    return "Place ID " .. tostring(game.PlaceId)
+end
+local GameTitle = getOfficialGameName()
 local Window = Fluent:CreateWindow({
-    Title = "CAT EMPIRE", SubTitle = "Steal A Brainrot",
+    Title = "CAT EMPIRE", SubTitle = GameTitle,
     TabWidth = 158, Size = UDim2.fromOffset(765, 480),
     Acrylic = false, Animated = false, Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl,
@@ -486,7 +502,7 @@ local function toggle(tab, key, title, callback)
 end
 
 -- FARM tab
-Status = Tabs.Farm:AddParagraph({Title = "Steal A Brainrot", Content = "Initializing"})
+Status = Tabs.Farm:AddParagraph({Title = GameTitle, Content = "Initializing"})
 toggle(Tabs.Farm, "AutoCollectCash", "Auto Collect Cash")
 Tabs.Farm:AddSlider("SB_CollectInterval", {
     Title = "Collect Interval (s)", Default = 0.35, Min = 0.15, Max = 3, Rounding = 2,
@@ -678,7 +694,7 @@ end
 task.spawn(function()
     while S.Running do
         pcall(function()
-            Status:SetTitle("Steal A Brainrot")
+            Status:SetTitle(GameTitle)
             Status:SetDesc(S.LastAction .. (S.LastError ~= "" and (" | " .. S.LastError) or ""))
         end)
         task.wait(1.2)
@@ -686,4 +702,4 @@ task.spawn(function()
 end)
 
 status("loaded")
-notify("CAT EMPIRE loaded: Steal A Brainrot")
+notify("CAT EMPIRE loaded: " .. GameTitle)
