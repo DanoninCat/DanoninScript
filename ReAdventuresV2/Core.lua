@@ -2497,9 +2497,9 @@ function Controller:_findChallengeDoor(kind)
             if meta then
                 local score = 0
                 if board then
-                    if board.mapName ~= "" and meta.mapName == board.mapName then score += 8 end
-                    if board.levelName ~= "" and meta.levelName == board.levelName then score += 5 end
-                    if board.difficulty ~= "" and meta.difficulty == board.difficulty then score += 10 end
+                    if board.mapName ~= "" and meta.mapName == board.mapName then score = score + 8 end
+                    if board.levelName ~= "" and meta.levelName == board.levelName then score = score + 5 end
+                    if board.difficulty ~= "" and meta.difficulty == board.difficulty then score = score + 10 end
                 end
 
                 local isPlainStory = meta.difficulty == ""
@@ -2513,9 +2513,9 @@ function Controller:_findChallengeDoor(kind)
                     and (dailyBoard.difficulty == "" or meta.difficulty == dailyBoard.difficulty)
 
                 if kind == "Normal" and not isPlainStory and not isDailyMatch then
-                    score += 2
+                    score = score + 2
                 elseif kind == "Daily" and isDailyMatch then
-                    score += 20
+                    score = score + 20
                 end
 
                 if score > 0 and (not best or score > bestScore) then
