@@ -118,7 +118,7 @@ local function targetModels()
             end
         end
     end
-    if #output==0 or S.ESPShowTeam then
+    do
         for _,player in ipairs(Players:GetPlayers()) do
             local model=player.Character
             if player~=LP and living(model) and not unique[model] then
@@ -277,56 +277,107 @@ local function installSilent()
     return true
 end
 
-local drawingOK=type(Drawing)=="table" and type(Drawing.new)=="function"
-local function draw(kind)
-    if not drawingOK then return nil end
-    local ok,obj=pcall(Drawing.new,kind)
-    if ok then
-        Drawings[#Drawings+1]=obj
-        obj.Visible=false
-        return obj
-    end
+-- ScreenGui visuals: no executor-specific Drawing library is required.
+local visualGui=Instance.new("ScreenGui")
+visualGui.Name="CAT_EMPIRE_FPS104_VISUALS"
+visualGui.IgnoreGuiInset=true
+visualGui.ResetOnSpawn=false
+visualGui.DisplayOrder=800
+visualGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+visualGui.Parent=LP:WaitForChild("PlayerGui")
+
+local espColor=Color3.fromRGB(231,174,255)
+local chamsFolder=Instance.new("Folder")
+chamsFolder.Name="__CE_FPS104_Highlights"
+chamsFolder.Parent=workspace
+local function visualLine(parent,thickness,color)
+    local line=Instance.new("Frame")
+    line.Name="ESPLine"
+    line.BorderSizePixel=0
+    line.BackgroundColor3=color or espColor
+    line.Size=UDim2.fromOffset(1,thickness or 2)
+    line.AnchorPoint=Vector2.new(0.5,0.5)
+    line.Active=false
+    line.Visible=false
+    line.ZIndex=12
+    line.Parent=parent
+    return line
 end
-local fovCircle=draw("Circle")
-if fovCircle then
-    fovCircle.Thickness=1.4; fovCircle.NumSides=72
-    fovCircle.Filled=false; fovCircle.Color=Color3.fromRGB(173,108,255)
+local function placeLine(frame,startPos,endPos)
+    local delta=endPos-startPos
+    local length=delta.Magnitude
+    if length<0.1 then frame.Visible=false;return end
+    frame.Position=UDim2.fromOffset((startPos.X+endPos.X)/2,(startPos.Y+endPos.Y)/2)
+    frame.Size=UDim2.fromOffset(length,2)
+    frame.Rotation=math.deg(math.atan2(delta.Y,delta.X))
+    frame.Visible=true
 end
-local folder=Instance.new("Folder")
-folder.Name="__CE_FPS104_Highlights"
-folder.Parent=workspace
-local function record(model)
-    local r=visuals[model]
-    if r then return r end
-    r={draws={},highlights={}}
-    for _,key in ipairs({"box","name","distance","health","tracer"}) do
-        local kind=(key=="box" and "Square") or (key=="tracer" and "Line") or "Text"
-        local obj=draw(kind)
-        if obj then
-            r.draws[key]=obj
-            obj.Color=Color3.fromRGB(226,160,255)
-            if key=="box" then obj.Filled=false; obj.Thickness=1.5 end
-            if key=="tracer" then obj.Thickness=1.2 end
-            if kind=="Text" then obj.Size=13;obj.Center=true;obj.Outline=true end
+local function textLabel()
+    local label=Instance.new("TextLabel")
+    label.Name="ESPText"
+    label.AnchorPoint=Vector2.new(0.5,0)
+    label.BackgroundTransparency=1
+    label.TextColor3=espColor
+    label.TextStrokeTransparency=0.2
+    label.TextStrokeColor3=Color3.new(0,0,0)
+    label.TextSize=13
+    label.Font=Enum.Font.GothamBold
+    label.Size=UDim2.fromOffset(195,17)
+    label.Active=false
+    label.Visible=false
+    label.ZIndex=13
+    label.Parent=visualGui
+    return label
+end
+local fovSegments={}
+for i=1,72 do
+    local line=visualLine(visualGui,2,Color3.fromRGB(174,111,255))
+    line.Name="FOV"
+    fovSegments[i]=line
+end
+local function updateFOV()
+    local cam=workspace.CurrentCamera
+    local show=S.Running and S.ShowFOV and cam~=nil
+    local center=show and cam.ViewportSize/2 or Vector2.zero
+    local radius=maxFOV()
+    for i,line in ipairs(fovSegments) do
+        if show then
+            local a=(i-1)*2*math.pi/#fovSegments
+            local b=i*2*math.pi/#fovSegments
+            local p=center+Vector2.new(math.cos(a)*radius,math.sin(a)*radius)
+            local q=center+Vector2.new(math.cos(b)*radius,math.sin(b)*radius)
+            placeLine(line,p,q)
+        else
+            line.Visible=false
         end
     end
+end
+
+local function record(model)
+    local previous=visuals[model]
+    if previous then return previous end
+    local r={highlights={},lines={},labels={}}
+    for i=1,4 do r.lines[i]=visualLine(visualGui) end
+    r.lines.tracer=visualLine(visualGui)
     for i=1,10 do
-        local obj=draw("Line")
-        if obj then r.draws["bone"..i]=obj;obj.Thickness=1.4;obj.Color=Color3.fromRGB(240,192,255) end
+        r.lines["bone"..i]=visualLine(visualGui,2,Color3.fromRGB(255,201,255))
     end
+    for _,key in ipairs({"name","distance","health"}) do r.labels[key]=textLabel() end
     visuals[model]=r
     return r
 end
-local function cleanRecord(r)
-    for _,obj in pairs(r.draws) do pcall(function() obj.Visible=false;obj:Remove() end) end
-    for _,obj in pairs(r.highlights) do pcall(function() obj:Destroy() end) end
-end
 local function hideRecord(r)
-    for _,obj in pairs(r.draws) do pcall(function() obj.Visible=false end) end
+    for _,part in pairs(r.lines) do part.Visible=false end
+    for _,part in pairs(r.labels) do part.Visible=false end
+end
+local function cleanRecord(r)
+    for _,part in pairs(r.lines) do part:Destroy() end
+    for _,part in pairs(r.labels) do part:Destroy() end
+    for _,part in pairs(r.highlights) do pcall(function() part:Destroy() end) end
 end
 local function setHighlight(r,key,adornee)
     local h=r.highlights[key]
-    if not (adornee and adornee.Parent) then
+    if not (S.Chams and adornee and adornee.Parent) then
         if h then h:Destroy();r.highlights[key]=nil end
         return
     end
@@ -334,22 +385,23 @@ local function setHighlight(r,key,adornee)
         h=Instance.new("Highlight")
         h.Name="CE_Chams"
         h.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
-        h.FillColor=Color3.fromRGB(144,78,255)
-        h.OutlineColor=Color3.fromRGB(255,215,255)
         h.FillTransparency=0.52
         h.OutlineTransparency=0
-        h.Parent=folder
+        h.Parent=chamsFolder
         r.highlights[key]=h
     end
+    h.FillColor=S.ChamsColor
+    h.OutlineColor=S.ChamsColor
     h.Adornee=adornee
 end
 local function weaponModel(model)
-    for _,part in ipairs(model:GetChildren()) do
-        if part:IsA("Tool") then
-            return part:FindFirstChildWhichIsA("Model",true) or part:FindFirstChildWhichIsA("BasePart",true)
+    for _,child in ipairs(model:GetChildren()) do
+        if child:IsA("Tool") then
+            return child:FindFirstChildWhichIsA("Model",true)
+                or child:FindFirstChildWhichIsA("BasePart",true)
         end
-        if part:IsA("Model") and (part.Name:lower():find("weapon") or part.Name:lower():find("gun")) then
-            return part
+        if child:IsA("Model") and (child.Name:lower():find("weapon") or child.Name:lower():find("gun")) then
+            return child
         end
     end
     return nil
@@ -361,80 +413,103 @@ local bonePairs={
     {"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},
     {"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},
 }
+local r6Bones={
+    {"Head","Torso"},{"Torso","Left Arm"},{"Torso","Right Arm"},
+    {"Torso","Left Leg"},{"Torso","Right Leg"},
+}
+local function getBounds(model,cam)
+    local cf,size=model:GetBoundingBox()
+    local minX,minY,maxX,maxY=math.huge,math.huge,-math.huge,-math.huge
+    local valid=0
+    for x=-1,1,2 do
+        for y=-1,1,2 do
+            for z=-1,1,2 do
+                local point=cf:PointToWorldSpace(Vector3.new(size.X*x/2,size.Y*y/2,size.Z*z/2))
+                local screen=cam:WorldToViewportPoint(point)
+                if screen.Z>0.05 then
+                    minX=math.min(minX,screen.X)
+                    minY=math.min(minY,screen.Y)
+                    maxX=math.max(maxX,screen.X)
+                    maxY=math.max(maxY,screen.Y)
+                    valid=valid+1
+                end
+            end
+        end
+    end
+    if valid<4 or maxX<0 or maxY<0
+        or minX>cam.ViewportSize.X or minY>cam.ViewportSize.Y then return nil end
+    return minX,minY,maxX,maxY
+end
+local function anyESP()
+    return S.ESPBox or S.ESPName or S.ESPDistance or S.ESPHealth
+        or S.ESPTracers or S.ESPSkeleton
+end
 local function updateESP()
     local cam=workspace.CurrentCamera
     if not cam then return end
-    local models=targetModels()
-    local inFrame={}
+    local seen={}
+    local center=Vector2.new(cam.ViewportSize.X/2,cam.ViewportSize.Y)
     local own=myRoot()
-    for _,model in ipairs(models) do
-        inFrame[model]=true
+    for _,model in ipairs(targetModels()) do
+        seen[model]=true
         local r=record(model)
-        local friendly=isFriendly(model)
+        hideRecord(r)
         local root=rootOf(model)
-        local canShow=(S.ESP or S.Chams) and (S.ESPShowTeam or not friendly) and root
-        if not canShow then
-            hideRecord(r);setHighlight(r,"char",nil);setHighlight(r,"weapon",nil)
-        else
-            if S.Chams then
-                setHighlight(r,"char",model)
-                setHighlight(r,"weapon",weaponModel(model))
-            else
-                setHighlight(r,"char",nil);setHighlight(r,"weapon",nil)
-            end
-            hideRecord(r)
-            if S.ESP and drawingOK then
-                local dist=own and (root.Position-own.Position).Magnitude or 0
-                if dist<=S.MaxDistance then
-                    local boundcf,bounds=model:GetBoundingBox()
-                    local top=cam:WorldToViewportPoint(boundcf.Position+Vector3.new(0,bounds.Y/2,0))
-                    local bottom=cam:WorldToViewportPoint(boundcf.Position-Vector3.new(0,bounds.Y/2,0))
-                    if top.Z>0 and bottom.Z>0 then
-                        local height=math.abs(bottom.Y-top.Y)
-                        local width=height*math.clamp(bounds.X/math.max(bounds.Y,0.01),0.32,0.85)
-                        local mid=(top.X+bottom.X)/2
-                        local x=mid-width/2
-                        local y=math.min(top.Y,bottom.Y)
-                        local function update(key,enabled,action)
-                            local obj=r.draws[key]
-                            if obj and enabled then action(obj);obj.Visible=true end
-                        end
-                        update("box",S.ESPBox,function(o)
-                            o.Position=Vector2.new(x,y);o.Size=Vector2.new(width,height)
-                        end)
-                        update("name",S.ESPName,function(o)
-                            local player=Players:GetPlayerFromCharacter(model)
-                            o.Text=player and player.DisplayName or model.Name
-                            o.Position=Vector2.new(mid,y-16)
-                        end)
-                        update("distance",S.ESPDistance,function(o)
-                            o.Text=tostring(math.floor(dist)).." studs"
-                            o.Position=Vector2.new(mid,y+height+3)
-                        end)
-                        update("health",S.ESPHealth,function(o)
-                            local humanoid=model:FindFirstChildOfClass("Humanoid")
-                            if humanoid then
-                                o.Text=math.ceil(humanoid.Health).."/"..math.ceil(humanoid.MaxHealth).." HP"
-                                o.Position=Vector2.new(mid,y+height+19)
-                            end
-                        end)
-                        update("tracer",S.ESPTracers,function(o)
-                            o.From=Vector2.new(cam.ViewportSize.X/2,cam.ViewportSize.Y)
-                            o.To=Vector2.new(mid,y+height)
-                        end)
-                        if S.ESPSkeleton then
-                            for i,pair in ipairs(bonePairs) do
-                                local a,b=model:FindFirstChild(pair[1]),model:FindFirstChild(pair[2])
-                                local o=r.draws["bone"..i]
-                                if o and a and b then
-                                    local pa,va=cam:WorldToViewportPoint(a.Position)
-                                    local pb,vb=cam:WorldToViewportPoint(b.Position)
-                                    if va and vb then
-                                        o.From=Vector2.new(pa.X,pa.Y)
-                                        o.To=Vector2.new(pb.X,pb.Y)
-                                        o.Visible=true
-                                    end
-                                end
+        local allowed=root and living(model) and (S.ESPShowTeam or not isFriendly(model))
+        setHighlight(r,"character",allowed and model or nil)
+        setHighlight(r,"weapon",allowed and weaponModel(model) or nil)
+        if allowed and anyESP() then
+            local ok,x1,y1,x2,y2=pcall(getBounds,model,cam)
+            if ok and x1 then
+                local mid=(x1+x2)/2
+                local width=math.clamp(x2-x1,2,cam.ViewportSize.X*2)
+                local height=math.clamp(y2-y1,2,cam.ViewportSize.Y*2)
+                local left=mid-width/2
+                local right=mid+width/2
+                local top=y1
+                local bottom=y1+height
+                if S.ESPBox then
+                    placeLine(r.lines[1],Vector2.new(left,top),Vector2.new(right,top))
+                    placeLine(r.lines[2],Vector2.new(right,top),Vector2.new(right,bottom))
+                    placeLine(r.lines[3],Vector2.new(right,bottom),Vector2.new(left,bottom))
+                    placeLine(r.lines[4],Vector2.new(left,bottom),Vector2.new(left,top))
+                end
+                if S.ESPName then
+                    local player=Players:GetPlayerFromCharacter(model)
+                    local name=r.labels.name
+                    name.Text=player and player.DisplayName or model.Name
+                    name.Position=UDim2.fromOffset(mid,top-19)
+                    name.Visible=true
+                end
+                if S.ESPDistance then
+                    local dist=own and (root.Position-own.Position).Magnitude or 0
+                    local label=r.labels.distance
+                    label.Text=tostring(math.floor(dist)).." studs"
+                    label.Position=UDim2.fromOffset(mid,bottom+3)
+                    label.Visible=true
+                end
+                if S.ESPHealth then
+                    local hum=model:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        local label=r.labels.health
+                        label.Text=math.ceil(hum.Health).."/"..math.ceil(hum.MaxHealth).." HP"
+                        label.Position=UDim2.fromOffset(mid,bottom+20)
+                        label.Visible=true
+                    end
+                end
+                if S.ESPTracers then
+                    placeLine(r.lines.tracer,center,Vector2.new(mid,bottom))
+                end
+                if S.ESPSkeleton then
+                    local bones=model:FindFirstChild("UpperTorso") and bonePairs or r6Bones
+                    for i,pair in ipairs(bones) do
+                        local first=model:FindFirstChild(pair[1],true)
+                        local second=model:FindFirstChild(pair[2],true)
+                        if first and second and first:IsA("BasePart") and second:IsA("BasePart") then
+                            local a=cam:WorldToViewportPoint(first.Position)
+                            local b=cam:WorldToViewportPoint(second.Position)
+                            if a.Z>0 and b.Z>0 then
+                                placeLine(r.lines["bone"..i],Vector2.new(a.X,a.Y),Vector2.new(b.X,b.Y))
                             end
                         end
                     end
@@ -443,8 +518,8 @@ local function updateESP()
         end
     end
     for model,r in pairs(visuals) do
-        if not inFrame[model] or not model.Parent then
-            cleanRecord(r); visuals[model]=nil
+        if not seen[model] or not model.Parent then
+            cleanRecord(r);visuals[model]=nil
         end
     end
 end
@@ -687,8 +762,8 @@ local function cleanup()
     pcall(function() RunService:UnbindFromRenderStep("CAT_EMPIRE_FPS104_AIM") end)
     if autoRotateHum and autoRotateHum.Parent then pcall(function() autoRotateHum.AutoRotate=oldAutoRotate end) end
     for model,r in pairs(visuals) do cleanRecord(r);visuals[model]=nil end
-    for _,obj in ipairs(Drawings) do pcall(function() obj:Remove() end) end
-    pcall(function() folder:Destroy() end)
+    pcall(function() visualGui:Destroy() end)
+    pcall(function() chamsFolder:Destroy() end)
     pcall(function() if viewport then viewport.Parent:Destroy() end end)
     pcall(function() window:Destroy() end)
     -- Silent hook remains inert after unload if executor has no restorefunction.
@@ -732,14 +807,7 @@ local lastUpdate=0
 RunService:BindToRenderStep("CAT_EMPIRE_FPS104_AIM",Enum.RenderPriority.Camera.Value+8,function(dt)
     if not S.Running then return end
     local ok,err=pcall(function()
-        if fovCircle then
-            local cam=workspace.CurrentCamera
-            fovCircle.Visible=S.ShowFOV and cam~=nil
-            if cam then
-                fovCircle.Position=cam.ViewportSize/2
-                fovCircle.Radius=maxFOV()
-            end
-        end
+        updateFOV()
         updateAim(dt)
         updatePreviewSpin(dt)
     end)
@@ -758,8 +826,5 @@ Links[#Links+1]=RunService.Heartbeat:Connect(function(dt)
     end)
     if not ok then warnOnce("Heartbeat",err) end
 end)
-if not drawingOK then
-    notify("Drawing API unavailable: ESP boxes/lines/FOV disabled. Chams remain usable.")
-end
 status("CAT EMPIRE FPS initialized")
 notify("CAT EMPIRE loaded: "..gameTitle)
