@@ -415,27 +415,38 @@ local r6Bones={
     {"Torso","Left Leg"},{"Torso","Right Leg"},
 }
 local function getBounds(model,cam)
-    local cf,size=model:GetBoundingBox()
-    local minX,minY,maxX,maxY=math.huge,math.huge,-math.huge,-math.huge
-    local valid=0
-    for x=-1,1,2 do
-        for y=-1,1,2 do
-            for z=-1,1,2 do
-                local point=cf:PointToWorldSpace(Vector3.new(size.X*x/2,size.Y*y/2,size.Z*z/2))
-                local screen=cam:WorldToViewportPoint(point)
-                if screen.Z>0.05 then
-                    minX=math.min(minX,screen.X)
-                    minY=math.min(minY,screen.Y)
-                    maxX=math.max(maxX,screen.X)
-                    maxY=math.max(maxY,screen.Y)
-                    valid=valid+1
-                end
-            end
-        end
-    end
-    if valid<4 or maxX<0 or maxY<0
-        or minX>cam.ViewportSize.X or minY>cam.ViewportSize.Y then return nil end
-    return minX,minY,maxX,maxY
+    local root=rootOf(model)
+    local head=model:FindFirstChild("Head")
+    if not (root and head and head:IsA("BasePart")) then return nil end
+    local viewport=cam.ViewportSize
+    local rootScreen=cam:WorldToViewportPoint(root.Position)
+    if rootScreen.Z<=1.5 or rootScreen.Z>3500 then return nil end
+    local headTop=head.Position+head.CFrame.UpVector*(head.Size.Y*0.6)
+    local leg=model:FindFirstChild("LeftFoot") or model:FindFirstChild("RightFoot")
+        or model:FindFirstChild("Left Leg") or model:FindFirstChild("Right Leg")
+    local feet=leg and leg:IsA("BasePart")
+        and (leg.Position-leg.CFrame.UpVector*(leg.Size.Y*0.55))
+        or (root.Position-root.CFrame.UpVector*3)
+    local top=cam:WorldToViewportPoint(headTop)
+    local bottom=cam:WorldToViewportPoint(feet)
+    if top.Z<=0.5 or bottom.Z<=0.5 then return nil end
+    local fullHeight=math.abs(bottom.Y-top.Y)
+    if fullHeight<5 or fullHeight>viewport.Y*3 then return nil end
+    if math.abs(rootScreen.X)>viewport.X*3 or math.abs(rootScreen.Y)>viewport.Y*3 then return nil end
+    local height=math.clamp(fullHeight,8,viewport.Y*0.68)
+    local width=math.clamp(height*0.46,5,viewport.X*0.38)
+    local middleY=(top.Y+bottom.Y)/2
+    local left=rootScreen.X-width/2
+    local right=rootScreen.X+width/2
+    local upper=middleY-height/2
+    local lower=middleY+height/2
+    if right<0 or left>viewport.X or lower<0 or upper>viewport.Y then return nil end
+    local x1=math.clamp(left,1,viewport.X-1)
+    local x2=math.clamp(right,1,viewport.X-1)
+    local y1=math.clamp(upper,1,viewport.Y-1)
+    local y2=math.clamp(lower,1,viewport.Y-1)
+    if x2-x1<5 or y2-y1<7 then return nil end
+    return x1,y1,x2,y2
 end
 local function anyESP()
     return S.ESPBox or S.ESPName or S.ESPDistance or S.ESPHealth
@@ -514,8 +525,12 @@ local function updateESP()
                         if first and second and first:IsA("BasePart") and second:IsA("BasePart") then
                             local a=cam:WorldToViewportPoint(first.Position)
                             local b=cam:WorldToViewportPoint(second.Position)
-                            if a.Z>0 and b.Z>0 then
-                                placeLine(r.lines["bone"..i],Vector2.new(a.X,a.Y),Vector2.new(b.X,b.Y))
+                            if a.Z>1.5 and b.Z>1.5 then
+                                local w,h=cam.ViewportSize.X,cam.ViewportSize.Y
+                                if a.X>=0 and a.X<=w and a.Y>=0 and a.Y<=h
+                                    and b.X>=0 and b.X<=w and b.Y>=0 and b.Y<=h then
+                                    placeLine(r.lines["bone"..i],Vector2.new(a.X,a.Y),Vector2.new(b.X,b.Y))
+                                end
                             end
                         end
                     end
