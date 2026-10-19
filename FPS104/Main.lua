@@ -563,39 +563,61 @@ local function findUI()
     end
     return nil
 end
-local function setupPreview()
-    if viewport then return true end
+local function findSkinContent()
     local gui=findUI()
-    if not gui then return false end
+    if not gui then return nil end
+    for _,item in ipairs(gui:GetDescendants()) do
+        if (item:IsA("TextLabel") or item:IsA("TextButton"))
+            and (item.Text=="Refresh 3D Preview" or item.Text=="Equip Selected Skin") then
+            local p=item.Parent
+            while p and p~=gui do
+                if p:IsA("ScrollingFrame") then return p end
+                p=p.Parent
+            end
+        end
+    end
+    return nil
+end
+local function setupPreview()
+    if viewport and viewport.Parent then return true end
+    local content=findSkinContent()
+    if not content then return false end
     local panel=Instance.new("Frame")
     panel.Name="CAT_EMPIRE_SKIN_PREVIEW"
-    panel.Size=UDim2.fromOffset(235,255)
-    panel.AnchorPoint=Vector2.new(1,0.5)
-    panel.Position=UDim2.new(1,-20,0.5,0)
+    panel.LayoutOrder=9990
+    panel.Size=UDim2.new(1,-12,0,238)
     panel.BackgroundColor3=Color3.fromRGB(20,16,30)
     panel.BorderSizePixel=0
-    panel.Parent=gui
+    panel.ClipsDescendants=true
+    panel.Parent=content
     local corner=Instance.new("UICorner")
-    corner.CornerRadius=UDim.new(0,10);corner.Parent=panel
-    local label=Instance.new("TextLabel")
-    label.Size=UDim2.new(1,0,0,28)
-    label.BackgroundTransparency=1
-    label.TextColor3=Color3.fromRGB(224,199,255)
-    label.Font=Enum.Font.GothamBold
-    label.TextSize=12;label.Text="3D SKIN PREVIEW";label.Parent=panel
+    corner.CornerRadius=UDim.new(0,10)
+    corner.Parent=panel
     viewport=Instance.new("ViewportFrame")
     viewport.Name="SkinViewport"
-    viewport.Size=UDim2.new(1,-14,1,-40)
-    viewport.Position=UDim2.fromOffset(7,30)
+    viewport.Size=UDim2.new(1,-12,1,-12)
+    viewport.Position=UDim2.fromOffset(6,6)
     viewport.BackgroundColor3=Color3.fromRGB(12,11,20)
-    viewport.BackgroundTransparency=0.05
+    viewport.BackgroundTransparency=0
     viewport.Ambient=Color3.fromRGB(180,155,220)
     viewport.LightColor=Color3.fromRGB(255,225,255)
     viewport.Parent=panel
     previewCam=Instance.new("Camera")
-    previewCam.Parent=viewport;viewport.CurrentCamera=previewCam
+    previewCam.Parent=viewport
+    viewport.CurrentCamera=previewCam
     worldModel=Instance.new("WorldModel")
     worldModel.Parent=viewport
+    -- The viewport is a genuine descendant of the Skins tab's scrolling content.
+    -- Extend canvas for UI libraries that do not use AutomaticCanvasSize.
+    pcall(function()
+        if content.AutomaticCanvasSize==Enum.AutomaticSize.None then
+            local layout=content:FindFirstChildWhichIsA("UIListLayout")
+            if layout then
+                local wanted=layout.AbsoluteContentSize.Y+255
+                content.CanvasSize=UDim2.new(0,0,0,math.max(content.CanvasSize.Y.Offset,wanted))
+            end
+        end
+    end)
     return true
 end
 local function updatePreview()
@@ -716,6 +738,34 @@ toggle(Tabs.Visuals,"ESPTracers","ESP Lines")
 toggle(Tabs.Visuals,"ESPSkeleton","ESP Skeleton")
 toggle(Tabs.Visuals,"ESPShowTeam","Show Friendly Players")
 toggle(Tabs.Visuals,"Chams","Chams")
+local palette={
+    Purple=Color3.fromRGB(144,78,255),
+    Pink=Color3.fromRGB(255,105,180),
+    Red=Color3.fromRGB(255,72,88),
+    Orange=Color3.fromRGB(255,153,62),
+    Yellow=Color3.fromRGB(255,225,96),
+    Green=Color3.fromRGB(81,232,135),
+    Blue=Color3.fromRGB(84,153,255),
+    Cyan=Color3.fromRGB(67,230,234),
+    White=Color3.fromRGB(255,255,255),
+}
+local hasPicker=pcall(function()
+    Tabs.Visuals:AddColorpicker("FPS104_ChamsPalette",{
+        Title="Chams Color",Default=S.ChamsColor,
+        Callback=function(color)
+            if typeof(color)=="Color3" then S.ChamsColor=color end
+        end,
+    })
+end)
+if not hasPicker then
+    Tabs.Visuals:AddDropdown("FPS104_ChamsPalette",{
+        Title="Chams Color",Values={"Purple","Pink","Red","Orange","Yellow","Green","Blue","Cyan","White"},
+        Default="Purple",
+        Callback=function(value)
+            if palette[value] then S.ChamsColor=palette[value] end
+        end,
+    })
+end
 
 toggle(Tabs.Combat,"WeaponProfiles","Aimbot By Weapon")
 Tabs.Combat:AddButton({Title="Save Weapon Aim Settings",Callback=function()
@@ -726,6 +776,49 @@ Tabs.Combat:AddButton({Title="Save Weapon Aim Settings",Callback=function()
 end})
 slider(Tabs.Combat,"SpinSpeed","Spin Bot Speed",60,1600,250,0)
 toggle(Tabs.Combat,"SpinBot","Spin Bot")
+local function equipSelectedWeapon()
+    local selected=S.SkinWeapon
+    if selected=="" or not (native.WeaponInfo and native.WeaponInfo.All[selected]) then
+        notify("Select a weapon")
+        return
+    end
+    local packet=native.Net and native.Net.packets and native.Net.packets.equipWeapon
+    if not packet or type(packet.send)~="function" then
+        notify("Equip unavailable")
+        return
+    end
+    local state=native.ClientState
+    local saved=state and state.Save and state.Save.Loadout
+    if saved and native.LoadoutUtils and type(native.LoadoutUtils.canEquipWeapon)=="function" then
+        local current={
+            Primary=atomValue(saved.Primary),
+            Secondary=atomValue(saved.Secondary),
+            Melee=atomValue(saved.Melee),
+        }
+        if current.Primary and current.Secondary and current.Melee then
+            local ok,allow,reason=pcall(native.LoadoutUtils.canEquipWeapon,current,selected)
+            if ok and allow==false then
+                notify("Cannot equip: "..tostring(reason or "restricted"))
+                return
+            end
+        end
+    end
+    local ok,err=pcall(packet.send,{weaponId=selected})
+    if not ok then warnOnce("Equip Weapon",err);notify("Equip failed");return end
+    -- Do not report success merely because a client request was sent.
+    task.delay(1.5,function()
+        if not S.Running then return end
+        local info=native.WeaponInfo.All[selected]
+        local slot=info and info.BaseConfig and info.BaseConfig.General and info.BaseConfig.General.Slot
+        local currentSlot=slot and saved and saved[slot]
+        local equipped=atomValue(currentSlot)
+        if equipped==selected then
+            notify("Equipped: "..selected)
+        else
+            notify("Equip requested; verify ownership in loadout")
+        end
+    end)
+end
 local weaponNames=readWeaponInfo()
 if #weaponNames==0 then weaponNames={"Unavailable"} end
 local skinsDrop
@@ -753,7 +846,8 @@ skinsDrop=Tabs.Skins:AddDropdown("FPS104_SkinId",{
 })
 toggle(Tabs.Skins,"PreviewSpin","Rotate 3D Preview")
 Tabs.Skins:AddButton({Title="Refresh 3D Preview",Callback=updatePreview})
-Tabs.Skins:AddButton({Title="Equip Selected Owned Skin",Callback=equipSkin})
+Tabs.Skins:AddButton({Title="Equip Selected Skin",Callback=equipSkin})
+Tabs.Skins:AddButton({Title="Equip Selected Weapon",Callback=equipSelectedWeapon})
 
 local function cleanup()
     if not S.Running then return end
