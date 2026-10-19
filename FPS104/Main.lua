@@ -70,6 +70,7 @@ local function initializeNative()
     native.RenderPipeline=safeRequire(client,"Camera","RenderPipeline")
     native.ClientState=safeRequire(client,"State")
     native.LoadoutUtils=safeRequire(shared,"Utils","LoadoutUtils")
+    native.WeaponRig=safeRequire(shared,"Weapons","WeaponInfo","WeaponRig")
 end
 initializeNative()
 local function atomValue(a)
@@ -571,17 +572,32 @@ local function findSkinContent()
     local gui=findUI()
     if not gui then return nil end
     local anchors={
-        ["Refresh 3D Preview"]=true,["Equip Selected Skin"]=true,
-        ["Equip Selected Weapon"]=true,["Rotate 3D Preview"]=true,
+        ["3D Preview"]=true,["Refresh 3D Preview"]=true,
+        ["Equip Selected Skin"]=true,["Equip Selected Weapon"]=true,
     }
     for _,item in ipairs(gui:GetDescendants()) do
         if (item:IsA("TextLabel") or item:IsA("TextButton"))
             and anchors[item.Text] then
             local p=item.Parent
+            local scroller,layoutHost=nil,nil
             while p and p~=gui do
-                if p:IsA("ScrollingFrame") then return p end
+                if p:IsA("ScrollingFrame") then
+                    scroller=p
+                    if p:FindFirstChildWhichIsA("UIListLayout") then
+                        layoutHost=p
+                    end
+                    break
+                end
+                if p:IsA("Frame") and p.AbsoluteSize.X>195 then
+                    local layout=p:FindFirstChildWhichIsA("UIListLayout")
+                    if layout and #p:GetChildren()>=4 then
+                        layoutHost=p
+                    end
+                end
                 p=p.Parent
             end
+            if layoutHost then return layoutHost end
+            if scroller then return scroller end
         end
     end
     return nil
@@ -615,14 +631,14 @@ local function setupPreview()
     viewport.CurrentCamera=previewCam
     worldModel=Instance.new("WorldModel")
     worldModel.Parent=viewport
-    -- The viewport is a genuine descendant of the Skins tab's scrolling content.
-    -- Extend canvas for UI libraries that do not use AutomaticCanvasSize.
     pcall(function()
-        if content.AutomaticCanvasSize==Enum.AutomaticSize.None then
-            local layout=content:FindFirstChildWhichIsA("UIListLayout")
-            if layout then
-                local wanted=layout.AbsoluteContentSize.Y+255
-                content.CanvasSize=UDim2.new(0,0,0,math.max(content.CanvasSize.Y.Offset,wanted))
+        local scrolling=content:IsA("ScrollingFrame") and content
+            or content:FindFirstAncestorWhichIsA("ScrollingFrame")
+        if scrolling and scrolling.AutomaticCanvasSize==Enum.AutomaticSize.None then
+            local holder=content:FindFirstChildWhichIsA("UIListLayout")
+            if holder then
+                scrolling.CanvasSize=UDim2.new(0,0,0,
+                    math.max(scrolling.CanvasSize.Y.Offset,holder.AbsoluteContentSize.Y+245))
             end
         end
     end)
@@ -634,27 +650,41 @@ local function updatePreview()
     local info=native.WeaponInfo and native.WeaponInfo.All[S.SkinWeapon]
     if not info or type(info.getRig)~="function" then return end
     local ok,rig=pcall(info.getRig,S.SkinId~="" and S.SkinId or nil)
-    if not ok or typeof(rig)~="Instance" then
-        warnOnce("Skin 3D","Rig unavailable for "..S.SkinWeapon)
+    if not ok or type(rig)~="table" or typeof(rig.Model)~="Instance" then
+        warnOnce("Skin preview","Rig unavailable: "..tostring(S.SkinWeapon))
         return
     end
-    local cloneOK,model=pcall(function() return rig:Clone() end)
+    -- WeaponInfo.getRig returns {Model, Template, Tip, Sight}, not Model.
+    local cloneOK,model=pcall(function() return rig.Model:Clone() end)
     if not cloneOK or not model then return end
     if not model:IsA("Model") then
         local wrapper=Instance.new("Model")
-        model.Parent=wrapper;model=wrapper
+        model.Parent=wrapper
+        model=wrapper
+    end
+    local cleaner=native.WeaponRig
+    if cleaner and type(cleaner.isolateViewport)=="function" then
+        pcall(cleaner.isolateViewport,model)
     end
     for _,item in ipairs(model:GetDescendants()) do
-        if item:IsA("BasePart") then item.Anchored=true;item.CanCollide=false end
-        if item:IsA("Script") or item:IsA("LocalScript") then item:Destroy() end
+        if item:IsA("BasePart") then
+            item.Anchored=true
+            item.CanCollide=false
+            item.CanQuery=false
+        elseif item:IsA("Script") or item:IsA("LocalScript") then
+            item:Destroy()
+        end
     end
     model.Parent=worldModel
     local cf,size=model:GetBoundingBox()
+    if size.Magnitude<0.01 then model:Destroy();return end
     model:PivotTo(CFrame.new(-cf.Position)*model:GetPivot())
-    previewModel=model;previewAngle=0
-    local radius=math.max(size.X,size.Y,size.Z,2)
-    previewCam.CFrame=CFrame.lookAt(Vector3.new(radius*1.5,radius*0.75,radius*1.9),Vector3.zero)
-    status("3D preview: "..S.SkinWeapon.." / "..(S.SkinId=="" and "Default" or S.SkinId))
+    previewModel=model
+    previewAngle=0
+    local radius=math.max(size.X,size.Y,size.Z,1)
+    previewCam.FieldOfView=45
+    previewCam.CFrame=CFrame.lookAt(
+        Vector3.new(radius*1.35,radius*0.65,radius*1.9),Vector3.zero)
 end
 local function updatePreviewSpin(dt)
     if previewModel and previewModel.Parent and S.PreviewSpin then
@@ -663,15 +693,52 @@ local function updatePreviewSpin(dt)
     end
 end
 local function equipSkin()
-    if S.SkinWeapon=="" or S.SkinId=="" then notify("Select a weapon and skin");return end
-    local packet=native.Net and native.Net.packets and native.Net.packets.equipSkin
-    if not (packet and type(packet.send)=="function") then notify("equipSkin packet unavailable");return end
-    local ok,err=pcall(packet.send,{weaponId=S.SkinWeapon,skinId=S.SkinId})
-    if ok then
-        notify("Equip request sent (requires owned skin and server approval)")
-    else
-        warnOnce("equipSkin",err);notify("Skin equip failed")
+    local weapon=S.SkinWeapon
+    local skin=S.SkinId
+    if weapon=="" then notify("Select a weapon");return end
+    local info=native.WeaponInfo and native.WeaponInfo.All[weapon]
+    if not info then notify("Weapon unavailable");return end
+    if skin~="" and not (info.Skins and info.Skins[skin]) then
+        notify("Skin unavailable");return
     end
+    local state=native.ClientState
+    local save=state and state.Save
+    local inventory=save and save.Inventory and atomValue(save.Inventory.Skins)
+    if skin~="" then
+        if type(inventory)~="table" then
+            notify("Skin inventory unavailable");return
+        end
+        local slots=inventory[weapon]
+        local copies=type(slots)=="table" and slots[skin]
+        if type(copies)~="table" or #copies==0 then
+            notify("Skin not owned");return
+        end
+    end
+    local packet=native.Net and native.Net.packets and native.Net.packets.equipSkin
+    if not (packet and type(packet.send)=="function") then
+        notify("Equip unavailable");return
+    end
+    local ok,err=pcall(function()
+        local data={weaponId=weapon}
+        if skin~="" then data.skinId=skin end
+        packet.send(data)
+    end)
+    if not ok then
+        warnOnce("Skin equip",err)
+        notify("Skin equip failed")
+        return
+    end
+    -- The native loadout menu updates this Charm atom after sending equipSkin.
+    local skinsAtom=save and save.Loadout and save.Loadout.Skins
+    if type(skinsAtom)=="function" then
+        local previous=atomValue(skinsAtom)
+        if type(previous)=="table" then
+            local update=table.clone(previous)
+            update[weapon]=skin~="" and skin or nil
+            pcall(skinsAtom,update)
+        end
+    end
+    notify("Skin request sent: "..(skin~="" and skin or "Default"))
 end
 
 local gameTitle="Roblox FPS"
@@ -882,6 +949,7 @@ skinsDrop=Tabs.Skins:AddDropdown("FPS104_SkinId",{
         updatePreview()
     end,
 })
+Tabs.Skins:AddParagraph({Title="3D Preview",Content=""})
 toggle(Tabs.Skins,"PreviewSpin","Rotate 3D Preview")
 Tabs.Skins:AddButton({Title="Refresh 3D Preview",Callback=updatePreview})
 Tabs.Skins:AddButton({Title="Equip Selected Skin",Callback=equipSkin})
@@ -927,7 +995,13 @@ end
 loadSettings()
 S.SkinWeapon=weaponNames[1]~="Unavailable" and weaponNames[1] or ""
 task.defer(reloadSkins)
-task.delay(1.5,updatePreview)
+task.spawn(function()
+    for attempt=1,35 do
+        if not S.Running then return end
+        if setupPreview() then updatePreview();return end
+        task.wait(0.8)
+    end
+end)
 local function updateWeaponCatalog()
     if weaponNames[1]=="Unavailable" then
         initializeNative()
