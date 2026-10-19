@@ -17,7 +17,7 @@ if type(Env.__CE_FPS104_CLEANUP) == "function" then pcall(Env.__CE_FPS104_CLEANU
 local payload = Env.__CE_F_91A7
 assert(type(payload) == "string" and #payload > 0, "Run CAT EMPIRE Loader/Loader.lua")
 local Fluent = assert(loadstring(payload))()
-local Links, Toggles, Drawings = {}, {}, {}
+local Links, Toggles = {}, {}
 local S = {
     Running=true, Aimbot=false, AimbotSafe=false, SilentAim=false,
     AimPart="Head", AimActivation="Mouse Right Button", FOVDiameter=380,
@@ -26,7 +26,7 @@ local S = {
     WeaponProfiles=true, ProfilesByWeapon={}, CurrentWeapon="",
     ESPBox=true, ESPName=true, ESPDistance=true, ESPHealth=true,
     ESPTracers=false, ESPSkeleton=false, ESPShowTeam=false, Chams=false,
-    ChamsColor=Color3.fromRGB(144,78,255), ShowFOV=true,
+    ChamsColor=Color3.fromRGB(144,78,255), ChamsColorHex="904EFF", ShowFOV=true,
     SpinBot=false, SpinSpeed=250, SkinWeapon="", SkinId="", PreviewSpin=true,
     AutoRejoin=false, AntiAFK=false, AutoCloseUI=false,
     AutoLoadAfterRejoin=false, AutoLoadProfiles=false, BoostFPS=false,
@@ -39,8 +39,8 @@ local native = {}
 local window, viewport, previewCam, worldModel, previewModel
 local previewAngle = 0
 local lastAim = nil
-local lastDraw, lastVisuals, lastWeapon = 0,0,0
-local originalSend, hookedSend
+local lastDraw, lastWeapon = 0,0
+local hookedSend
 local function status(s) S.LastAction=tostring(s) end
 local function warnOnce(where, message)
     local m=tostring(where)..": "..tostring(message)
@@ -229,7 +229,7 @@ local function updateAim(dt)
     local strength= S.Aimbot and ((preset and preset.Smooth) or S.AimSmooth)
         or ((preset and preset.Safe) or S.SafeSmooth)
     local alpha=smoothFactor(dt,strength)
-    -- Single camera writer; the game's AimAssistApply stage is Camera+4.
+    -- Single camera writer after the native camera pipeline.
     cam.CFrame=cam.CFrame:Lerp(desired,alpha)
 end
 
@@ -272,7 +272,7 @@ local function installSilent()
         warnOnce("Silent Aim",err)
         return false
     end
-    originalSend=old; hookedSend=true
+    hookedSend=true
     S.SilentHookStatus="Shot hook installed; server acceptance unverified"
     return true
 end
@@ -450,6 +450,15 @@ local function updateESP()
     local seen={}
     local center=Vector2.new(cam.ViewportSize.X/2,cam.ViewportSize.Y)
     local own=myRoot()
+    local hex=type(S.ChamsColorHex)=="string" and S.ChamsColorHex:gsub("#","") or ""
+    if #hex==6 and S._lastChamsHex~=hex then
+        local n=tonumber(hex,16)
+        if n then
+            S.ChamsColor=Color3.fromRGB(
+                math.floor(n/65536)%256,math.floor(n/256)%256,n%256)
+            S._lastChamsHex=hex
+        end
+    end
     for _,model in ipairs(targetModels()) do
         seen[model]=true
         local r=record(model)
@@ -566,9 +575,13 @@ end
 local function findSkinContent()
     local gui=findUI()
     if not gui then return nil end
+    local anchors={
+        ["Refresh 3D Preview"]=true,["Equip Selected Skin"]=true,
+        ["Equip Selected Weapon"]=true,["Rotate 3D Preview"]=true,
+    }
     for _,item in ipairs(gui:GetDescendants()) do
         if (item:IsA("TextLabel") or item:IsA("TextButton"))
-            and (item.Text=="Refresh 3D Preview" or item.Text=="Equip Selected Skin") then
+            and anchors[item.Text] then
             local p=item.Parent
             while p and p~=gui do
                 if p:IsA("ScrollingFrame") then return p end
@@ -666,8 +679,15 @@ local function equipSkin()
     end
 end
 
-local okInfo,gameInfo=pcall(MarketplaceService.GetProductInfo,MarketplaceService,game.PlaceId)
-local gameTitle=okInfo and gameInfo and gameInfo.Name or "Roblox FPS"
+local gameTitle="Roblox FPS"
+for _=1,3 do
+    local okInfo,gameInfo=pcall(MarketplaceService.GetProductInfo,MarketplaceService,game.PlaceId)
+    if okInfo and gameInfo and type(gameInfo.Name)=="string" and #gameInfo.Name>0 then
+        gameTitle=gameInfo.Name
+        break
+    end
+    task.wait(0.25)
+end
 window=Fluent:CreateWindow({
     Title="CAT EMPIRE",
     SubTitle=gameTitle,
@@ -753,7 +773,13 @@ local hasPicker=pcall(function()
     Tabs.Visuals:AddColorpicker("FPS104_ChamsPalette",{
         Title="Chams Color",Default=S.ChamsColor,
         Callback=function(color)
-            if typeof(color)=="Color3" then S.ChamsColor=color end
+            if typeof(color)=="Color3" then
+                S.ChamsColor=color
+                local r=math.round(color.R*255)
+                local g=math.round(color.G*255)
+                local b=math.round(color.B*255)
+                S.ChamsColorHex=string.format("%02X%02X%02X",r,g,b)
+            end
         end,
     })
 end)
@@ -762,7 +788,12 @@ if not hasPicker then
         Title="Chams Color",Values={"Purple","Pink","Red","Orange","Yellow","Green","Blue","Cyan","White"},
         Default="Purple",
         Callback=function(value)
-            if palette[value] then S.ChamsColor=palette[value] end
+            if palette[value] then
+                S.ChamsColor=palette[value]
+                local c=palette[value]
+                S.ChamsColorHex=string.format("%02X%02X%02X",
+                    math.round(c.R*255),math.round(c.G*255),math.round(c.B*255))
+            end
         end,
     })
 end
@@ -833,7 +864,7 @@ local function reloadSkins()
     pcall(function() skinsDrop:SetValues(names);skinsDrop:SetValue("Default") end)
     updatePreview()
 end
-Tabs.Skins:AddDropdown("FPS104_SkinWeapon",{
+local weaponPicker=Tabs.Skins:AddDropdown("FPS104_SkinWeapon",{
     Title="Weapon",Values=weaponNames,Default=weaponNames[1],
     Callback=function(v) S.SkinWeapon=tostring(v or "");reloadSkins() end,
 })
@@ -881,7 +912,7 @@ local function loadSettings()
         GuiName="CAT_EMPIRE_FPS104_104856666707760",
         ExtraProfileTables={"ProfilesByWeapon"},
         ExtraProfileStrings={"AimPart","AimActivation","FOVDiameter","AimSmooth",
-            "SafeSmooth","SpinSpeed","SkinWeapon","SkinId"},
+            "SafeSmooth","SpinSpeed","SkinWeapon","SkinId","ChamsColorHex"},
     }
     local result,fn=pcall(initializer,context)
     if not result then warnOnce("Settings init",fn)
@@ -893,8 +924,19 @@ task.defer(reloadSkins)
 task.delay(1.5,updatePreview)
 local function updateWeapon()
     local name=currentWeapon()
-    if name~=S.CurrentWeapon then
-        S.CurrentWeapon=name
+    if name~=S.CurrentWeapon then S.CurrentWeapon=name end
+    if weaponNames[1]=="Unavailable" then
+        initializeNative()
+        local loaded=readWeaponInfo()
+        if #loaded>0 then
+            weaponNames=loaded
+            S.SkinWeapon=loaded[1]
+            pcall(function()
+                weaponPicker:SetValues(loaded)
+                weaponPicker:SetValue(loaded[1])
+            end)
+            task.defer(reloadSkins)
+        end
     end
 end
 local lastUpdate=0
@@ -914,9 +956,6 @@ Links[#Links+1]=RunService.Heartbeat:Connect(function(dt)
         local now=os.clock()
         if now-lastDraw>0.05 then lastDraw=now;updateESP() end
         if now-lastWeapon>0.45 then lastWeapon=now;updateWeapon() end
-        if now-lastVisuals>1.2 then
-            lastVisuals=now
-        end
     end)
     if not ok then warnOnce("Heartbeat",err) end
 end)
