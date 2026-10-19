@@ -20,26 +20,24 @@ local Fluent = assert(loadstring(payload))()
 local Links, Toggles = {}, {}
 local S = {
     Running=true, Aimbot=false, AimbotSafe=false, SilentAim=false,
-    AimPart="Head", AimActivation="Mouse Right Button", FOVDiameter=380,
+    AimPart="Head", Keybind="MouseButton2", KeybindMode="Hold", FOVDiameter=380,
     AimSmooth=0.24, SafeSmooth=0.09,
     VisibleOnly=true, StickyTarget=true,
-    WeaponProfiles=true, ProfilesByWeapon={}, CurrentWeapon="",
-    ESPBox=true, ESPName=true, ESPDistance=true, ESPHealth=true,
+        ESPBox=true, ESPName=true, ESPDistance=true, ESPHealth=true,
     ESPTracers=false, ESPSkeleton=false, ESPShowTeam=false, Chams=false,
     ChamsColor=Color3.fromRGB(144,78,255), ChamsColorHex="904EFF", ShowFOV=true,
-    SpinBot=false, SpinSpeed=250, SkinWeapon="", SkinId="", PreviewSpin=true,
+    SkinWeapon="", SkinId="", PreviewSpin=true,
     AutoRejoin=false, AntiAFK=false, AutoCloseUI=false,
     AutoLoadAfterRejoin=false, AutoLoadProfiles=false, BoostFPS=false,
     ConfigFile="CAT_EMPIRE_FPS104_104856666707760.json",
     LastAction="Starting", LastError="", SilentHookStatus="Not installed",
 }
 local visuals = {}
-local oldAutoRotate, autoRotateHum
 local native = {}
 local window, viewport, previewCam, worldModel, previewModel
 local previewAngle = 0
 local lastAim = nil
-local lastDraw, lastWeapon = 0,0
+local lastDraw = 0
 local hookedSend
 local function status(s) S.LastAction=tostring(s) end
 local function warnOnce(where, message)
@@ -90,7 +88,7 @@ end
 local function living(model)
     if not (model and model.Parent and model:IsA("Model")) then return false end
     local hum=model:FindFirstChildOfClass("Humanoid")
-    return (not hum or hum.Health>0) and rootOf(model)~=nil
+    return hum~=nil and hum.Health>0 and rootOf(model)~=nil
 end
 local function isFriendly(model)
     if model == LP.Character then return true end
@@ -151,12 +149,6 @@ local function visible(model, part)
     if not ok then return false end
     return hit==nil or hit.Instance:IsDescendantOf(model)
 end
-local function getWeaponPreset()
-    if not S.WeaponProfiles then return nil end
-    local entry=native.WeaponInfo and native.WeaponInfo.All[S.CurrentWeapon]
-    return S.ProfilesByWeapon[S.CurrentWeapon]
-        or (entry and S.ProfilesByWeapon["Class:"..tostring(entry.Class)])
-end
 local function maxFOV()
     return math.max(15,tonumber(S.FOVDiameter) or 380)*0.5
 end
@@ -164,21 +156,17 @@ local function targetFor(fov)
     local cam=workspace.CurrentCamera
     if not cam then return nil end
     local center=cam.ViewportSize/2
-    local own=myRoot()
     local best,score=nil,fov or maxFOV()
     for _,model in ipairs(targetModels()) do
         if not isFriendly(model) then
             local part=aimPart(model)
             if part then
-                local distance=own and (part.Position-own.Position).Magnitude or 0
-                if distance<=1e8 then
-                    local screen,onScreen=cam:WorldToViewportPoint(part.Position)
-                    if onScreen and screen.Z>0 then
-                        local d=(Vector2.new(screen.X,screen.Y)-center).Magnitude
-                        if d<score and visible(model,part) then
-                            best={model=model,part=part,position=part.Position,distance=distance}
-                            score=d
-                        end
+                local screen,onScreen=cam:WorldToViewportPoint(part.Position)
+                if onScreen and screen.Z>0.3 then
+                    local d=(Vector2.new(screen.X,screen.Y)-center).Magnitude
+                    if d<score and visible(model,part) then
+                        best={model=model,part=part,position=part.Position}
+                        score=d
                     end
                 end
             end
@@ -186,17 +174,28 @@ local function targetFor(fov)
     end
     return best
 end
+local keyDown=false
+local keyToggled=false
+local function keyName()
+    return tostring(S.Keybind or "MouseButton2"):match("([^%.]+)$")
+end
+local function inputMatches(input)
+    local wanted=keyName()
+    return input.KeyCode.Name==wanted or input.UserInputType.Name==wanted
+end
+Links[#Links+1]=UIS.InputBegan:Connect(function(input,handled)
+    if handled or UIS:GetFocusedTextBox() then return end
+    if inputMatches(input) then
+        keyDown=true
+        if S.KeybindMode=="Toggle" then keyToggled=not keyToggled end
+    end
+end)
+Links[#Links+1]=UIS.InputEnded:Connect(function(input)
+    if inputMatches(input) then keyDown=false end
+end)
 local function aimHeld()
     if UIS:GetFocusedTextBox() or not myRoot() then return false end
-    if S.AimActivation=="Always Active" then return true end
-    if S.AimActivation=="Mouse Left Button" then
-        return UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-    end
-    return UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-end
-local function currentWeapon()
-    local info=native.StateCombat and atomValue(native.StateCombat.equippedWeapon)
-    return info and info.Id or ""
+    return S.KeybindMode=="Toggle" and keyToggled or keyDown
 end
 local function smoothFactor(dt, strength)
     return 1-math.exp(-math.max(0.001,strength)*60*math.max(dt,0.001))
@@ -225,9 +224,7 @@ local function updateAim(dt)
     local direction=t.position-cam.CFrame.Position
     if direction.Magnitude<0.1 then return end
     local desired=CFrame.lookAt(cam.CFrame.Position,t.position)
-    local preset=getWeaponPreset()
-    local strength= S.Aimbot and ((preset and preset.Smooth) or S.AimSmooth)
-        or ((preset and preset.Safe) or S.SafeSmooth)
+    local strength=S.Aimbot and S.AimSmooth or S.SafeSmooth
     local alpha=smoothFactor(dt,strength)
     -- Single camera writer after the native camera pipeline.
     cam.CFrame=cam.CFrame:Lerp(desired,alpha)
@@ -533,23 +530,6 @@ local function updateESP()
     end
 end
 
-local function updateSpin(dt)
-    local root,hum=myRoot(),LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
-    if not S.SpinBot or not root or not hum then
-        if autoRotateHum and autoRotateHum.Parent then
-            autoRotateHum.AutoRotate=oldAutoRotate
-        end
-        autoRotateHum=nil; return
-    end
-    if autoRotateHum~=hum then
-        if autoRotateHum and autoRotateHum.Parent then
-            autoRotateHum.AutoRotate=oldAutoRotate
-        end
-        autoRotateHum=hum;oldAutoRotate=hum.AutoRotate
-    end
-    hum.AutoRotate=false
-    root.CFrame=root.CFrame*CFrame.Angles(0,math.rad(S.SpinSpeed)*dt,0)
-end
 local function readWeaponInfo()
     local list={}
     local all=native.WeaponInfo and native.WeaponInfo.Enabled
@@ -741,9 +721,30 @@ toggle(Tabs.Combat,"AimbotSafe","Aimbot Safe",function(on)
         pcall(function() Toggles.Aimbot:SetValue(false) end)
     end
 end)
-drop(Tabs.Combat,"AimPart","Target Body Part",{"Head","UpperTorso","Torso","HumanoidRootPart"})
-drop(Tabs.Combat,"AimActivation","Aim Activation",{"Mouse Right Button","Mouse Left Button","Always Active"})
-slider(Tabs.Combat,"FOVDiameter","FOV Circle Diameter",70,1200,380,0)
+drop(Tabs.Combat,"AimPart","Target",{"Head","Torso"})
+local keybindCreated=pcall(function()
+    Tabs.Combat:AddKeybind("FPS104_Keybind",{
+        Title="Keybind",Mode="Hold",Default="MouseButton2",
+        Callback=function(state)
+            if type(state)=="boolean" and S.KeybindMode=="Hold" then keyDown=state end
+        end,
+        Changed=function(value)
+            if value then
+                S.Keybind=tostring(value):match("([^%.]+)$")
+                keyDown=false
+                keyToggled=false
+            end
+        end,
+    })
+end)
+if not keybindCreated then
+    drop(Tabs.Combat,"Keybind","Keybind",{
+        "MouseButton2","MouseButton1","LeftAlt","RightAlt",
+        "LeftShift","RightShift","LeftControl","E","Q","F","X","C","V",
+    })
+end
+drop(Tabs.Combat,"KeybindMode","Keybind Mode",{"Hold","Toggle"})
+slider(Tabs.Combat,"FOVDiameter","FOV",70,1200,380,0)
 slider(Tabs.Combat,"AimSmooth","Aimbot Smooth",0.02,1,0.24,2)
 slider(Tabs.Combat,"SafeSmooth","Safe Smooth",0.01,0.35,0.09,2)
 toggle(Tabs.Combat,"VisibleOnly","Visibility Check")
@@ -798,15 +799,6 @@ if not hasPicker then
     })
 end
 
-toggle(Tabs.Combat,"WeaponProfiles","Aimbot By Weapon")
-Tabs.Combat:AddButton({Title="Save Weapon Aim Settings",Callback=function()
-    local weapon=currentWeapon()
-    if weapon=="" then notify("Equip a weapon first");return end
-    S.ProfilesByWeapon[weapon]={Smooth=S.AimSmooth,Safe=S.SafeSmooth}
-    notify("Saved: "..weapon)
-end})
-slider(Tabs.Combat,"SpinSpeed","Spin Bot Speed",60,1600,250,0)
-toggle(Tabs.Combat,"SpinBot","Spin Bot")
 local function equipSelectedWeapon()
     local selected=S.SkinWeapon
     if selected=="" or not (native.WeaponInfo and native.WeaponInfo.All[selected]) then
@@ -885,7 +877,6 @@ local function cleanup()
     S.Running=false
     for _,link in ipairs(Links) do pcall(function() link:Disconnect() end) end
     pcall(function() RunService:UnbindFromRenderStep("CAT_EMPIRE_FPS104_AIM") end)
-    if autoRotateHum and autoRotateHum.Parent then pcall(function() autoRotateHum.AutoRotate=oldAutoRotate end) end
     for model,r in pairs(visuals) do cleanRecord(r);visuals[model]=nil end
     pcall(function() visualGui:Destroy() end)
     pcall(function() chamsFolder:Destroy() end)
@@ -910,9 +901,9 @@ local function loadSettings()
         Window=window,Fluent=Fluent,Links=Links,HttpService=HttpService,
         Status=status,Notify=notify,Error=warnOnce,Cleanup=cleanup,
         GuiName="CAT_EMPIRE_FPS104_104856666707760",
-        ExtraProfileTables={"ProfilesByWeapon"},
-        ExtraProfileStrings={"AimPart","AimActivation","FOVDiameter","AimSmooth",
-            "SafeSmooth","SpinSpeed","SkinWeapon","SkinId","ChamsColorHex"},
+        ExtraProfileTables={},
+        ExtraProfileStrings={"AimPart","Keybind","KeybindMode","FOVDiameter","AimSmooth",
+            "SafeSmooth","SkinWeapon","SkinId","ChamsColorHex"},
     }
     local result,fn=pcall(initializer,context)
     if not result then warnOnce("Settings init",fn)
@@ -922,9 +913,7 @@ loadSettings()
 S.SkinWeapon=weaponNames[1]~="Unavailable" and weaponNames[1] or ""
 task.defer(reloadSkins)
 task.delay(1.5,updatePreview)
-local function updateWeapon()
-    local name=currentWeapon()
-    if name~=S.CurrentWeapon then S.CurrentWeapon=name end
+local function updateWeaponCatalog()
     if weaponNames[1]=="Unavailable" then
         initializeNative()
         local loaded=readWeaponInfo()
@@ -952,10 +941,9 @@ end)
 Links[#Links+1]=RunService.Heartbeat:Connect(function(dt)
     if not S.Running then return end
     local ok,err=pcall(function()
-        updateSpin(dt)
         local now=os.clock()
         if now-lastDraw>0.05 then lastDraw=now;updateESP() end
-        if now-lastWeapon>0.45 then lastWeapon=now;updateWeapon() end
+        if weaponNames[1]=="Unavailable" then updateWeaponCatalog() end
     end)
     if not ok then warnOnce("Heartbeat",err) end
 end)
