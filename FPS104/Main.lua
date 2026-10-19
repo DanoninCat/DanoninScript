@@ -3,7 +3,7 @@
 -- Shared.Weapons.WeaponInfo, Shared.Net, Camera.RenderPipeline.
 -- Silence/replication of shot directions are SERVER-DEPENDENT, not guaranteed.
 local PLACE = 104856666707760
-if game.PlaceId ~= PLACE and game.GameId ~= PLACE then return end
+if game.PlaceId ~= PLACE and game.PlaceId ~= 108448382032231 and game.GameId ~= PLACE then return end
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -115,7 +115,7 @@ local function targetModels()
             end
         end
     end
-    if #output==0 then
+    if #output==0 or S.ESPShowTeam then
         for _,player in ipairs(Players:GetPlayers()) do
             local model=player.Character
             if player~=LP and living(model) and not unique[model] then
@@ -148,13 +148,14 @@ local function visible(model, part)
     if not ok then return false end
     return hit==nil or hit.Instance:IsDescendantOf(model)
 end
+local function getWeaponPreset()
+    if not S.WeaponProfiles then return nil end
+    local entry=native.WeaponInfo and native.WeaponInfo.All[S.CurrentWeapon]
+    return S.ProfilesByWeapon[S.CurrentWeapon]
+        or (entry and S.ProfilesByWeapon["Class:"..tostring(entry.Class)])
+end
 local function maxFOV()
-    local info=native.WeaponInfo
-    local entry=info and info.All and info.All[S.CurrentWeapon]
-    local preset=S.WeaponProfiles and S.ProfilesByWeapon[S.CurrentWeapon]
-    if not preset and entry and S.WeaponProfiles then
-        preset=S.ProfilesByWeapon["Class:"..tostring(entry.Class)]
-    end
+    local preset=getWeaponPreset()
     return (type(preset)=="table" and tonumber(preset.FOV)) or S.AimFOV
 end
 local function targetFor(fov)
@@ -222,8 +223,10 @@ local function updateAim(dt)
     local direction=t.position-cam.CFrame.Position
     if direction.Magnitude<0.1 then return end
     local desired=CFrame.lookAt(cam.CFrame.Position,t.position)
-    local strength= S.Aimbot and S.AimSmooth
-        or S.AimbotSafe and S.SafeSmooth or S.AssistStrength
+    local preset=getWeaponPreset()
+    local strength= S.Aimbot and ((preset and preset.Smooth) or S.AimSmooth)
+        or S.AimbotSafe and ((preset and preset.Safe) or S.SafeSmooth)
+        or ((preset and preset.Assist) or S.AssistStrength)
     local alpha=smoothFactor(dt,strength)
     -- Single camera writer; the game's AimAssistApply stage is Camera+4.
     cam.CFrame=cam.CFrame:Lerp(desired,alpha)
@@ -341,7 +344,9 @@ local function setHighlight(r,key,adornee)
 end
 local function weaponModel(model)
     for _,part in ipairs(model:GetChildren()) do
-        if part:IsA("Tool") then return part end
+        if part:IsA("Tool") then
+            return part:FindFirstChildWhichIsA("Model",true) or part:FindFirstChildWhichIsA("BasePart",true)
+        end
         if part:IsA("Model") and (part.Name:lower():find("weapon") or part.Name:lower():find("gun")) then
             return part
         end
@@ -447,13 +452,13 @@ local function updateSpin(dt)
     local root,hum=myRoot(),LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
     if not S.SpinBot or not root or not hum then
         if autoRotateHum and autoRotateHum.Parent then
-            autoRotateHum.AutoRotate=oldAutoRotate~=false
+            autoRotateHum.AutoRotate=oldAutoRotate
         end
         autoRotateHum=nil; return
     end
     if autoRotateHum~=hum then
         if autoRotateHum and autoRotateHum.Parent then
-            autoRotateHum.AutoRotate=oldAutoRotate~=false
+            autoRotateHum.AutoRotate=oldAutoRotate
         end
         autoRotateHum=hum;oldAutoRotate=hum.AutoRotate
     end
@@ -698,7 +703,7 @@ local function cleanup()
     S.Running=false
     for _,link in ipairs(Links) do pcall(function() link:Disconnect() end) end
     pcall(function() RunService:UnbindFromRenderStep("CAT_EMPIRE_FPS104_AIM") end)
-    if autoRotateHum and autoRotateHum.Parent then pcall(function() autoRotateHum.AutoRotate=oldAutoRotate~=false end) end
+    if autoRotateHum and autoRotateHum.Parent then pcall(function() autoRotateHum.AutoRotate=oldAutoRotate end) end
     for model,r in pairs(visuals) do cleanRecord(r);visuals[model]=nil end
     for _,obj in ipairs(Drawings) do pcall(function() obj:Remove() end) end
     pcall(function() folder:Destroy() end)
