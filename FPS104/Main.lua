@@ -19,14 +19,15 @@ assert(type(payload) == "string" and #payload > 0, "Run CAT EMPIRE Loader/Loader
 local Fluent = assert(loadstring(payload))()
 local Links, Toggles, Drawings = {}, {}, {}
 local S = {
-    Running=true, Aimbot=false, AimbotSafe=false, AimAssist=false, SilentAim=false,
-    AimPart="Head", AimActivation="RMB", AimFOV=190, AimSmooth=0.24, SafeSmooth=0.09,
-    AssistStrength=0.11, MaxDistance=1800, VisibleOnly=true, StickyTarget=true,
+    Running=true, Aimbot=false, AimbotSafe=false, SilentAim=false,
+    AimPart="Head", AimActivation="Mouse Right Button", FOVDiameter=380,
+    AimSmooth=0.24, SafeSmooth=0.09,
+    VisibleOnly=true, StickyTarget=true,
     WeaponProfiles=true, ProfilesByWeapon={}, CurrentWeapon="",
-    ESP=true, ESPBox=true, ESPName=true, ESPDistance=true, ESPHealth=true,
+    ESPBox=true, ESPName=true, ESPDistance=true, ESPHealth=true,
     ESPTracers=false, ESPSkeleton=false, ESPShowTeam=false, Chams=false,
-    ShowFOV=true, SpinBot=false, SpinSpeed=250,
-    SkinWeapon="", SkinId="", PreviewSpin=true,
+    ChamsColor=Color3.fromRGB(144,78,255), ShowFOV=true,
+    SpinBot=false, SpinSpeed=250, SkinWeapon="", SkinId="", PreviewSpin=true,
     AutoRejoin=false, AntiAFK=false, AutoCloseUI=false,
     AutoLoadAfterRejoin=false, AutoLoadProfiles=false, BoostFPS=false,
     ConfigFile="CAT_EMPIRE_FPS104_104856666707760.json",
@@ -69,6 +70,8 @@ local function initializeNative()
     native.WeaponInfo=safeRequire(shared,"Weapons","WeaponInfo")
     native.Net=safeRequire(shared,"Net")
     native.RenderPipeline=safeRequire(client,"Camera","RenderPipeline")
+    native.ClientState=safeRequire(client,"State")
+    native.LoadoutUtils=safeRequire(shared,"Utils","LoadoutUtils")
 end
 initializeNative()
 local function atomValue(a)
@@ -155,8 +158,7 @@ local function getWeaponPreset()
         or (entry and S.ProfilesByWeapon["Class:"..tostring(entry.Class)])
 end
 local function maxFOV()
-    local preset=getWeaponPreset()
-    return (type(preset)=="table" and tonumber(preset.FOV)) or S.AimFOV
+    return math.max(15,tonumber(S.FOVDiameter) or 380)*0.5
 end
 local function targetFor(fov)
     local cam=workspace.CurrentCamera
@@ -169,7 +171,7 @@ local function targetFor(fov)
             local part=aimPart(model)
             if part then
                 local distance=own and (part.Position-own.Position).Magnitude or 0
-                if distance<=S.MaxDistance then
+                if distance<=1e8 then
                     local screen,onScreen=cam:WorldToViewportPoint(part.Position)
                     if onScreen and screen.Z>0 then
                         local d=(Vector2.new(screen.X,screen.Y)-center).Magnitude
@@ -186,8 +188,8 @@ local function targetFor(fov)
 end
 local function aimHeld()
     if UIS:GetFocusedTextBox() or not myRoot() then return false end
-    if S.AimActivation=="Always" then return true end
-    if S.AimActivation=="LMB" then
+    if S.AimActivation=="Always Active" then return true end
+    if S.AimActivation=="Mouse Left Button" then
         return UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
     end
     return UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
@@ -200,7 +202,7 @@ local function smoothFactor(dt, strength)
     return 1-math.exp(-math.max(0.001,strength)*60*math.max(dt,0.001))
 end
 local function updateAim(dt)
-    if not (S.Aimbot or S.AimbotSafe or S.AimAssist) or not aimHeld() then
+    if not (S.Aimbot or S.AimbotSafe) or not aimHeld() then
         lastAim=nil; return
     end
     local cam=workspace.CurrentCamera
@@ -225,8 +227,7 @@ local function updateAim(dt)
     local desired=CFrame.lookAt(cam.CFrame.Position,t.position)
     local preset=getWeaponPreset()
     local strength= S.Aimbot and ((preset and preset.Smooth) or S.AimSmooth)
-        or S.AimbotSafe and ((preset and preset.Safe) or S.SafeSmooth)
-        or ((preset and preset.Assist) or S.AssistStrength)
+        or ((preset and preset.Safe) or S.SafeSmooth)
     local alpha=smoothFactor(dt,strength)
     -- Single camera writer; the game's AimAssistApply stage is Camera+4.
     cam.CFrame=cam.CFrame:Lerp(desired,alpha)
@@ -571,8 +572,8 @@ end
 local okInfo,gameInfo=pcall(MarketplaceService.GetProductInfo,MarketplaceService,game.PlaceId)
 local gameTitle=okInfo and gameInfo and gameInfo.Name or "Roblox FPS"
 window=Fluent:CreateWindow({
-    Title="CAT EMPIRE | "..gameTitle,
-    SubTitle="FPS | "..tostring(game.PlaceId),
+    Title="CAT EMPIRE",
+    SubTitle=gameTitle,
     TabWidth=150,Size=UDim2.fromOffset(610,460),Acrylic=false,Animated=false,Theme="Dark",
     MinimizeKey=Enum.KeyCode.RightControl,
     ScreenGuiName="CAT_EMPIRE_FPS104_104856666707760",
@@ -580,7 +581,6 @@ window=Fluent:CreateWindow({
 local Tabs={
     Combat=window:AddTab({Title="Combat",Icon="solar/target-bold"}),
     Visuals=window:AddTab({Title="Visuals",Icon="solar/eye-bold"}),
-    Weapons=window:AddTab({Title="Weapons",Icon="solar/bolt-bold"}),
     Skins=window:AddTab({Title="Skins",Icon="solar/bag-bold"}),
     Settings=window:AddTab({Title="Settings",Icon="solar/settings-bold"}),
     Misc=window:AddTab({Title="Misc",Icon="solar/user-bold"}),
@@ -606,68 +606,51 @@ local function drop(tab,key,title,values)
         Callback=function(v) S[key]=tostring(v or "") end,
     })
 end
-local activity=Tabs.Combat:AddParagraph({Title=gameTitle,Content="Initializing FPS systems"})
-toggle(Tabs.Combat,"SilentAim","Silent Aim (shot rays; server-dependent)",function(on)
+toggle(Tabs.Combat,"SilentAim","Silent Aim",function(on)
     if on and not installSilent() then
         notify(S.SilentHookStatus)
         pcall(function() Toggles.SilentAim:SetValue(false) end)
     end
 end)
 toggle(Tabs.Combat,"Aimbot","Aimbot",function(on)
-    if on then S.AimbotSafe=false;S.AimAssist=false
-        pcall(function() Toggles.AimbotSafe:SetValue(false);Toggles.AimAssist:SetValue(false) end)
+    if on then
+        S.AimbotSafe=false
+        pcall(function() Toggles.AimbotSafe:SetValue(false) end)
     end
 end)
-toggle(Tabs.Combat,"AimbotSafe","Aimbot Safe (smooth movement)",function(on)
-    if on then S.Aimbot=false;S.AimAssist=false
-        pcall(function() Toggles.Aimbot:SetValue(false);Toggles.AimAssist:SetValue(false) end)
-    end
-end)
-toggle(Tabs.Combat,"AimAssist","Aim Assist (gradual)",function(on)
-    if on then S.Aimbot=false;S.AimbotSafe=false
-        pcall(function() Toggles.Aimbot:SetValue(false);Toggles.AimbotSafe:SetValue(false) end)
+toggle(Tabs.Combat,"AimbotSafe","Aimbot Safe",function(on)
+    if on then
+        S.Aimbot=false
+        pcall(function() Toggles.Aimbot:SetValue(false) end)
     end
 end)
 drop(Tabs.Combat,"AimPart","Target Body Part",{"Head","UpperTorso","Torso","HumanoidRootPart"})
-drop(Tabs.Combat,"AimActivation","Aim Activation",{"RMB","LMB","Always"})
-slider(Tabs.Combat,"AimFOV","Aim FOV (pixels)",35,600,190,0)
+drop(Tabs.Combat,"AimActivation","Aim Activation",{"Mouse Right Button","Mouse Left Button","Always Active"})
+slider(Tabs.Combat,"FOVDiameter","FOV Circle Diameter",70,1200,380,0)
 slider(Tabs.Combat,"AimSmooth","Aimbot Smooth",0.02,1,0.24,2)
 slider(Tabs.Combat,"SafeSmooth","Safe Smooth",0.01,0.35,0.09,2)
-slider(Tabs.Combat,"AssistStrength","Aim Assist Strength",0.01,0.35,0.11,2)
-slider(Tabs.Combat,"MaxDistance","Max Range (studs)",100,3500,1800,0)
 toggle(Tabs.Combat,"VisibleOnly","Visibility Check")
 toggle(Tabs.Combat,"StickyTarget","Sticky Target")
 toggle(Tabs.Combat,"ShowFOV","Show FOV Circle")
 
-toggle(Tabs.Visuals,"ESP","ESP Master")
 toggle(Tabs.Visuals,"ESPBox","ESP Box")
 toggle(Tabs.Visuals,"ESPName","ESP Name")
 toggle(Tabs.Visuals,"ESPDistance","ESP Distance")
 toggle(Tabs.Visuals,"ESPHealth","ESP Health")
-toggle(Tabs.Visuals,"ESPTracers","ESP Tracers")
+toggle(Tabs.Visuals,"ESPTracers","ESP Lines")
 toggle(Tabs.Visuals,"ESPSkeleton","ESP Skeleton")
 toggle(Tabs.Visuals,"ESPShowTeam","Show Friendly Players")
-toggle(Tabs.Visuals,"Chams","Chams | Character + Weapon")
+toggle(Tabs.Visuals,"Chams","Chams")
 
-local equippedCard=Tabs.Weapons:AddParagraph({Title="Equipped Weapon",Content="Waiting for loadout"})
-toggle(Tabs.Weapons,"WeaponProfiles","Aimbot By Weapon")
-Tabs.Weapons:AddButton({Title="Save Current Weapon Preset",Callback=function()
+toggle(Tabs.Combat,"WeaponProfiles","Aimbot By Weapon")
+Tabs.Combat:AddButton({Title="Save Weapon Aim Settings",Callback=function()
     local weapon=currentWeapon()
     if weapon=="" then notify("Equip a weapon first");return end
-    S.ProfilesByWeapon[weapon]={FOV=S.AimFOV,Smooth=S.AimSmooth,Safe=S.SafeSmooth,Assist=S.AssistStrength}
-    notify("Preset saved: "..weapon)
+    S.ProfilesByWeapon[weapon]={Smooth=S.AimSmooth,Safe=S.SafeSmooth}
+    notify("Saved: "..weapon)
 end})
-Tabs.Weapons:AddButton({Title="Save Preset for Weapon Class",Callback=function()
-    local info=native.WeaponInfo and native.WeaponInfo.All[currentWeapon()]
-    if not info then notify("Weapon unavailable");return end
-    S.ProfilesByWeapon["Class:"..tostring(info.Class)]={
-        FOV=S.AimFOV,Smooth=S.AimSmooth,Safe=S.SafeSmooth,Assist=S.AssistStrength,
-    }
-    notify("Class preset saved: "..tostring(info.Class))
-end})
-slider(Tabs.Weapons,"SpinSpeed","Spin Bot Speed (degrees/s)",60,1600,250,0)
-toggle(Tabs.Weapons,"SpinBot","Spin Bot (360 degree rotation)")
-
+slider(Tabs.Combat,"SpinSpeed","Spin Bot Speed",60,1600,250,0)
+toggle(Tabs.Combat,"SpinBot","Spin Bot")
 local weaponNames=readWeaponInfo()
 if #weaponNames==0 then weaponNames={"Unavailable"} end
 local skinsDrop
@@ -696,7 +679,6 @@ skinsDrop=Tabs.Skins:AddDropdown("FPS104_SkinId",{
 toggle(Tabs.Skins,"PreviewSpin","Rotate 3D Preview")
 Tabs.Skins:AddButton({Title="Refresh 3D Preview",Callback=updatePreview})
 Tabs.Skins:AddButton({Title="Equip Selected Owned Skin",Callback=equipSkin})
-Tabs.Skins:AddParagraph({Title="Skin Sync",Content="3D preview is local. Equip uses the game's equipSkin packet; ownership and replication are verified by the server."})
 
 local function cleanup()
     if not S.Running then return end
@@ -715,7 +697,7 @@ end
 Env.__CE_FPS104_CLEANUP=cleanup
 
 local function loadSettings()
-    local url="https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/StealABrainrot/Settings.lua"
+    local url="https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/FPS104/Settings.lua"
     local ok,initializer=pcall(function()
         local source=game:HttpGet(url,true)
         return assert(loadstring(source))()
@@ -729,8 +711,8 @@ local function loadSettings()
         Status=status,Notify=notify,Error=warnOnce,Cleanup=cleanup,
         GuiName="CAT_EMPIRE_FPS104_104856666707760",
         ExtraProfileTables={"ProfilesByWeapon"},
-        ExtraProfileStrings={"AimPart","AimActivation","AimFOV","AimSmooth",
-            "SafeSmooth","AssistStrength","MaxDistance","SpinSpeed","SkinWeapon","SkinId"},
+        ExtraProfileStrings={"AimPart","AimActivation","FOVDiameter","AimSmooth",
+            "SafeSmooth","SpinSpeed","SkinWeapon","SkinId"},
     }
     local result,fn=pcall(initializer,context)
     if not result then warnOnce("Settings init",fn)
@@ -744,16 +726,7 @@ local function updateWeapon()
     local name=currentWeapon()
     if name~=S.CurrentWeapon then
         S.CurrentWeapon=name
-        if name~="" then status("Weapon: "..name) end
     end
-    local preset=S.ProfilesByWeapon[name]
-    local info=native.WeaponInfo and native.WeaponInfo.All[name]
-    if not preset and info then preset=S.ProfilesByWeapon["Class:"..tostring(info.Class)] end
-    pcall(function()
-        equippedCard:SetDesc((name~="" and name or "None")..
-            (info and " | Class: "..tostring(info.Class) or "")..
-            (preset and " | Preset active" or " | Global settings"))
-    end)
 end
 local lastUpdate=0
 RunService:BindToRenderStep("CAT_EMPIRE_FPS104_AIM",Enum.RenderPriority.Camera.Value+8,function(dt)
@@ -781,7 +754,6 @@ Links[#Links+1]=RunService.Heartbeat:Connect(function(dt)
         if now-lastWeapon>0.45 then lastWeapon=now;updateWeapon() end
         if now-lastVisuals>1.2 then
             lastVisuals=now
-            activity:SetDesc(S.LastAction.." | Silent: "..S.SilentHookStatus)
         end
     end)
     if not ok then warnOnce("Heartbeat",err) end
