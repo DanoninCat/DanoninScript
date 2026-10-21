@@ -10,3 +10,7 @@
 - ESP e Chams devem começar em vermelho (`#FF0000`), com seletores independentes para alteração da cor.
 - Verificar o funcionamento antes de declarar uma função como operacional; mecanismos dependentes de validação do servidor devem ser indicados como não confirmados até teste.
 - Manter a implementação no repositório DanoninScript e preservar as demais rotas no loader.
+
+- Em MISC, obter sempre o nome real do jogo automaticamente pela API do Roblox, usando `MarketplaceService:GetProductInfo(game.PlaceId).Name` com `pcall` e fallback para `game.Name`. Nunca inventar ou fixar manualmente o nome do jogo.
+- Para a imagem do jogo, usar o universo atual (`game.GameId`) e a fonte nativa de miniaturas do Roblox quando disponível.
+- Distribuição preferida: somente scripts efetivamente concluídos e integrados, empacotados no loader principal ofuscado; evitar pastas de módulos dispersos após consolidação. Preservar o caminho público `Loader/Loader.lua`.
