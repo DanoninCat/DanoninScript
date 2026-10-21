@@ -1,7 +1,7 @@
 # CAT EMPIRE — regras permanentes para scripts
 
 - Todo script, janela, identidade visual, namespace e novo módulo deve utilizar a marca **CAT EMPIRE**. Não introduzir marcas alternativas.
-- Preservar a interface personalizada do projeto, carregada exclusivamente de `Loader/FluentPayload.lua` (a mesma biblioteca extraída em `CAT_EMPIRE_INTERFACE`). Não trocar por outra UI.
+- Preservar a interface personalizada do projeto, originária da biblioteca de `Loader/FluentPayload.lua` (a mesma extraída em `CAT_EMPIRE_INTERFACE`). Na distribuição unificada, incorporar o payload original ao loader; não trocar por outra UI.
 - Todos os jogos novos devem ser integrados pelo loader principal `Loader/Loader.lua`, mantendo a URL pública `https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/Loader/Loader.lua`.
 - Cada rota no loader deve preparar `env.__CE_F_91A7` com o payload da interface antes de executar o módulo do jogo.
 - Manter as abas `SETTINGS` e `MISC`, com os recursos padronizados do projeto, incluindo Auto Rejoin, Anti AFK, Themes, Profiles, Auto Load Profiles, Auto Close UI, Auto Load After Rejoin e Boost FPS.
