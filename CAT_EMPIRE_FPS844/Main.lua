@@ -599,6 +599,7 @@ end
 local function ensureProfileDir()
     if type(makefolder) == "function" and type(isfolder) == "function" then
         if not isfolder("CAT_EMPIRE") then pcall(makefolder,"CAT_EMPIRE") end
+        if not isfolder("CAT_EMPIRE/FPS844") then pcall(makefolder,"CAT_EMPIRE/FPS844") end
         if not isfolder(PROFILE_DIR) then pcall(makefolder,PROFILE_DIR) end
     end
 end
