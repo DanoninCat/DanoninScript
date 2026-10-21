@@ -57,6 +57,12 @@ local function loadModule(path, stage, revision)
 end
 
 local ok, result = pcall(function()
+    if game.PlaceId == 84448037861644 then
+        local ui = loadModule("Loader/FluentPayload.lua", "Loading CAT EMPIRE UI")
+        assert(type(ui) == "string" and #ui > 0, "CAT EMPIRE UI unavailable")
+        env.__CE_F_91A7 = ui
+        return loadModule("CAT_EMPIRE_FPS844/Main.lua", "Loading CAT EMPIRE FPS844")
+    end
     if game.PlaceId == 104856666707760 or game.PlaceId == 108448382032231
         or game.GameId == 104856666707760 then
         local ui = loadModule("Loader/FluentPayload.lua", "Loading FPS UI")
