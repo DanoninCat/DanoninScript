@@ -1,6 +1,19 @@
 local TARGET = 105596644794991
 local BASE = "https://raw.githubusercontent.com/DanoninCat/DanoninScript/main/"
 local env = (getgenv and getgenv()) or _G
+
+local function resolveRobloxGameName()
+    local ok, info = pcall(function()
+        return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+    end)
+    if ok and type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
+        return info.Name
+    end
+    return game.Name
+end
+env.__CE_GAME_NAME = resolveRobloxGameName()
+env.__CE_GAME_ICON = "rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=512&h=512"
+
 env.__CE_RE105_BOOT_STAGE = "Router"
 env.__CE_RE105_BOOT_ERROR = nil
 env.__CE_RE105_FEATURES_ERROR = nil
