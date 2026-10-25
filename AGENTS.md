@@ -14,3 +14,9 @@
 - Em MISC, obter sempre o nome real do jogo automaticamente pela API do Roblox, usando `MarketplaceService:GetProductInfo(game.PlaceId).Name` com `pcall` e fallback para `game.Name`. Nunca inventar ou fixar manualmente o nome do jogo.
 - Para a imagem do jogo, usar o universo atual (`game.GameId`) e a fonte nativa de miniaturas do Roblox quando disponível.
 - Distribuição preferida: somente scripts efetivamente concluídos e integrados, empacotados no loader principal ofuscado; evitar pastas de módulos dispersos após consolidação. Preservar o caminho público `Loader/Loader.lua`.
+
+## Prioridade máxima — tecla da interface e entrada M1
+
+- **Abrir/fechar a interface CAT EMPIRE sempre com `Enum.KeyCode.LeftControl` (Ctrl esquerdo)**, nunca `RightControl`. Aplicar a todos os novos módulos e aos existentes quando forem editados; não sobrescrever outros jogos estáveis apenas para trocar a tecla.
+- **Anime Piece:** diálogos de quests, conversa com NPCs e confirmação de aceitar quests dependem do clique principal do mouse (`MouseButton1`, M1). Não substituir por `ProximityPrompt`; quando necessário navegar até o NPC e interagir usando a entrada M1 verdadeira, preservando a UI normal do jogo.
+- Manter o modo de combate/auto farm separado do fluxo de diálogo; liberar M1 antes de interagir em NPCs, evitar enviar ações de ataque enquanto a janela de diálogo estiver aberta e validar em jogo.
